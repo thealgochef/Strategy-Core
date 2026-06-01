@@ -131,21 +131,46 @@ Single-sourced magic values (no more "restated literals" in the emitter):
 cutoff — all in `constants.py`, read by both the engine and (after repointing) the
 contract emitter.
 
-## Open parity items (resolve during the cross-repo parity pass, phase 7)
+## Parity validation (phase 4a) — PORT FIDELITY PROVEN
 
-These are documented in the relevant module docstrings and do **not** affect the
-package's internal correctness; they are train-vs-serve boundary questions:
+A standalone, additive harness (`validation/parity_harness.py`) ran the canonical
+research pipeline and the engine over **5 real NQ trading days** (2025-06-02…06),
+feeding *identical* book-mid bars to both (lossless at `tick_size=0.125`). Every
+must-match stage is 100% matched and was independently re-derived:
 
-1. **Touch timestamp: bar open vs close.** Canonical stamps the touch with the bar's
-   *index* timestamp; this engine uses `bar.close_ts_utc`. The choice shifts the
-   feature window anchor by one bar. (`decisions/touch.py`)
-2. **Tick-aligned bar prices.** Touch/outcome math compares `ticks * tick_size`;
-   exact only if bar highs/lows are integer multiples of `tick_size` (true for
-   trade-derived OHLC, worth confirming for any non-tick source). (`touch.py`, `outcomes.py`)
-3. **Absorption `size` source.** Under the trade-price decision the engine sums
-   *trade* size; confirm the retrained dataset uses the same. (`features.py`)
-4. **`< 5`-tick interaction-window drop.** A dataset-construction filter; lives in
-   the adapter, not the pure formulas. (`features.py`)
+| Stage | Scope | Result |
+|---|---|---|
+| Zones | must-match | 26/26 |
+| Sessions | must-match | 25000/25000 |
+| Touches (+ close ts) | must-match | 22/22 |
+| Labels | must-match | 21/21 |
+| Interaction *formula* fidelity | must-match | 22/22 |
+| Approach features (×3) | must-match | 22/22 |
+| Interaction *trade-price* | expected-differ | reported, not asserted |
+
+The two formerly-open items are **resolved** against real data:
+
+1. **Touch timestamp = bar CLOSE** (`LAST(ts_event)`, `tick_store.py:524`). The
+   engine's `bar.close_ts_utc` matches instant-for-instant; reproducible streaming
+   with zero look-ahead. (The earlier "open vs close" worry was wrong.)
+2. **Absorption `size` = book-event size** in canonical; the engine sums *trade*
+   size — a deliberate part of the trade-price change, isolated by stage E (formula
+   fidelity, same inputs → exact) vs stage F (trade-price → reported divergence).
+3. **Bar-price tick alignment confirmed:** canonical book mids sit exactly on the
+   0.125 grid (zero fractional-tick residual), so the integer-tick `Bar` is lossless.
+
+Remaining adapter note (not an engine concern): the research `< 5`-tick
+interaction-window drop is dataset-construction and lives in the adapter, not the
+pure formulas.
+
+**Candle benchmark (spec §7):** on one day, canonical DuckDB tick-bar build is ~26×
+faster than a naive numpy/pandas rebuild (0.34s vs 9.0s — parquet I/O dominates).
+Bars agree on count, close timestamps, high/low and volume; only the `open`/`close`
+*mid* differ on ~2.2% of bars, due to DuckDB's non-deterministic tie-break on
+duplicate `ts_event`. That tie-break does **not** affect touches or labels (which
+use high/low = order-independent MAX/MIN). Implication: research should keep DuckDB
+as the verified-equivalent fast path; a numpy fast path would need a deterministic
+secondary sort key before `open`/`close` can be bit-identical.
 
 ## Testing
 

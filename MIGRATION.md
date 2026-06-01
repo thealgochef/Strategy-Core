@@ -14,6 +14,7 @@ Status legend: ✅ done · ▶ next · ⏳ later
 | 1 | Scaffold `strategy-core` (package, types, constants, contract schema) | ✅ |
 | 2 | Lift candle layer (batch + streaming + parity test) | ✅ |
 | 3 | Extract decision layer from training path (+ tests) | ✅ |
+| 4a | **Parity gate** — decision-layer fidelity vs canonical on real data (pre-retrain) | ✅ |
 | 4 | Repoint research **training** onto the engine | ▶ |
 | 5 | Fix the contract **emitter** (emit from engine constants) | ▶ |
 | 6 | Repoint **Trade-Lab** onto the engine | ▶ |
@@ -141,16 +142,33 @@ after the training↔serving path is proven.
 
 ---
 
+## Phase 4a parity gate — RESULT
+
+Run `validation/parity_harness.py` (additive, imports both repos read-only) over 5
+real NQ days. **PORT FIDELITY PROVEN**: zones, sessions, touches+timestamps, labels,
+interaction-formula-fidelity, and the 3 approach features all 100% match canonical;
+the interaction trade-price divergence is reported, not asserted. Independently
+re-derived. Report: `validation/_out/PARITY_REPORT.md`. This gate clears phases 4–6
+of the decision-layer-fidelity risk; phase 7 (full end-to-end parity) still runs
+after the retrain because it must use a model actually trained under this engine.
+
 ## Open decisions for the human
 
-1. **Candle builder: numpy/pandas vs DuckDB (spec §7).** Research builds tick bars in
-   DuckDB today (`tick_store.py:451-533`). Before committing research to
-   `build_tick_bars_from_frame`, **benchmark** it at real data sizes. Fallback if
-   numpy can't match DuckDB: the engine owns the bar *spec* + parity test, and
-   research keeps its DuckDB builder as a verified-equivalent fast path (add a
-   research-side parity test: DuckDB bars == `build_tick_bars_from_frame`).
-2. **Trade-price retrain** (above) — assumed yes.
-3. **Touch timestamp / absorption size / tick alignment** — phase-7 confirmations.
+1. **Candle builder: numpy/pandas vs DuckDB (spec §7) — BENCHMARKED.** On one real
+   day, canonical DuckDB tick-bar build is ~26× faster than a naive numpy/pandas
+   rebuild (0.34s vs 9.0s; parquet I/O dominates). Bars agree on count, close
+   timestamps, high/low, and volume; only `open`/`close` *mid* differ on ~2.2% of
+   bars, from DuckDB's non-deterministic tie-break on duplicate `ts_event` — which
+   does **not** affect touches/labels (they use order-independent high/low).
+   **Decision:** keep research on DuckDB as the verified-equivalent fast path; the
+   engine owns the bar spec + parity test. If a numpy fast path is ever wanted, first
+   add a deterministic secondary sort key (e.g. `ORDER BY ts_event, rn`) to the
+   canonical builder so `open`/`close` become well-defined, then mirror it in numpy.
+2. **Trade-price retrain** (the retrain gate above) — assumed yes.
+3. **Touch timestamp / absorption size / tick alignment — RESOLVED in 4a:** touch ts
+   = bar CLOSE (engine matches); absorption size canonical = book-event size (engine
+   trade-size is the deliberate change); book mids lie exactly on the 0.125 grid
+   (engine integer-tick `Bar` is lossless).
 
 ## How this package was built
 

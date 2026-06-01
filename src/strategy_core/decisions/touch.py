@@ -10,12 +10,14 @@ representative price (``bar_low <= rep <= bar_high``, line 429). The first such 
 flips the zone's ``touched`` flag so the zone never fires again (line 425, 430).
 Low-side zones imply LONG, high-side imply SHORT (line 431).
 
-Fidelity note (phase-7 parity item): the canonical detector uses the bar's *index*
-timestamp (``bar_ts`` from ``bars_et.iterrows()``, line 420/433) as the touch
-timestamp. The research bars are indexed by their **open** time, whereas here we
-record ``bar.close_ts_utc``. Whether the canonical index is the open or the close
-of the bar is an open vs. close bar-timestamp question that must be reconciled in
-phase 7.
+Touch timestamp (RESOLVED — phase 4a parity, real-data verified): the canonical
+detector uses the bar's *index* timestamp (``bar_ts`` from ``bars_et.iterrows()``,
+line 420/433), and that index is the bar's **close** time — ``build_tick_bars``
+sets it to ``LAST(ts_event ORDER BY ts_event)`` (``tick_store.py:524``), the last
+tick of the bucket. This engine records ``bar.close_ts_utc``, which equals that
+close instant; the parity harness confirmed it instant-for-instant on real touches.
+A touch is only knowable at bar close (when the Nth trade arrives), so a streaming
+consumer reproduces this timestamp with zero look-ahead.
 """
 
 from __future__ import annotations
