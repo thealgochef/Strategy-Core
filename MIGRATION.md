@@ -98,6 +98,16 @@ The bigger lift; this is the serving path. Each item has its current Trade-Lab a
    calendar — feed `CandleEngine(scheme=RESEARCH_SESSION_SCHEME)` (or pass the
    contract's `session_scheme`). The CT 16:00–18:00 closed-window drop disappears
    (research keeps those trades).
+   ⚠️ **Candle trading-day boundary (phase-4a finding, MUST reconcile):** the engine's
+   18:00 ET (DST-aware) boundary + per-day `bar_index` reset does **not** match
+   research's bar window, which is anchored at a hardcoded **23:00 America/Chicago**
+   (research passes a naive `datetime(prev,23,0)` that DuckDB reads in its session TZ).
+   In summer (EDT) these differ by an hour at the seam and split the post-18:00-ET tail
+   (and Sunday Globex sessions) into a different trading day — 44/57 days affected.
+   Decide the canonical boundary and make BOTH sides use it (either teach the engine the
+   23:00-CT window for parity with the existing dataset, or — preferred — fix research's
+   naive-datetime window when repointing it in phase 4 so both use the engine's 18:00 ET).
+   Until reconciled, engine-built candles are NOT bar-identical to research's at the seam.
 3. **Swap touch to bar-intersect-on-zones, per-zone-per-day.** Replace the exact-tick
    detector (`domain/levels.py:245-274`) with `strategy_core.detect_touches` fed by
    *closing candles*. Drop the `(day, session, kind)` first-touch key in favor of
@@ -144,28 +154,44 @@ after the training↔serving path is proven.
 
 ## Phase 4a parity gate — RESULT
 
-Run `validation/parity_harness.py` (additive, imports both repos read-only) over 5
-real NQ days. **PORT FIDELITY PROVEN**: zones, sessions, touches+timestamps, labels,
-interaction-formula-fidelity, and the 3 approach features all 100% match canonical;
-the interaction trade-price divergence is reported, not asserted. Independently
-re-derived. Report: `validation/_out/PARITY_REPORT.md`. This gate clears phases 4–6
-of the decision-layer-fidelity risk; phase 7 (full end-to-end parity) still runs
-after the retrain because it must use a model actually trained under this engine.
+Two additive harnesses (`validation/parity_harness.py` 5-day; `parity_harness_v2.py`
+full-range), imports both repos read-only. Full verdict: `validation/PARITY_REPORT_V2.md`.
+
+**Decision-layer port fidelity: PROVEN** over **57 real days** (2025-07-01…09-05) /
+255 touches: zones 309/309, touches+close-ts 255/255, sessions 252 944/252 944,
+labels 218/218, interaction-formula 254/255 (1 harness window-bound artifact at a
+23:59-ET midnight-crossing touch), approach ×3 255/255. Trade-price divergence
+reported, not asserted. Independently re-derived (earlier 5-day gate).
+
+**Candle builder: determinism PROVEN, one open reconciliation.** With a stable
+`(ts_event, source-seq)` order, engine bars match a reference bucketer 100% incl.
+open/close *within each trading-day group*. The open item is **semantic**: the engine
+uses an 18:00 ET (DST-aware) trading-day boundary + `bar_index` reset, while research's
+window edge is a hardcoded **23:00 America/Chicago** (a naive `datetime` DuckDB reads
+in its session TZ). On 44/57 days the engine rolls the post-18:00-ET tail into the next
+trading day (Sunday Globex → Monday). **This is the must-fix before phase 6's candle
+swap** (see Phase 6 step 2). It does NOT affect the decision-layer parity above (which
+uses research's bars + order-independent high/low).
+
+This gate clears phases 4–6 of decision-layer-fidelity risk; phase 7 (full end-to-end
+parity) still runs after the retrain because it must use a model trained under this engine.
 
 ## Open decisions for the human
 
-1. **Candle builder: numpy/pandas vs DuckDB (spec §7) — BENCHMARKED.** On one real
-   day, canonical DuckDB tick-bar build is ~26× faster than a naive numpy/pandas
-   rebuild (0.34s vs 9.0s; parquet I/O dominates). Bars agree on count, close
-   timestamps, high/low, and volume; only `open`/`close` *mid* differ on ~2.2% of
-   bars, from DuckDB's non-deterministic tie-break on duplicate `ts_event` — which
-   does **not** affect touches/labels (they use order-independent high/low).
-   **Decision:** keep research on DuckDB as the verified-equivalent fast path; the
-   engine owns the bar spec + parity test. If a numpy fast path is ever wanted, first
-   add a deterministic secondary sort key (e.g. `ORDER BY ts_event, rn`) to the
-   canonical builder so `open`/`close` become well-defined, then mirror it in numpy.
-2. **Trade-price retrain** (the retrain gate above) — assumed yes.
-3. **Touch timestamp / absorption size / tick alignment — RESOLVED in 4a:** touch ts
+1. **Candle builder: engine vs DuckDB (spec §7) — BENCHMARKED (full range).** Over 57
+   days / ~2.9M bars, the engine builder ≈ 498s vs all-DuckDB ≈ 35s — *not* apples-to-
+   apples (engine figure excludes the parquet read) and dominated by per-bar `Bar`-object
+   construction via `.itertuples()` (~60k/day); the aggregation itself is fast. The
+   nondeterministic-close tie-break is now SOLVED by the stable `(ts_event, source-seq)`
+   sort (bars match 100% incl open/close within a trading-day group). **Decision:** if the
+   engine builder is to replace DuckDB, first give it a vectorized bar-emit path (avoid
+   per-bar Python objects) — otherwise keep DuckDB as the verified-equivalent fast path.
+2. **Candle trading-day boundary — NEW open decision (phase-4a).** Engine 18:00 ET
+   (DST-aware) vs research 23:00 America/Chicago window; 44/57 summer days diverge at the
+   seam. Pick the canonical boundary and apply it to BOTH (see Phase 6 step 2). Affects
+   which trading day the post-18:00-ET tail / Sunday Globex belongs to.
+3. **Trade-price retrain** (the retrain gate above) — assumed yes.
+4. **Touch timestamp / absorption size / tick alignment — RESOLVED in 4a:** touch ts
    = bar CLOSE (engine matches); absorption size canonical = book-event size (engine
    trade-size is the deliberate change); book mids lie exactly on the 0.125 grid
    (engine integer-tick `Bar` is lossless).

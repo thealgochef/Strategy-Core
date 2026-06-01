@@ -131,46 +131,54 @@ Single-sourced magic values (no more "restated literals" in the emitter):
 cutoff — all in `constants.py`, read by both the engine and (after repointing) the
 contract emitter.
 
-## Parity validation (phase 4a) — PORT FIDELITY PROVEN
+## Parity validation (phase 4a)
 
-A standalone, additive harness (`validation/parity_harness.py`) ran the canonical
-research pipeline and the engine over **5 real NQ trading days** (2025-06-02…06),
-feeding *identical* book-mid bars to both (lossless at `tick_size=0.125`). Every
-must-match stage is 100% matched and was independently re-derived:
+Two standalone, additive harnesses run the canonical research pipeline and the
+engine on **real NQ data** and diff them (no edits to either production repo). Full
+verdict: `validation/PARITY_REPORT_V2.md`.
+
+**Decision-layer port fidelity — PROVEN.** Over **57 real trading days**
+(2025-07-01…09-05, every available day; 10 unavailable listed) and **255 touches**,
+feeding *identical* book-mid bars to both (lossless at `tick_size=0.125`):
 
 | Stage | Scope | Result |
 |---|---|---|
-| Zones | must-match | 26/26 |
-| Sessions | must-match | 25000/25000 |
-| Touches (+ close ts) | must-match | 22/22 |
-| Labels | must-match | 21/21 |
-| Interaction *formula* fidelity | must-match | 22/22 |
-| Approach features (×3) | must-match | 22/22 |
+| Zones | must-match | 309/309 |
+| Touches (+ close ts) | must-match | 255/255 |
+| Sessions | must-match | 252 944/252 944 |
+| Labels | must-match | 218/218 |
+| Interaction *formula* fidelity | must-match | 254/255¹ |
+| Approach features (×3) | must-match | 255/255 |
 | Interaction *trade-price* | expected-differ | reported, not asserted |
 
-The two formerly-open items are **resolved** against real data:
+¹ The single outlier is a harness window-bound artifact on a 23:59-ET touch whose
++5m window crosses midnight (the engine got more book rows than canonical), **not**
+an engine formula error — proven exact by the other 254 plus the earlier 5-day gate
+(22/22). 
 
-1. **Touch timestamp = bar CLOSE** (`LAST(ts_event)`, `tick_store.py:524`). The
-   engine's `bar.close_ts_utc` matches instant-for-instant; reproducible streaming
-   with zero look-ahead. (The earlier "open vs close" worry was wrong.)
-2. **Absorption `size` = book-event size** in canonical; the engine sums *trade*
-   size — a deliberate part of the trade-price change, isolated by stage E (formula
-   fidelity, same inputs → exact) vs stage F (trade-price → reported divergence).
-3. **Bar-price tick alignment confirmed:** canonical book mids sit exactly on the
-   0.125 grid (zero fractional-tick residual), so the integer-tick `Bar` is lossless.
+Resolved open items: **touch timestamp = bar CLOSE** (`LAST(ts_event)`,
+`tick_store.py:524` — engine's `close_ts_utc` matches, zero look-ahead);
+**absorption `size`** = book-event size in canonical, engine sums trade size (the
+deliberate trade-price change, isolated by stage E vs F); **book mids on the 0.125
+grid** (integer-tick `Bar` lossless).
 
-Remaining adapter note (not an engine concern): the research `< 5`-tick
-interaction-window drop is dataset-construction and lives in the adapter, not the
-pure formulas.
+**Candle builder — determinism PROVEN, one boundary reconciliation open.** With a
+stable `(ts_event, source-row-sequence)` order fed to both a reference bucketer and
+the engine builder, bars match **100% including open/close within each trading-day
+group** (the prior ~2.2% tie-break nondeterminism is gone). The one remaining
+difference is **semantic, not a bug**: the engine uses a DST-aware **18:00 ET**
+trading-day boundary (with `bar_index` reset), while research's window edge is a
+hardcoded **23:00 America/Chicago** (a *naive* `datetime` that DuckDB interprets in
+its session TZ). On 44/57 days the engine rolls the post-18:00-ET tail into the next
+trading day (Sunday Globex shifts entirely to Monday). This must be reconciled before
+the engine builder replaces research's DuckDB builder — it does **not** affect
+touches/labels (those use research's bars and order-independent high/low).
 
-**Candle benchmark (spec §7):** on one day, canonical DuckDB tick-bar build is ~26×
-faster than a naive numpy/pandas rebuild (0.34s vs 9.0s — parquet I/O dominates).
-Bars agree on count, close timestamps, high/low and volume; only the `open`/`close`
-*mid* differ on ~2.2% of bars, due to DuckDB's non-deterministic tie-break on
-duplicate `ts_event`. That tie-break does **not** affect touches or labels (which
-use high/low = order-independent MAX/MIN). Implication: research should keep DuckDB
-as the verified-equivalent fast path; a numpy fast path would need a deterministic
-secondary sort key before `open`/`close` can be bit-identical.
+**Benchmark:** over 57 days / ~2.9M bars, the engine builder ≈ 498s vs all-DuckDB
+≈ 35s — *not* apples-to-apples (engine excludes parquet read), and dominated by
+per-bar `Bar`-object construction via `.itertuples()`. The aggregation is fast; the
+bar-emit path needs optimizing before the engine builder wins on speed. Data volume
+(~8.8M book events/day) makes I/O the floor either way.
 
 ## Testing
 
