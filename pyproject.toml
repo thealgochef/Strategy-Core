@@ -1,0 +1,33 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "strategy-core"
+version = "0.1.0"
+description = "Shared, versioned strategy engine for zero-drift parity between Claude-Quant-Lab (research) and Trade-Lab (runtime)."
+readme = "README.md"
+requires-python = ">=3.11"
+license = { text = "Proprietary" }
+authors = [{ name = "algochef" }]
+dependencies = [
+    "numpy>=1.26",
+    "pydantic>=2.5",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8",
+    "pandas>=2.0",   # only the candle BATCH builder and its tests touch pandas
+]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/strategy_core"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"

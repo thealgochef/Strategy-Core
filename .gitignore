@@ -1,0 +1,13 @@
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.ruff_cache/
+build/
+dist/
+catboost_info/
+.venv/
+venv/
+*.parquet
+# validation harness outputs (the harness lives in validation/, reports are regenerable)
+validation/_out/
