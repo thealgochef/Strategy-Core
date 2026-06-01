@@ -65,6 +65,8 @@ def build_tick_bars_from_frame(
     bars are in ``(trading_day, bar_index)`` order, identical to the streaming
     builder's emission for the same trades.
     """
+    import warnings
+
     import numpy as np
     import pandas as pd
 
@@ -134,32 +136,58 @@ def build_tick_bars_from_frame(
             )
             .reset_index()
         )
-        for row in agg.itertuples(index=False):
-            # seed.py:107-130 -- one Bar per (trading_day, bar_index) bucket.
-            trading_day = row.trading_day.date()
-            bar_index = int(row.bar_index)
-            # seed.py:109 -- a bar is complete iff it filled exactly N trades; the
-            # day's trailing partial is END_OF_DAY, matching finalize_trading_day.
-            complete = int(row.trade_count) == timeframe
-            bars.append(
-                Bar(
-                    timeframe_ticks=timeframe,
-                    trading_day=trading_day,
-                    bar_index=bar_index,
-                    bar_id=make_bar_id(timeframe, trading_day, bar_index),
-                    open_ts_utc=row.open_ts.to_pydatetime(warn=False),
-                    close_ts_utc=row.close_ts.to_pydatetime(warn=False),
-                    open_ticks=int(row.open_ticks),
-                    high_ticks=int(row.high_ticks),
-                    low_ticks=int(row.low_ticks),
-                    close_ticks=int(row.close_ticks),
-                    volume=int(row.volume),
-                    trade_count=int(row.trade_count),
-                    is_complete=complete,
-                    is_partial=not complete,
-                    close_reason=(
-                        CloseReason.COMPLETE if complete else CloseReason.END_OF_DAY
-                    ),
-                )
+        # Vectorized emit (seed.py:106-130 did one Bar per row via .itertuples()).
+        # On ~60k bars/day the per-row namedtuple plus per-row
+        # ``Timestamp.to_pydatetime`` dominated the build. Here every agg column is
+        # converted to Python scalars/datetimes ONCE, then Bars are built in a single
+        # comprehension. The output is byte-identical to the per-row build: ``.tolist()``
+        # yields the same Python ``int`` the old ``int(...)`` produced, ``.dt.date``
+        # the same ``date``, and ``.dt.to_pydatetime`` truncates nanoseconds exactly as
+        # the old ``row.<ts>.to_pydatetime(warn=False)`` did (the discard is intended).
+        td_dates = agg["trading_day"].dt.date.to_numpy()
+        bar_index_arr = agg["bar_index"].to_numpy().tolist()
+        open_ticks_arr = agg["open_ticks"].to_numpy().tolist()
+        high_ticks_arr = agg["high_ticks"].to_numpy().tolist()
+        low_ticks_arr = agg["low_ticks"].to_numpy().tolist()
+        close_ticks_arr = agg["close_ticks"].to_numpy().tolist()
+        volume_arr = agg["volume"].to_numpy().tolist()
+        trade_count_arr = agg["trade_count"].to_numpy().tolist()
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")  # nanosecond discard == old warn=False
+            open_dt = agg["open_ts"].dt.to_pydatetime()
+            close_dt = agg["close_ts"].dt.to_pydatetime()
+        bars.extend(
+            Bar(
+                timeframe_ticks=timeframe,
+                trading_day=td,
+                bar_index=bi,
+                bar_id=make_bar_id(timeframe, td, bi),
+                open_ts_utc=ots,
+                close_ts_utc=cts,
+                open_ticks=ot,
+                high_ticks=ht,
+                low_ticks=lt,
+                close_ticks=ct,
+                volume=vol,
+                trade_count=tc,
+                # seed.py:109 -- complete iff it filled exactly N trades; the day's
+                # trailing partial is END_OF_DAY, matching finalize_trading_day.
+                is_complete=tc == timeframe,
+                is_partial=tc != timeframe,
+                close_reason=CloseReason.COMPLETE if tc == timeframe else CloseReason.END_OF_DAY,
             )
+            for td, bi, ots, cts, ot, ht, lt, ct, vol, tc in zip(
+                td_dates,
+                bar_index_arr,
+                open_dt,
+                close_dt,
+                open_ticks_arr,
+                high_ticks_arr,
+                low_ticks_arr,
+                close_ticks_arr,
+                volume_arr,
+                trade_count_arr,
+                strict=True,
+            )
+        )
     return bars
