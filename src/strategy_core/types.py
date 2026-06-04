@@ -123,11 +123,20 @@ class Bar:
 
 @dataclass(frozen=True, slots=True)
 class Level:
-    """A single key level (PDH/PDL/session high/low) in points."""
+    """A single key level (PDH/PDL/session high/low) in points.
+
+    ``available_from`` is the UTC instant at/after which this level may first be
+    touched — its defining session's CLOSE (engine v3 look-ahead guard): PDH/PDL from
+    the trading-day start (prior 18:00 ET); asia_high/low from the Asia close (02:45
+    ET); london_high/low from the London close (08:00 ET). ``None`` means UNGATED
+    (the legacy/book-mid regression path, which reproduces the pre-v3 no-guard
+    behavior); the production research path always supplies it.
+    """
 
     name: str
     price: float
     side: Side
+    available_from: datetime | None = None
 
 
 @dataclass(slots=True)
@@ -137,12 +146,19 @@ class Zone:
     ``representative_price`` is the mean of the constituent level prices (the
     canonical training rule). ``touched`` is mutable first-touch state and is the
     only mutable field on any engine type; first-touch scope tracking flips it.
+
+    ``available_from`` is the UTC instant at/after which this zone may first be
+    touched (engine v3 look-ahead guard) — the MAX of its constituent levels'
+    ``available_from`` (a merged level isn't real until its latest-closing session has
+    closed). ``None`` means UNGATED (all constituents ungated, i.e. the legacy/book-mid
+    path). ``detect_touches`` skips a zone on any bar that closes before this instant.
     """
 
     representative_price: float
     names: tuple[str, ...]
     side: Side
     touched: bool = False
+    available_from: datetime | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -202,8 +218,8 @@ class SessionInfo:
 
     ``trading_day`` is ``None`` only when the timestamp falls in ``closed_window``
     (no trading day). ``session`` is the matched window name, or ``"none"`` for
-    times inside a trading day but outside every named window (e.g. the ET
-    08:00-09:30 pre-RTH gap).
+    times inside a trading day but outside every named window (e.g. the v3 ET
+    08:00-09:00 london->ny gap).
     """
 
     trading_day: date | None

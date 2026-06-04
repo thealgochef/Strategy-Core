@@ -84,12 +84,21 @@ def build_zones(
         # strictly greater than half) resolve to LOW.
         high_count = sum(1 for l in group if l.side == Side.HIGH)
         side = Side.HIGH if high_count > len(group) / 2 else Side.LOW
+        # Engine v3 look-ahead guard: the zone's availability is the MAX (latest) of
+        # its constituents' availability instants -- a merged level isn't a real,
+        # touchable level until the latest-closing session among its constituents has
+        # closed. ``None`` constituents (the ungated legacy/book-mid path) are treated
+        # as "no constraint" and ignored; if EVERY constituent is ungated the zone is
+        # ungated (None), preserving the pre-v3 behavior byte-for-byte.
+        avails = [l.available_from for l in group if l.available_from is not None]
+        available_from = max(avails) if avails else None
         zones.append(
             Zone(
                 representative_price=rep_price,
                 names=names,
                 side=side,
                 touched=False,
+                available_from=available_from,
             )
         )
 

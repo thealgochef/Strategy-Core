@@ -102,6 +102,7 @@ def _valid_contract_dict() -> dict[str, Any]:
         "label_policy": {
             "resolution": "forward_window",
             "entry_reference": "touch_price",
+            "decision_offset_minutes": 5,
             "tp_points": 15.0,
             "sl_points": 30.0,
             "trap_mfe_min": 5.0,

@@ -68,6 +68,16 @@ def detect_touches(
 
     ``level_type`` is the zone's first constituent level name (``zone["names"][0]``,
     canonical line 436). Touches are returned in detection order.
+
+    LEVEL-AVAILABILITY GATE (engine v3 look-ahead guard): a zone with a non-``None``
+    ``available_from`` can only be touched on a bar that CLOSES at/after that instant
+    (``bar.close_ts_utc >= zone.available_from``). A bar that closes BEFORE the zone's
+    defining session has closed is SKIPPED for that zone — it does NOT consume the
+    zone's first-touch (the ``touched`` flag is left unset), so the recorded touch is
+    the first qualifying RETURN to the level once it exists, never the forming bar.
+    ``available_from is None`` means ungated (the legacy/book-mid path), reproducing
+    the pre-v3 no-guard behavior exactly. ``is_touch`` and the
+    first-touch-per-zone-per-day scope are otherwise UNCHANGED.
     """
     touches: list[Touch] = []
 
@@ -77,6 +87,12 @@ def detect_touches(
 
         for zone in zones:
             if zone.touched:
+                continue
+
+            # v3 look-ahead guard: the level is not yet available at this bar's close
+            # -- skip WITHOUT consuming first-touch so a later (post-availability) bar
+            # can record the real return-to-level touch.
+            if zone.available_from is not None and bar.close_ts_utc < zone.available_from:
                 continue
 
             if is_touch(low_points, high_points, zone.representative_price):

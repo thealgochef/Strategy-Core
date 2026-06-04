@@ -144,10 +144,20 @@ class FeatureWindows(_ContractModel):
 
 
 class LabelPolicy(_ContractModel):
-    """Forward-labeling policy. Ported from ``strategy_contract.py:91-99``."""
+    """Forward-labeling policy. Ported from ``strategy_contract.py:91-99``.
+
+    Engine v2 additive field: ``decision_offset_minutes`` -- minutes AFTER the touch
+    at which the decision fires (= the interaction window), single-sourced by the
+    emitter from ``strategy_core.constants.DECISION_OFFSET_MINUTES``. It pins the
+    honest-entry re-anchor: the label is measured from the realistic price at
+    touch+offset (``entry_reference == "realistic_at_decision"``), and the feature
+    window [touch, touch+offset] and label window (touch+offset, cutoff] do not
+    overlap. Typed only by range here; the VALUE is set by the research emitter.
+    """
 
     resolution: str = Field(min_length=1, max_length=32)
     entry_reference: str = Field(min_length=1, max_length=64)
+    decision_offset_minutes: int = Field(gt=0, le=1440)
     tp_points: float = Field(gt=0.0)
     sl_points: float = Field(gt=0.0)
     trap_mfe_min: float = Field(ge=0.0)

@@ -22,7 +22,35 @@ lazily and only when the batch candle builder is actually called.
 from __future__ import annotations
 
 #: Structural version of the decision/candle engine. See module docstring.
-ENGINE_VERSION = "strategy_core_engine_v1"
+#: v1 -> v2 (trade-bar cutover + honest-entry re-anchor): the canonical OUTCOME is
+#: now anchored to the DECISION-TIME entry (touch + decision_offset = the realistic
+#: price when the prediction can actually fire, matching the Trade-Lab executor),
+#: NOT the level price at the touch instant; and the 3 interaction FEATURES re-source
+#: to TRADE PRINTS (MID_PRICE_SOURCE="trade_price") on the 0.25 trade grid. Both are
+#: decision-FORMULA changes, so the structural version bumps. The 3 classes, tp=15,
+#: sl=30, trap_mfe_min=5, and the MAE-first ladder are UNCHANGED — only the entry
+#: reference + the forward-window start move.
+#: v2 -> v3 (session redefinition + ENFORCED level availability + full-prior-day
+#: PDH/PDL + later flatten/cutoff): four coupled decision-MEANING changes.
+#:   1. Sessions re-clocked to ET asia 19:00->02:45 (crosses midnight), london
+#:      03:00->08:00, ny 09:00->17:00 (the prior ny_rth 09:30->16:15 window + name
+#:      retired); the 18:00 ET trading-day boundary is UNCHANGED. The gaps
+#:      18:00-19:00 / 02:45-03:00 / 08:00-09:00 ET are intentionally unsessioned.
+#:   2. The contract's available_from guard is now ACTUALLY ENFORCED: a level can
+#:      only be first-touched once its defining session has CLOSED (PDH/PDL from the
+#:      trading-day start = prior 18:00 ET; asia H/L from 02:45 ET; london H/L from
+#:      08:00 ET; a merged zone from the MAX of its constituents). This closes the
+#:      look-ahead hole where a session high/low "self-touched" at its own forming
+#:      bar before the session that defines it had closed.
+#:      3. PDH/PDL move from the prior NY-RTH slice to the FULL prior TRADING day's
+#:      high/low (the daily-candle extremes over the entire prior [18:00,18:00) ET
+#:      window — the ICT standard).
+#:   4. The flatten (entry/decision cutoff) moves to 16:40 ET and the forward-label
+#:      cutoff to 17:00 ET (the new ny session end); the 5-minute decision offset is
+#:      UNCHANGED. The 3 classes / tp / sl / trap_mfe_min / MAE-first ladder and the
+#:      trade-price bars + trade-print features are all UNCHANGED from v2. A model
+#:      built under v2 (e.g. NQ_20260602_232808) correctly fails the v3 loader.
+ENGINE_VERSION = "strategy_core_engine_v3"
 
 #: Version of the strategy.json contract *format* (Pydantic schema in contract/).
 CONTRACT_VERSION = "trade_lab_contract_v1"
@@ -44,6 +72,10 @@ from strategy_core.decisions.features import (
     int_absorption_ratio,
     int_time_beyond_level,
     int_time_within_2pts,
+)
+from strategy_core.decisions.honest_entry import (
+    HonestEntryDrop,
+    resolve_honest_outcome,
 )
 from strategy_core.decisions.outcomes import (
     OutcomeResult,
@@ -114,6 +146,9 @@ __all__ = [
     "classify_mae_first",
     "resolve_outcome",
     "OutcomeResult",
+    # decisions: honest-entry orchestration
+    "resolve_honest_outcome",
+    "HonestEntryDrop",
     # contract
     "StrategyContract",
     "load_strategy_contract",

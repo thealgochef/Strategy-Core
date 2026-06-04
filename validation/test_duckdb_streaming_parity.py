@@ -1,15 +1,24 @@
 """Standing parity test: research DuckDB batch bars == engine STREAMING bars, BYTE-FOR-BYTE.
 
 Why this pair: research trains on DuckDB-built bars; Trade-Lab serves on streaming-built
-bars. Zero-drift requires the two to be identical on the SAME spec — same 18:00-ET
-trading-day boundary and the same intrinsic `(ts_event, sequence)` order. This test feeds
-the EXACT events DuckDB buckets (`TickStore.query_tick_events`, ordered by the intrinsic
-key) through the streaming `CandleEngine` and compares every Bar field, including the
-trailing partial (the final <tick_count bucket of the day).
+bars. Zero-drift requires the two to be identical on the SAME spec.
 
-Requires: the Claude-Quant-Lab `duckdb-18et-boundary` branch (new `build_tick_bars` +
-`query_tick_events`) and the local databento store. Skips cleanly if either is absent, so
-it is a real standing test, not a throwaway harness.
+The spec is TRADE-PRICE tick bars -- a "tick" is a trade print (action='T'), OHLC from the
+trade `price` (NQ trade grid 0.25, lossless integer ticks; phase 4d). Within a (ts_event,
+sequence) matching event the sweep prints are ordered by SIDE-SIGNED price -- +price for a
+buy aggressor (side='B'), -price for a sell -- so the order reproduces the chronological wire
+direction (phase 4e, supersedes 4d's plain price-ascending order). Everything else is reused:
+the 18:00-ET trading-day boundary and the kept trailing partial.
+`TickStore.build_tick_bars`/`query_tick_events` default to `price_source='trade'`.
+
+This is the SUPPORTING test: it feeds the EXACT trade stream DuckDB buckets
+(`query_tick_events`, side-signed order) through the streaming `CandleEngine` and compares
+every Bar field, proving the two builders agree byte-for-byte on the SAME order. The GATE
+(research vs Trade-Lab's real WIRE order) is `test_production_pair_parity.py`.
+
+Requires: the Claude-Quant-Lab `duckdb-18et-boundary` branch (`build_tick_bars` +
+`query_tick_events` with `price_source`) and the local databento store. Skips cleanly if
+either is absent, so it is a real standing test, not a throwaway harness.
 
 Run directly:  python validation/test_duckdb_streaming_parity.py
 Or via pytest: pytest validation/test_duckdb_streaming_parity.py
@@ -29,7 +38,7 @@ if CQL_SRC not in sys.path:
 DATA_DIR = Path(r"C:/Users/gonza/Documents/Trade-Dashboard/data/databento")
 SYMBOL = "NQ"
 TICK_COUNT = 147
-TICK_SIZE = 0.125  # book mids land on the 0.125 grid -> lossless integer ticks
+TICK_SIZE = 0.25  # NQ trade prints land on the 0.25 grid -> lossless integer ticks
 
 from strategy_core.candles._ids import make_bar_id
 from strategy_core.candles.streaming import CandleEngine
@@ -90,7 +99,7 @@ def _streaming_rows(events: pd.DataFrame):
     if events is None or events.empty:
         return []
     ts_series = events["ts_event"]  # datetime64[ns, UTC] -> yields ns-precision pd.Timestamp
-    price_ticks = np.rint(events["mid"].to_numpy(dtype="float64") / TICK_SIZE).astype("int64").tolist()
+    price_ticks = np.rint(events["price"].to_numpy(dtype="float64") / TICK_SIZE).astype("int64").tolist()
     sizes = events["size"].to_numpy(dtype="int64").tolist()
 
     eng = CandleEngine(timeframes=(TICK_COUNT,), scheme=RESEARCH_SESSION_SCHEME)
@@ -180,7 +189,8 @@ if __name__ == "__main__":
     import warnings
     warnings.simplefilter("ignore")
     print(f"Engine boundary={RESEARCH_SESSION_SCHEME.trading_day_boundary} "
-          f"tz={RESEARCH_SESSION_SCHEME.timezone}; tiebreak=(ts_event, sequence) [intrinsic]")
+          f"tz={RESEARCH_SESSION_SCHEME.timezone}; bars=TRADE-PRICE tick (action='T', tick {TICK_SIZE}); "
+          f"order=(ts_event, sequence, side_signed_price, size) [intrinsic]")
     all_ok = True
     for day in SAMPLE_DAYS:
         if not _available(day):

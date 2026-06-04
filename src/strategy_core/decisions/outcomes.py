@@ -17,14 +17,30 @@ breaches both the stop and the target therefore resolves to the LOSS, not the wi
 -- this is the guard that keeps training labels honest and is matched exactly here
 (dashboard_utility_labeling.py:82-97).
 
-Entry reference is the level price itself (``representative_price`` in research),
-passed here as ``entry_points``. Prices are compared in POINTS; ``forward_bars``
-carry integer ticks, so the resolver converts via ``tick_size``.
+Entry reference (engine v2 — honest-entry re-anchor): the canonical outcome is now
+measured from the REALISTIC price at the DECISION INSTANT (touch +
+``DECISION_OFFSET_MINUTES``, the interaction window), matching the Trade-Lab
+EXECUTOR which enters at the market price WHEN THE PREDICTION FIRES. This supersedes
+the v1 idealized level-at-touch anchor (``LABEL_ENTRY_REFERENCE`` flipped
+``level_representative_price`` -> ``realistic_at_decision``; the 3 classes / tp=15 /
+sl=30 / trap_mfe_min=5 / MAE-first ladder are UNCHANGED — only the entry reference
+and the forward-window start moved).
 
-This module deliberately holds NO session/RTH-cutoff logic: the canonical labeler
-receives ``forward_bars`` already truncated at the 16:15 RTH cutoff by its caller
-(the builder/adapter), and so does ``resolve_outcome`` -- it scans whatever bars it
-is given.
+CRITICAL — ``resolve_outcome`` STAYS PURE: it remains a forward-scan over
+``(entry_points, forward_bars)`` and does NOT know about decision time, the
+interaction window, the flatten rule, market data, or timezones. The ADAPTER
+(``engine_decision`` / the decision-diff harness / the TL executor) computes the
+decision-time ENTRY PRICE (the realistic trade price at/just-after touch + offset)
+and the POST-DECISION forward window (bars whose close is in (decision_time,
+RTH_END]) and passes them in. The feature window [touch, touch+offset] and the label
+window (decision_time, RTH_END] therefore do NOT overlap — the look-ahead closure.
+Prices are compared in POINTS; ``forward_bars`` carry integer ticks, so the resolver
+converts via ``tick_size``.
+
+This module deliberately holds NO session/RTH-cutoff/flatten/decision-offset logic:
+the adapter slices ``forward_bars`` to the post-decision window (truncated at the
+RTH cutoff) AND drops touches whose decision_time is at/after the flatten before
+calling here -- ``resolve_outcome`` scans whatever bars it is given.
 """
 
 from __future__ import annotations
@@ -121,7 +137,12 @@ def resolve_outcome(
     """Scan forward bars for MFE/MAE and resolve via the MAE-first ladder.
 
     Ported from ``dashboard_utility_labeling.py:62-108`` (``label_touch_event``).
-    The entry reference is the level price (``entry_points``), matching training.
+    PURE forward-scan: ``entry_points`` is whatever entry reference the adapter
+    supplies. In engine v2 the adapter passes the REALISTIC price at the DECISION
+    instant (touch + decision_offset), so the label is the honest decision-time
+    outcome (matching the executor); in the legacy/v1 parity path the adapter passes
+    the level representative price. This function is identical either way — it does
+    not know which anchor it was given.
 
     Per bar (dashboard_utility_labeling.py:71-80), for a LONG the favorable
     excursion is ``high - entry`` and the adverse is ``entry - low``; for a SHORT
@@ -129,12 +150,15 @@ def resolve_outcome(
     running maxima feed ``classify_mae_first`` with ``forced=False`` (this resolver
     never forces; that is the streaming RTH-cutoff path's job).
 
-    ``forward_bars`` must already be the post-touch bars truncated at the RTH cutoff
-    -- that filtering is the ADAPTER's job (the canonical builder slices them before
-    calling ``label_touch_event``). This function does NOT apply the 16:15 cutoff.
+    ``forward_bars`` must already be the post-decision (v2) / post-touch (v1) bars
+    truncated at the forward cutoff -- that filtering is the ADAPTER's job (it slices
+    bars to (decision_time, RTH_END] before calling here). This function does NOT
+    apply the forward/RTH cutoff (v3: 17:00 ET), the decision offset, or the flatten
+    rule.
 
     Args:
-        entry_points: Entry/level price in points.
+        entry_points: Entry price in points (decision-time realistic price in v2;
+            level representative price in the v1/legacy parity path).
         direction: ``Direction.LONG`` or ``Direction.SHORT``.
         forward_bars: Post-touch bars (touch bar excluded), already RTH-truncated.
         tick_size: Points per tick, to convert bar tick prices to points.

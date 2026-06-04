@@ -1,9 +1,11 @@
 """Tests for ET session classification + the shared trading-day primitive.
 
-Fidelity targets (zero drift from the research training path):
-  * ET windows: asia 18:00->01:00 (crosses midnight), london 01:00->08:00,
-    ny_rth 09:30->16:15, with deliberate "none" gaps 08:00-09:30 and 16:15-18:00.
-  * Trading-day boundary at 18:00 ET (CME rollover): >= rolls to the next day.
+Fidelity targets (engine v3 — zero drift from the research training path):
+  * ET windows: asia 19:00->02:45 (crosses midnight), london 03:00->08:00,
+    ny 09:00->17:00, with deliberate "none" gaps 18:00-19:00, 02:45-03:00,
+    08:00-09:00 and 17:00-18:00.
+  * Trading-day boundary at 18:00 ET (CME rollover, UNCHANGED): >= rolls to the
+    next day.
   * Closed-window handling on the non-canonical Chicago reference scheme.
 
 All timestamps are fixed tz-aware UTC datetimes. On 2025-06-02 US/Eastern is EDT
@@ -39,60 +41,82 @@ def _utc(hour: int, minute: int = 0) -> datetime:
 
 def test_1759_et_is_none_session_same_trading_day():
     # 17:59 ET: before the 18:00 boundary -> same calendar day; sits in the
-    # deliberate 16:15-18:00 gap -> no named window.
+    # deliberate 17:00-18:00 gap (ny ended at 17:00) -> no named window.
     info = classify_session(_utc(21, 59))
     assert info.trading_day == date(2025, 6, 2)
     assert info.session == "none"
 
 
-def test_1800_et_rolls_trading_day_forward_into_asia():
+def test_1800_vs_1900_et_boundary_gap_then_asia():
     # 18:00 ET: at the boundary -> trading day rolls to the next calendar day,
-    # and asia (18:00->01:00) begins.
-    info = classify_session(_utc(22, 0))
-    assert info.trading_day == date(2025, 6, 3)
-    assert info.session == "asia"
+    # but asia does NOT open until 19:00 -> 18:00-19:00 is the "none" gap.
+    boundary = classify_session(_utc(22, 0))
+    assert boundary.trading_day == date(2025, 6, 3)
+    assert boundary.session == "none"
+    # 19:00 ET: asia (19:00->02:45) begins.
+    asia = classify_session(_utc(23, 0))
+    assert asia.trading_day == date(2025, 6, 3)
+    assert asia.session == "asia"
 
 
 def test_0030_et_is_asia_same_trading_day():
-    # 00:30 ET: asia crosses midnight (t < 01:00); before 18:00 -> same day.
+    # 00:30 ET: asia crosses midnight (t < 02:45); before 18:00 -> same day.
     info = classify_session(_utc(4, 30))
     assert info.trading_day == date(2025, 6, 2)
     assert info.session == "asia"
 
 
-def test_0200_et_is_london():
-    # 02:00 ET: london 01:00->08:00.
+def test_0244_vs_0245_et_asia_to_none():
+    # 02:44 ET: still asia (end is exclusive at 02:45).
+    before = classify_session(_utc(6, 44))
+    assert before.trading_day == date(2025, 6, 2)
+    assert before.session == "asia"
+    # 02:45 ET: asia has ended -> 02:45-03:00 gap -> "none".
+    at = classify_session(_utc(6, 45))
+    assert at.trading_day == date(2025, 6, 2)
+    assert at.session == "none"
+
+
+def test_0200_et_is_asia_not_london():
+    # 02:00 ET: v3 asia runs to 02:45, so 02:00 is ASIA (not london).
     info = classify_session(_utc(6, 0))
+    assert info.trading_day == date(2025, 6, 2)
+    assert info.session == "asia"
+
+
+def test_0300_et_is_london():
+    # 03:00 ET: london 03:00->08:00 (inclusive start).
+    info = classify_session(_utc(7, 0))
     assert info.trading_day == date(2025, 6, 2)
     assert info.session == "london"
 
 
-def test_0929_vs_0930_et_none_to_ny_rth():
-    # 09:29 ET: 08:00-09:30 pre-RTH gap -> "none".
-    before = classify_session(_utc(13, 29))
+def test_0859_vs_0900_et_none_to_ny():
+    # 08:59 ET: 08:00-09:00 london->ny gap -> "none".
+    before = classify_session(_utc(12, 59))
     assert before.trading_day == date(2025, 6, 2)
     assert before.session == "none"
-    # 09:30 ET: ny_rth opens (inclusive start).
-    at = classify_session(_utc(13, 30))
+    # 09:00 ET: ny opens (inclusive start).
+    at = classify_session(_utc(13, 0))
     assert at.trading_day == date(2025, 6, 2)
-    assert at.session == "ny_rth"
+    assert at.session == "ny"
 
 
-def test_1614_vs_1615_et_ny_rth_to_none():
-    # 16:14 ET: still ny_rth (end is exclusive at 16:15).
-    before = classify_session(_utc(20, 14))
+def test_1659_vs_1700_et_ny_to_none():
+    # 16:59 ET: still ny (end is exclusive at 17:00).
+    before = classify_session(_utc(20, 59))
     assert before.trading_day == date(2025, 6, 2)
-    assert before.session == "ny_rth"
-    # 16:15 ET: ny_rth has ended -> 16:15-18:00 gap -> "none".
-    at = classify_session(_utc(20, 15))
+    assert before.session == "ny"
+    # 17:00 ET: ny has ended -> 17:00-18:00 gap -> "none".
+    at = classify_session(_utc(21, 0))
     assert at.trading_day == date(2025, 6, 2)
     assert at.session == "none"
 
 
 def test_classify_session_returns_local_ts_in_scheme_tz():
-    info = classify_session(_utc(13, 30))
+    info = classify_session(_utc(13, 0))
     assert info.local_ts.hour == 9
-    assert info.local_ts.minute == 30
+    assert info.local_ts.minute == 0
     assert info.local_ts.utcoffset().total_seconds() == -4 * 3600
 
 

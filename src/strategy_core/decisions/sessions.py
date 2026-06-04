@@ -46,7 +46,9 @@ __all__ = [
 ]
 
 #: Session name returned for a timestamp inside a trading day but outside every
-#: named window (e.g. the ET 08:00-09:30 pre-RTH gap and the 16:15-18:00 gap).
+#: named window. In the v3 scheme these intentional gaps are the ET hours 18:00-19:00
+#: (boundary->asia), 02:45-03:00 (asia->london), 08:00-09:00 (london->ny) and
+#: 17:00-18:00 (ny->next boundary).
 _NO_SESSION = "none"
 
 #: Session name returned for a timestamp inside the scheme's ``closed_window``.
