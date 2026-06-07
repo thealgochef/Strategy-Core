@@ -22,7 +22,6 @@ from dataclasses import astuple
 from datetime import datetime, timedelta, timezone
 
 import pandas as pd
-import pytest
 
 from strategy_core.candles.batch import build_tick_bars_from_frame
 from strategy_core.candles.streaming import CandleEngine
@@ -138,7 +137,9 @@ def test_batch_streaming_parity_research_scheme() -> None:
     # Sanity: the stream really does straddle the 18:00 ET boundary -> two trading
     # days -> at least one END_OF_DAY bar per timeframe (the first day's partial).
     trading_days = {b.trading_day for b in streaming}
-    assert len(trading_days) == 2, f"expected the stream to span 2 ET trading days, got {trading_days}"
+    assert len(trading_days) == 2, (
+        f"expected the stream to span 2 ET trading days, got {trading_days}"
+    )
     end_of_day = [b for b in streaming if b.close_reason and b.close_reason.value == "end_of_day"]
     assert end_of_day, "expected at least one END_OF_DAY bar from the day rollover"
     assert all(b.is_partial and not b.is_complete for b in end_of_day)

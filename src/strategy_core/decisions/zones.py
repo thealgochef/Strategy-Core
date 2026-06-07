@@ -59,7 +59,7 @@ def build_zones(
         return []
 
     # _build_zones:387 -- sort ascending by price; stable, mirrors the dict sort.
-    sorted_levels = sorted(levels, key=lambda l: l.price)
+    sorted_levels = sorted(levels, key=lambda level: level.price)
     # _build_zones:388 -- seed the first group with the lowest-priced level.
     groups: list[list[Level]] = [[sorted_levels[0]]]
 
@@ -76,13 +76,13 @@ def build_zones(
     zones: list[Zone] = []
     for group in groups:
         # _build_zones:398-399 -- representative price is the arithmetic mean.
-        prices = [l.price for l in group]
+        prices = [level.price for level in group]
         rep_price = sum(prices) / len(prices)
         # _build_zones:400 -- names in group (price-sorted) order, as a tuple.
-        names = tuple(l.name for l in group)
+        names = tuple(level.name for level in group)
         # _build_zones:402-403 -- strict-majority side; ties (high_count not
         # strictly greater than half) resolve to LOW.
-        high_count = sum(1 for l in group if l.side == Side.HIGH)
+        high_count = sum(1 for level in group if level.side == Side.HIGH)
         side = Side.HIGH if high_count > len(group) / 2 else Side.LOW
         # Engine v3 look-ahead guard: the zone's availability is the MAX (latest) of
         # its constituents' availability instants -- a merged level isn't a real,
@@ -90,7 +90,7 @@ def build_zones(
         # closed. ``None`` constituents (the ungated legacy/book-mid path) are treated
         # as "no constraint" and ignored; if EVERY constituent is ungated the zone is
         # ungated (None), preserving the pre-v3 behavior byte-for-byte.
-        avails = [l.available_from for l in group if l.available_from is not None]
+        avails = [level.available_from for level in group if level.available_from is not None]
         available_from = max(avails) if avails else None
         zones.append(
             Zone(

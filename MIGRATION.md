@@ -1,205 +1,84 @@
-# Migration handoff — repointing both repos onto strategy-core
+# Migration handoff — Strategy-Core v3
 
-The shared engine (this package) is **done and tested**. This file is the staged
-plan for the remaining spec phases (4–8): repointing Claude-Quant-Lab (research)
-and Trade-Lab (runtime) onto it, plus the cross-repo parity proof. These phases
-touch a live serving path with money on it and require running both repos' full
-suites against real data, so they are **not applied here** — they are specified,
-ordered, and anchored so they can be executed deliberately and verified.
+Updated: 2026-06-04. This is the current migration state, replacing the older v1/v2 phase plan. Historical details remain in `validation/PHASE*.md`; treat those as audit trail, not current-state docs.
 
-Status legend: ✅ done · ▶ next · ⏳ later
+## Status legend
 
-| Phase | What | Status |
+✅ done · ▶ next · ⏳ later / deferred · ⚠️ blocked / incompatible
+
+| Workstream | Current status | Evidence / notes |
 |---|---|---|
-| 1 | Scaffold `strategy-core` (package, types, constants, contract schema) | ✅ |
-| 2 | Lift candle layer (batch + streaming + parity test) | ✅ |
-| 3 | Extract decision layer from training path (+ tests) | ✅ |
-| 4a | **Parity gate** — decision-layer fidelity vs canonical on real data (pre-retrain) | ✅ |
-| 4 | Repoint research **training** onto the engine | ▶ |
-| 5 | Fix the contract **emitter** (emit from engine constants) | ▶ |
-| 6 | Repoint **Trade-Lab** onto the engine | ▶ |
-| 7 | End-to-end **parity** proof (one model + one data slice) | ▶ |
-| 8 | Absorb remaining research duplicates (experiment / live-dashboard) | ⏳ |
+| Strategy-Core package scaffold, types, constants, contract schema | ✅ | `src/strategy_core/` is importable; `ENGINE_VERSION=strategy_core_engine_v3`; `CONTRACT_VERSION=trade_lab_contract_v1`. |
+| Candle layer | ✅ | Streaming + batch trade tick bars exist; tests cover parity and session behavior. |
+| Decision layer | ✅ | Zones, touches, sessions, features, outcomes, and honest-entry orchestration live in `strategy_core.decisions`. |
+| Contract loader fail-close | ✅ | `load_strategy_contract(..., expected_engine_version=...)` rejects engine mismatches. |
+| Quant-Lab dashboard-utility training repoint | ✅ | Production builder calls `engine_decision.process_single_date_engine()`; contract emitter pulls constants/version stamps from Strategy-Core. |
+| Strategy-Core v3 semantics | ✅ | Sessions re-clocked, full-prior-day PDH/PDL, availability guard enforced, 16:40/17:00 cutoffs, `eligible_session=ny`. |
+| Strategy-Core tests | ✅ | Verified 2026-06-04: `python -m pytest -q` passes; collect-only count is 106. |
+| Trade-Lab v3 compatibility | ⚠️ | Current Trade-Lab schema/session/touch/feature/outcome paths are local and stale. Do not serve v3 bundles there yet. |
+| Canonical v3 model/data bundle verification | ⏳ | Deferred until local data/model zip is available; verify file presence and checksums later. |
 
 ---
 
-## ⚠️ Retrain gate (must happen in phase 4, before phase 6 can serve anything)
+## Current v3 truth
 
-The engine standardizes interaction features on **trade price** (ratified). The
-deployed model was trained on a **top-of-book mid** (`tick_store.py:264`,
-`dashboard_utility_builder.py:488`). They are incompatible.
+The canonical strategy state is documented in [`README.md`](README.md) and summarized in [`V3_COMPATIBILITY_MATRIX.md`](V3_COMPATIBILITY_MATRIX.md). The most important v3 differences from old docs are:
 
-So phase 4 is not just "wire an adapter" — it is **retrain the model under this
-engine**: repoint research dataset construction onto `strategy_core`, rebuild the
-training set (interaction features now trade-price), retrain CatBoost, and emit a
-new bundle stamped `engine_version = strategy_core_engine_v1`. Trade-Lab's
-`engine_version` fail-close (phase 6) will refuse the old bundle — by design.
-
-If, on reflection, the strategy should stay on TOB-mid instead, that is a one-line
-change (`MID_PRICE_SOURCE = "top_of_book"`) plus reworking the three interaction
-features to consume a top-of-book book-event stream (mid + event size), and then
-**no** retrain is needed because the deployed model already encodes TOB-mid. That
-reversal was offered and declined; this plan assumes trade-price + retrain.
+1. **Engine stamp:** `strategy_core_engine_v3`, not v1/v2.
+2. **Sessions:** ET-native `asia` 19:00→02:45, `london` 03:00→08:00, `ny` 09:00→17:00; 18:00 ET trading-day boundary.
+3. **Level source:** PDH/PDL = full prior trading-day high/low, not prior NY/RTH high/low.
+4. **Availability guard:** session levels cannot be touched before their defining session closes.
+5. **Entry/outcome:** realistic decision-time entry at `touch_close + 5m`; forward labels start after decision time.
+6. **Cutoffs:** no new decision at/after 16:40 ET; forward cutoff 17:00 ET.
+7. **Feature price source:** trade-print interaction features on the 0.25 trade grid.
 
 ---
 
-## Phase 4 — repoint research training
+## Trade-Lab repoint — next required engineering work
 
-Goal: the training set is produced by `strategy_core`, not the in-repo duplicates.
+The remaining migration is Trade-Lab. Work in this order; each item needs tests before live/paper use.
 
-1. Write an adapter `DataFrame/DuckDB row → engine neutral types` (Trade/Quote/Bar/Level).
-   - bars (`tick_store.build_tick_bars` / `build_bars_from_ticks`) → `strategy_core.types.Bar`
-     (or benchmark `build_tick_bars_from_frame`, see open decision below).
-   - levels (`_compute_levels_for_date`, builder:347-376) → `list[Level]`.
-   - interaction-window ticks (`query_tick_feature_rows`) → `list[Trade]` of **trade prints**
-     (NOT the book-mid rows — that is the strategy change; apply the `< 5`-tick drop here).
-2. Replace the in-repo functions with engine calls:
-   | Research callsite | → engine |
-   |---|---|
-   | `_build_zones` (builder:382-411) | `decisions.zones.build_zones` |
-   | `_detect_touches` (builder:414-440) | `decisions.touch.detect_touches` |
-   | `_slice_session`/session consts (builder:332-344, 44-51) | `decisions.sessions.classify_session` |
-   | `_compute_interaction_features` (builder:446-538) | `decisions.features.int_*` |
-   | approach features (`experiment/features.py`) | `decisions.features.app_*` |
-   | `label_touch_event` (labeling:44-108) | `decisions.outcomes.resolve_outcome` |
-3. **Golden assertion:** capture the *current* training output (touches, feature
-   matrix, labels) as golden vectors BEFORE the swap; after the swap, assert the
-   non-feature columns (touches, sessions, labels) are byte-identical and the
-   interaction features change **only** in the expected trade-price direction
-   (everything else — approach features, labels — unchanged).
+1. **Adopt Strategy-Core as a dependency.**
+   - Import `strategy_core.ENGINE_VERSION`, `StrategyContract`, and `load_strategy_contract`.
+   - Remove or wrap Trade-Lab's duplicate contract schema so v3 fields (`engine_version`, `label_policy.decision_offset_minutes`, optional `research_session_experiment`) are accepted and engine mismatches fail closed.
 
-## Phase 5 — fix the contract emitter
+2. **Fail-close bundle activation.**
+   - In model registry activation/discovery, load `strategy.json` through `strategy_core.load_strategy_contract(path, expected_engine_version=strategy_core.ENGINE_VERSION)`.
+   - Reject stale v1/v2/unversioned bundles with a path-free error.
 
-`strategy_contract.py` (research) currently restates literals it should import.
+3. **Replace session classification.**
+   - Replace Chicago `domain/sessions.py` semantics with `strategy_core.classify_session()` / `RESEARCH_SESSION_SCHEME` or a thin adapter that returns Trade-Lab's local enum names from the v3 scheme.
+   - Ensure the runtime exposes `ny` semantics matching the contract's `eligible_session="ny"`.
 
-1. Import `StrategyContract` from `strategy_core.contract.schema` (delete the
-   duplicate dict-building where possible; at minimum validate the emitted dict
-   against the shared schema before writing).
-2. Emit every field from engine constants — delete `_SESSION_TIMEZONE`,
-   `_TRADING_DAY_BOUNDARY`, the session-time constants, `_ZONE_PROXIMITY_PTS`,
-   `_WITHIN_BAND_PTS`, `_LARGE_TRADE_THRESHOLD` (strategy_contract.py:52-59) and read
-   `strategy_core.constants` instead. (These are the "restated literals" the audit
-   flagged.)
-3. Stamp `engine_version = strategy_core.ENGINE_VERSION`.
-4. Set `feature_windows.mid_price_source = strategy_core.constants.MID_PRICE_SOURCE`
-   (`"trade_price"`). Note: this is now *correct by construction* rather than a
-   hand-maintained label.
+4. **Replace level/touch semantics.**
+   - Build merged zones via `strategy_core.build_zones()`.
+   - Detect touches via `strategy_core.detect_touches()` on completed bars, with level `available_from` carried through.
+   - Remove exact-trade-price touch semantics and `(trading_day, session, kind)` first-touch scope for the v3 path.
 
-## Phase 6 — repoint Trade-Lab
+5. **Replace feature computation.**
+   - Route `int_time_beyond_level`, `int_time_within_2pts`, and `int_absorption_ratio` through Strategy-Core trade-print formulas, not quote-mid dwell for the two time features.
+   - Keep only contract-declared features and preserve contractual order.
 
-The bigger lift; this is the serving path. Each item has its current Trade-Lab anchor.
+6. **Replace outcome tracking.**
+   - Use the v3 decision-time entry convention: decision timestamp is prediction availability (`touch + decision_offset_minutes`); entry price is the current executable trade/market price at that instant; forward scan starts strictly after that instant.
+   - Use `strategy_core.resolve_honest_outcome()` or the same orchestration with injected runtime price accessors.
 
-1. **Build a zone layer.** Trade-Lab has none (`domain/levels.py` works on individual
-   levels, exact-tick). Add zone construction via `strategy_core.build_zones` fed by
-   Trade-Lab's level objects.
-2. **Swap sessions to ET.** Replace `domain/sessions.py` Chicago classifier
-   (`CT`, `classify_session` :35-52) with `strategy_core.classify_session`
-   (RESEARCH_SESSION_SCHEME). This also re-parameterizes the **candle** trading-day
-   calendar — feed `CandleEngine(scheme=RESEARCH_SESSION_SCHEME)` (or pass the
-   contract's `session_scheme`). The CT 16:00–18:00 closed-window drop disappears
-   (research keeps those trades).
-   ⚠️ **Candle trading-day boundary (phase-4a finding, MUST reconcile):** the engine's
-   18:00 ET (DST-aware) boundary + per-day `bar_index` reset does **not** match
-   research's bar window, which is anchored at a hardcoded **23:00 America/Chicago**
-   (research passes a naive `datetime(prev,23,0)` that DuckDB reads in its session TZ).
-   In summer (EDT) these differ by an hour at the seam and split the post-18:00-ET tail
-   (and Sunday Globex sessions) into a different trading day — 44/57 days affected.
-   Decide the canonical boundary and make BOTH sides use it (either teach the engine the
-   23:00-CT window for parity with the existing dataset, or — preferred — fix research's
-   naive-datetime window when repointing it in phase 4 so both use the engine's 18:00 ET).
-   Until reconciled, engine-built candles are NOT bar-identical to research's at the seam.
-3. **Swap touch to bar-intersect-on-zones, per-zone-per-day.** Replace the exact-tick
-   detector (`domain/levels.py:245-274`) with `strategy_core.detect_touches` fed by
-   *closing candles*. Drop the `(day, session, kind)` first-touch key in favor of
-   per-zone-per-day (the `Zone.touched` flag).
-4. **Route features through the engine.** Replace `feature_functions.py:170-239`
-   (the quote-mid interaction features) with `strategy_core.decisions.features.int_*`
-   fed by **trade** events (trade-price). Keep `app_*` via the engine. This removes
-   the quote-mid path.
-5. **Route outcomes through the engine.** Have `outcome_tracker.py` call
-   `strategy_core.classify_mae_first` for the per-bar ladder (its `_classify`
-   :160-191 already matches; this just single-sources it). The streaming tracker's
-   `forced` (RTH cutoff) branch maps to `classify_mae_first(..., forced=True)`.
-6. **Fail-close on `engine_version`.** In `services/model_registry.py`, call
-   `load_strategy_contract(path, expected_engine_version=strategy_core.ENGINE_VERSION)`
-   and reject bundles that don't match — extending the existing fail-closed
-   `contract_id` validation.
-7. Remove the now-dead bespoke exact-tick / Chicago / per-session machinery.
-
-## Phase 7 — end-to-end parity proof (the real test)
-
-Take **one** trained bundle (retrained under the engine, phase 4) and **one** slice
-of raw data. Run research-training and Trade-Lab over it and assert:
-
-- **identical touch population** (same zones, same first-touch bars),
-- **identical feature vectors** (every column, every touch),
-- **identical outcome labels**.
-
-Resolve the open parity items while doing this — they are the most likely sources of
-a mismatch:
-
-- **Touch timestamp open vs close** — confirm which bar timestamp the research index
-  carries and align `detect_touches` (currently `close_ts_utc`).
-- **Bar-price tick alignment** — confirm OHLC are tick-aligned end to end.
-- **Absorption `size`** — confirm the retrained dataset and the engine sum the same
-  size source.
-
-## Phase 8 — absorb remaining duplicates (later)
-
-Migrate the research `experiment/` and `dashboard/engine/` paths onto the shared
-engine to kill the remaining internal duplication. Not on the critical path; do
-after the training↔serving path is proven.
+7. **Parity proof before activation.**
+   - Take one v3-trained bundle and one raw-data slice.
+   - Assert identical zones, touches, feature vectors, predictions/gate decisions, and outcome labels between Quant-Lab batch path and Trade-Lab replay path.
+   - Only after this passes should paper serving be considered. Live use requires separate explicit approval.
 
 ---
 
-## Phase 4a parity gate — RESULT
+## Deferred data/model-bundle work
 
-Two additive harnesses (`validation/parity_harness.py` 5-day; `parity_harness_v2.py`
-full-range), imports both repos read-only. Full verdict: `validation/PARITY_REPORT_V2.md`.
+When the local data zip is available:
 
-**Decision-layer port fidelity: PROVEN** over **57 real days** (2025-07-01…09-05) /
-255 touches: zones 309/309, touches+close-ts 255/255, sessions 252 944/252 944,
-labels 218/218, interaction-formula 254/255 (1 harness window-bound artifact at a
-23:59-ET midnight-crossing touch), approach ×3 255/255. Trade-price divergence
-reported, not asserted. Independently re-derived (earlier 5-day gate).
+1. Verify incoming archive path, size, and checksum if provided.
+2. Inspect zip structure before extracting.
+3. Import into the Quant-Lab/Trade-Lab expected local data layout.
+4. Identify the canonical v3 model-bundle location.
+5. Verify each bundle has `model.cbm`, `metadata.json`, `evaluation.json`, `strategy.json`, and `model.cbm.sha256` if expected.
+6. Validate `strategy.json` against `strategy_core_engine_v3` and compute/check file hashes.
 
-**Candle builder: determinism PROVEN, one open reconciliation.** With a stable
-`(ts_event, source-seq)` order, engine bars match a reference bucketer 100% incl.
-open/close *within each trading-day group*. The open item is **semantic**: the engine
-uses an 18:00 ET (DST-aware) trading-day boundary + `bar_index` reset, while research's
-window edge is a hardcoded **23:00 America/Chicago** (a naive `datetime` DuckDB reads
-in its session TZ). On 44/57 days the engine rolls the post-18:00-ET tail into the next
-trading day (Sunday Globex → Monday). **This is the must-fix before phase 6's candle
-swap** (see Phase 6 step 2). It does NOT affect the decision-layer parity above (which
-uses research's bars + order-independent high/low).
-
-This gate clears phases 4–6 of decision-layer-fidelity risk; phase 7 (full end-to-end
-parity) still runs after the retrain because it must use a model trained under this engine.
-
-## Open decisions for the human
-
-1. **Candle builder: engine vs DuckDB (spec §7) — BENCHMARKED (full range).** Over 57
-   days / ~2.9M bars, the engine builder ≈ 498s vs all-DuckDB ≈ 35s — *not* apples-to-
-   apples (engine figure excludes the parquet read) and dominated by per-bar `Bar`-object
-   construction via `.itertuples()` (~60k/day); the aggregation itself is fast. The
-   nondeterministic-close tie-break is now SOLVED by the stable `(ts_event, source-seq)`
-   sort (bars match 100% incl open/close within a trading-day group). **Decision:** if the
-   engine builder is to replace DuckDB, first give it a vectorized bar-emit path (avoid
-   per-bar Python objects) — otherwise keep DuckDB as the verified-equivalent fast path.
-2. **Candle trading-day boundary — NEW open decision (phase-4a).** Engine 18:00 ET
-   (DST-aware) vs research 23:00 America/Chicago window; 44/57 summer days diverge at the
-   seam. Pick the canonical boundary and apply it to BOTH (see Phase 6 step 2). Affects
-   which trading day the post-18:00-ET tail / Sunday Globex belongs to.
-3. **Trade-price retrain** (the retrain gate above) — assumed yes.
-4. **Touch timestamp / absorption size / tick alignment — RESOLVED in 4a:** touch ts
-   = bar CLOSE (engine matches); absorption size canonical = book-event size (engine
-   trade-size is the deliberate change); book mids lie exactly on the 0.125 grid
-   (engine integer-tick `Bar` is lossless).
-
-## How this package was built
-
-The engine was authored by a hand-written foundation (`types.py`, `constants.py`,
-`__init__.py`, `pyproject.toml`) plus a multi-agent workflow that ported each
-candle/decision/contract module from the canonical sources and adversarially
-reviewed each for drift. The workflow script is kept at `.wf/build_strategy_core.js`
-for reproducibility.
+Do **not** infer bundle validity from names or old reports.

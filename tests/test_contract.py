@@ -235,9 +235,7 @@ def test_non_dict_payload_raises(tmp_path: Path) -> None:
 
 
 def test_class_map_coerces_string_keys_directly() -> None:
-    class_map = ClassMap.model_validate(
-        {"0": "tradeable_reversal", "1": "trap_reversal"}
-    )
+    class_map = ClassMap.model_validate({"0": "tradeable_reversal", "1": "trap_reversal"})
 
     assert class_map.labels == ("tradeable_reversal", "trap_reversal")
     assert len(class_map) == 2

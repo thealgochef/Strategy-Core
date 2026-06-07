@@ -1,3 +1,4 @@
+# ruff: noqa: E402
 """strategy-core: the shared, versioned strategy engine.
 
 This package is the single implementation that both Claude-Quant-Lab (research /

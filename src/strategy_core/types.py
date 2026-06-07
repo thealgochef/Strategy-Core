@@ -14,7 +14,7 @@ that conversion so callers never sprinkle ``tick_size`` math around.
 from __future__ import annotations
 
 from collections.abc import Mapping
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from datetime import date, datetime, time
 from enum import StrEnum
 

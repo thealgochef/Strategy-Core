@@ -70,18 +70,14 @@ def test_majority_side_tie_resolves_to_low() -> None:
 
 def test_majority_side_high_wins_when_strictly_greater() -> None:
     """Two HIGH vs one LOW in one zone -> strict majority HIGH."""
-    zones = build_zones(
-        [_high("h1", 100.0), _high("h2", 101.0), _low("l", 102.0)]
-    )
+    zones = build_zones([_high("h1", 100.0), _high("h2", 101.0), _low("l", 102.0)])
     assert len(zones) == 1
     assert zones[0].side == Side.HIGH
 
 
 def test_representative_price_is_the_mean() -> None:
     """rep_price = sum(prices)/len(prices) over the merged group."""
-    zones = build_zones(
-        [_high("a", 100.0), _high("b", 101.0), _high("c", 103.0)]
-    )
+    zones = build_zones([_high("a", 100.0), _high("b", 101.0), _high("c", 103.0)])
     assert len(zones) == 1
     # All three chain (gaps 1.0 then 2.0, each <= 3.0); mean of 100,101,103.
     assert zones[0].representative_price == (100.0 + 101.0 + 103.0) / 3
@@ -92,9 +88,7 @@ def test_chain_merge_spans_more_than_proximity_total() -> None:
     exceeds 3.0, because the compare is against the LAST level, not the first.
     100 -> 102.5 (2.5) -> 105.0 (2.5): total span 5.0 > 3.0, but still one zone.
     """
-    zones = build_zones(
-        [_low("a", 100.0), _low("b", 102.5), _low("c", 105.0)]
-    )
+    zones = build_zones([_low("a", 100.0), _low("b", 102.5), _low("c", 105.0)])
     assert len(zones) == 1
     assert zones[0].names == ("a", "b", "c")
     assert zones[0].representative_price == (100.0 + 102.5 + 105.0) / 3
@@ -102,9 +96,7 @@ def test_chain_merge_spans_more_than_proximity_total() -> None:
 
 def test_chain_break_when_step_exceeds_proximity() -> None:
     """A single gap > 3.0 breaks the chain into two zones at that point."""
-    zones = build_zones(
-        [_low("a", 100.0), _low("b", 102.0), _high("c", 106.0), _high("d", 108.0)]
-    )
+    zones = build_zones([_low("a", 100.0), _low("b", 102.0), _high("c", 106.0), _high("d", 108.0)])
     assert [z.names for z in zones] == [("a", "b"), ("c", "d")]
     assert zones[0].side == Side.LOW
     assert zones[1].side == Side.HIGH

@@ -1,192 +1,93 @@
 # strategy-core
 
-A shared, versioned strategy **engine** for zero-drift parity between
-**Claude-Quant-Lab** (research / model training, batch over parquet) and
-**Trade-Lab** (live + replay inference, streaming).
+Shared, versioned strategy engine for zero-drift parity between **Quant-Lab** research/training and **Trade-Lab** live/replay inference.
 
-The research lab is a *strategy factory*: you configure a strategy there and it
-trains an ML model. Whatever strategy produced a given model, Trade-Lab must then
-execute **exactly the same** — zero drift. This package is the single
-implementation both repos import (the candle layer, the decision layer, and the
-contract schema), so a strategy configured in research executes identically in
-Trade-Lab, while research stays free to vary the strategy via config.
+`strategy-core` owns the strategy mechanics that must not drift: tick bars, sessions, zones, first-touch detection, feature formulas, outcome resolution, honest decision-time entry orchestration, and the versioned `strategy.json` schema/loader.
 
-> Status: **engine package complete and tested (97 passing tests).** Repointing
-> the two repos onto it (the live migration) is staged but not yet applied — see
-> [`MIGRATION.md`](MIGRATION.md).
+> Current status, verified 2026-06-04: **engine v3 is implemented and unit-tested**. `python -m pytest -q` passes; `python -m pytest --collect-only -q` reports **106 tests** across 8 test files. Quant-Lab imports this engine for dashboard-utility training and contract emission. Trade-Lab is still **not v3-compatible**; see [`V3_COMPATIBILITY_MATRIX.md`](V3_COMPATIBILITY_MATRIX.md) and [`MIGRATION.md`](MIGRATION.md).
 
 ---
 
-## Install
+## Install / verify
 
 ```bash
-pip install -e .            # runtime: numpy + pydantic
-pip install -e ".[dev]"     # adds pytest + pandas (batch builder & parity test)
-python -m pytest            # 97 passed
+pip install -e .
+pip install -e ".[dev]"      # pytest + pandas for batch candle builder tests
+python -m pytest -q          # 106 tests passing as of 2026-06-04
+python -m pytest --collect-only -q
 ```
 
-The base import pulls **only numpy + pydantic + stdlib**. pandas is loaded lazily
-and only when the batch candle builder is actually called — so the streaming
-runtime never pays for it.
+Runtime import intent: stdlib + `numpy` + `pydantic`; pandas is loaded lazily by the batch candle builder only.
+
+---
+
+## Version stamps
+
+| Stamp | Current value | Meaning |
+|---|---:|---|
+| `ENGINE_VERSION` | `strategy_core_engine_v3` | Structural decision/candle semantics that a model bundle binds to. A mismatch must fail closed. |
+| `CONTRACT_VERSION` | `trade_lab_contract_v1` | Shape/version of `strategy.json`. The v3 engine still uses the v1 contract format plus required `engine_version`, `label_policy.decision_offset_minutes`, and optional research audit metadata. |
+
+`load_strategy_contract(path, expected_engine_version=ENGINE_VERSION)` rejects stale bundles before they can be served.
+
+---
+
+## v3 canonical strategy semantics
+
+These are the current engine constants and code paths, not historical validation assumptions:
+
+| Area | v3 behavior |
+|---|---|
+| Bars | Production bars are **trade-price tick bars** (`BAR_PRICE_SOURCE="trade_price"`) on the NQ 0.25 grid. Default touch bar count is `147t`; streaming and batch builders are parity-tested. |
+| Trade ordering | Deterministic order is `(ts_event, sequence, side_signed_price, size)` so sell sweeps are not reversed. |
+| Sessions | ET-native, DST-aware. Trading-day boundary remains **18:00 ET**. Named windows: `asia` 19:00→02:45, `london` 03:00→08:00, `ny` 09:00→17:00. Gaps return `none`; there is no closed-window drop in the research scheme. |
+| Levels | `PDH/PDL` come from the **full prior trading day** `[18:00, 18:00)` high/low, not the prior NY/RTH slice. Session levels are Asia/London high/low plus PDH/PDL. |
+| Level availability | `available_from` is enforced in `detect_touches`: PDH/PDL from day start; Asia levels after 02:45; London levels after 08:00; merged zones use the max constituent availability. Pre-availability self-touches do not consume a zone. |
+| Zones/touches | Levels within 3.0 points merge into a zone; representative price is the mean; first touch per zone per trading day; touch fires when a bar's closed `[low, high]` range intersects the zone representative. |
+| Features | Interaction features use **trade prints** (`MID_PRICE_SOURCE="trade_price"`): `int_time_beyond_level`, `int_time_within_2pts`, `int_absorption_ratio`. Runtime approach subset: `app_large_trade_vol_pct`, `app_avg_trade_size`, `app_max_spread`. |
+| Labels/outcomes | 3 classes: `tradeable_reversal=0`, `trap_reversal=1`, `aggressive_blowthrough=2`. MAE is checked before MFE on same-bar ambiguity. Defaults: TP 15, SL 30, trap MFE min 5. |
+| Honest entry | `resolve_honest_outcome()` anchors outcome at decision time: `touch_close + DECISION_OFFSET_MINUTES` (default 5 minutes). Entry price is injected by caller as the realistic trade price at decision time. Forward bars are strictly after decision time and before cutoff. |
+| Cutoffs | New entries are dropped at/after **16:40 ET** (`FLATTEN_TIME`). Forward label cutoff is **17:00 ET** (`LABEL_FORWARD_CUTOFF="17:00_US/Eastern_ny_close"`). |
+| Inference gate | Contract default gate: `eligible_class=tradeable_reversal`, `eligible_session=ny`, `confidence_gate=0.70`. |
+
+---
 
 ## Layout
 
-```
+```text
 src/strategy_core/
   __init__.py        ENGINE_VERSION, CONTRACT_VERSION, public API re-exports
-  types.py           neutral Trade/Quote/Bar/Level/Zone/Touch/SessionScheme (stdlib only)
-  constants.py       single source of every magic value + the canonical ET session scheme
+  constants.py       single source of strategy semantics and contract descriptors
+  types.py           neutral Trade/Quote/Bar/Level/Zone/Touch/SessionScheme types
   candles/
-    streaming.py     CandleEngine — event-at-a-time tick bars (promoted from Trade-Lab)
-    batch.py         build_tick_bars_from_frame — vectorized (pandas), parity-locked to streaming
-    _ids.py          make_bar_id
-  decisions/         pure, scalar, config-driven — no pandas, no IO
+    streaming.py     CandleEngine — event-at-a-time trade tick bars
+    batch.py         build_tick_bars_from_frame — pandas batch builder
+    _ids.py          stable bar ids
+  decisions/
+    sessions.py      classify_session / trading_day_for
     zones.py         build_zones
-    touch.py         is_touch + detect_touches (first-touch-per-zone)
-    sessions.py      classify_session / trading_day_for (ET)
-    features.py      the interaction + approach feature formulas
-    outcomes.py      classify_mae_first + resolve_outcome (MAE-first)
+    touch.py         is_touch / detect_touches with v3 availability guard
+    features.py      interaction + approach feature formulas
+    outcomes.py      classify_mae_first / resolve_outcome
+    honest_entry.py  decision-time outcome orchestration
   contract/
-    schema.py        Pydantic StrategyContract (+ engine_version)
-    loader.py        strict, fail-closed loader
-tests/               candle parity + golden per-module unit tests
+    schema.py        Pydantic StrategyContract with engine_version and research_session_experiment
+    loader.py        strict fail-closed loader
+validation/          retained validation notes and legacy real-data harnesses
 ```
-
-## Two version stamps
-
-| Stamp | Meaning | When it changes |
-|---|---|---|
-| `ENGINE_VERSION` = `strategy_core_engine_v1` | The **structural** version of the engine. A model binds to the engine version that produced its features/labels. | Only when a genuinely new *mechanism* is added (new touch rule, feature family, label scheme). **Never** for a parameter change. |
-| `CONTRACT_VERSION` = `trade_lab_contract_v1` | The version of the `strategy.json` *format* (schema). | When the contract schema shape changes. |
-
-A prediction is only meaningful under its own engine version + config. The contract
-carries `engine_version`; `load_strategy_contract(path, expected_engine_version=ENGINE_VERSION)`
-**fail-closes** when they don't match — this is the hook Trade-Lab uses to refuse a
-model whose engine it cannot reproduce.
-
-## Two kinds of flexibility
-
-- **Parameter** changes (bar size, zone width, sessions, tp/sl, feature windows) are
-  **config-only** and instant — carried by the contract, read by the engine.
-- **Structural** changes (a new mechanism) are **one engine change + an
-  `ENGINE_VERSION` bump** — rare, and drift-proof because it's one change in one place.
 
 ---
 
-## ⚠️ The `mid_price_source` decision — read before training or repointing
+## What is still not done
 
-The interaction features (`int_time_beyond_level`, `int_time_within_2pts`,
-`int_absorption_ratio`) in this engine use the **trade print price** over the trade
-stream. `constants.MID_PRICE_SOURCE == "trade_price"`.
-
-This is a **deliberate strategy standardization** (ratified by the strategy owner),
-and it **diverges from the legacy training path**, which actually computed these
-features over a **top-of-book mid**:
-
-> `query_tick_feature_rows` selects `price = (bid_px_00 + ask_px_00) / 2.0` over
-> *book* events (`tick_store.py:264,287`), so the builder's `mid = ticks["price"]`
-> (`dashboard_utility_builder.py:488`) is a book mid, not a trade print. The `mid`
-> variable name was the tell. (The earlier audit and the spec's "trade price"
-> reading were both fooled by that variable.)
-
-**Consequence:** the currently-deployed model was trained on TOB-mid features and is
-**NOT compatible** with this engine. Any model served under `strategy_core_engine_v1`
-**must be retrained** with the research path repointed onto this engine (so its
-interaction features are trade-price). The `engine_version` fail-close is exactly
-what stops Trade-Lab from silently serving the old model under the new feature
-definition. See [`MIGRATION.md`](MIGRATION.md) §"Retrain gate".
-
-The three *approach* features (`app_large_trade_vol_pct`, `app_avg_trade_size`,
-`app_max_spread`) are unchanged from the canonical DuckDB aggregates — already
-trade/L0-based — so they carry over without a retrain concern of their own.
+1. **Trade-Lab v3 repoint is incomplete.** Current Trade-Lab has its own contract schema without `engine_version` / `decision_offset_minutes`, Chicago session classification, exact-tick level touches, quote-mid dwell features, and level-price outcome tracking.
+2. **A v3 model bundle still needs to be verified/promoted.** Quant-Lab can emit `engine_version=strategy_core_engine_v3` and `research_session_experiment`, but canonical bundle location, file presence, and checksums are intentionally deferred until the local data zip is available.
+3. **Historical validation reports are not current-state docs.** Most stale v1/v2 phase reports were pruned from the working tree; retained validation notes must still be checked against current source/tests before citation.
 
 ---
 
-## What is canonical (preserved exactly)
+## Key docs
 
-Everything else is ported byte-for-byte from the research **training** path
-(`dashboard_utility_builder.py` + `dashboard_utility_labeling.py`), which is the
-reference behavior because it is literally the code that produced the model's
-labels and features:
-
-- **Zones** — merge levels within `3.0` pts (compared against the *last* level in the
-  open group, so chains can exceed 3.0 total); representative price = mean; side by
-  strict majority (ties → LOW). (`build_zones`)
-- **Touch** — closed-interval `bar_low <= zone_rep <= bar_high`, first-touch-per-zone
-  via the `touched` flag, low→LONG / high→SHORT. (`detect_touches`)
-- **Sessions (ET)** — asia 18:00→01:00 (crosses midnight), london 01:00→08:00,
-  ny_rth 09:30→16:15; 18:00 ET trading-day rollover (`>=`); the 08:00–09:30 and
-  16:15–18:00 ET gaps classify as `none`. (`classify_session`)
-- **Outcomes** — MAE checked **first** each bar, so a bar breaching both stop and
-  target resolves to the **loss**; trap vs blowthrough split at `trap_mfe_min`.
-  (`classify_mae_first`, `resolve_outcome`)
-- **Candles** — close at `trade_count == N`; per-(timeframe, trading-day) bar index;
-  day-rollover freezes the open bar `END_OF_DAY`. Two builders (streaming + batch)
-  are **parity-locked** by `tests/test_candle_parity.py`. Now parameterized by
-  `SessionScheme` (ET by default) instead of hardcoded Chicago.
-
-Single-sourced magic values (no more "restated literals" in the emitter):
-`ZONE_PROXIMITY_PTS=3.0`, `WITHIN_BAND_PTS=2.0`, `LARGE_TRADE_THRESHOLD=10`,
-`LEVEL_PROXIMITY_PTS=0.5`, the ET session windows, the 18:00 boundary, the 16:15
-cutoff — all in `constants.py`, read by both the engine and (after repointing) the
-contract emitter.
-
-## Parity validation (phase 4a)
-
-Two standalone, additive harnesses run the canonical research pipeline and the
-engine on **real NQ data** and diff them (no edits to either production repo). Full
-verdict: `validation/PARITY_REPORT_V2.md`.
-
-**Decision-layer port fidelity — PROVEN.** Over **57 real trading days**
-(2025-07-01…09-05, every available day; 10 unavailable listed) and **255 touches**,
-feeding *identical* book-mid bars to both (lossless at `tick_size=0.125`):
-
-| Stage | Scope | Result |
-|---|---|---|
-| Zones | must-match | 309/309 |
-| Touches (+ close ts) | must-match | 255/255 |
-| Sessions | must-match | 252 944/252 944 |
-| Labels | must-match | 218/218 |
-| Interaction *formula* fidelity | must-match | 254/255¹ |
-| Approach features (×3) | must-match | 255/255 |
-| Interaction *trade-price* | expected-differ | reported, not asserted |
-
-¹ The single outlier is a harness window-bound artifact on a 23:59-ET touch whose
-+5m window crosses midnight (the engine got more book rows than canonical), **not**
-an engine formula error — proven exact by the other 254 plus the earlier 5-day gate
-(22/22). 
-
-Resolved open items: **touch timestamp = bar CLOSE** (`LAST(ts_event)`,
-`tick_store.py:524` — engine's `close_ts_utc` matches, zero look-ahead);
-**absorption `size`** = book-event size in canonical, engine sums trade size (the
-deliberate trade-price change, isolated by stage E vs F); **book mids on the 0.125
-grid** (integer-tick `Bar` lossless).
-
-**Candle builder — determinism PROVEN, one boundary reconciliation open.** With a
-stable `(ts_event, source-row-sequence)` order fed to both a reference bucketer and
-the engine builder, bars match **100% including open/close within each trading-day
-group** (the prior ~2.2% tie-break nondeterminism is gone). The one remaining
-difference is **semantic, not a bug**: the engine uses a DST-aware **18:00 ET**
-trading-day boundary (with `bar_index` reset), while research's window edge is a
-hardcoded **23:00 America/Chicago** (a *naive* `datetime` that DuckDB interprets in
-its session TZ). On 44/57 days the engine rolls the post-18:00-ET tail into the next
-trading day (Sunday Globex shifts entirely to Monday). This must be reconciled before
-the engine builder replaces research's DuckDB builder — it does **not** affect
-touches/labels (those use research's bars and order-independent high/low).
-
-**Benchmark:** over 57 days / ~2.9M bars, the engine builder ≈ 498s vs all-DuckDB
-≈ 35s — *not* apples-to-apples (engine excludes parquet read), and dominated by
-per-bar `Bar`-object construction via `.itertuples()`. The aggregation is fast; the
-bar-emit path needs optimizing before the engine builder wins on speed. Data volume
-(~8.8M book events/day) makes I/O the floor either way.
-
-## Testing
-
-```bash
-python -m pytest            # 97 passed in ~0.5s
-```
-
-`tests/test_candle_parity.py` is the keystone: it feeds one deterministic trade
-stream (crossing the 18:00 ET boundary) through both candle builders and asserts
-the `Bar` lists are field-for-field identical — under both the ET research scheme
-and the CT reference scheme.
+- [`V3_COMPATIBILITY_MATRIX.md`](V3_COMPATIBILITY_MATRIX.md) — one-page Quant-Lab / Strategy-Core / Trade-Lab compatibility matrix.
+- [`MIGRATION.md`](MIGRATION.md) — current migration status and remaining Trade-Lab tasks.
+- [`validation/README.md`](validation/README.md) — how to interpret retained validation notes.

@@ -58,8 +58,7 @@ def load_strategy_contract(
     declared_version = payload.get("contract_version")
     if declared_version != CONTRACT_VERSION:
         raise ContractError(
-            f"unsupported contract_version {declared_version!r}; "
-            f"expected {CONTRACT_VERSION!r}"
+            f"unsupported contract_version {declared_version!r}; expected {CONTRACT_VERSION!r}"
         )
 
     if expected_engine_version is not None:

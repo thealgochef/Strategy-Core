@@ -162,9 +162,7 @@ class CandleEngine:
                 )
                 # candles.py:154-159 -- 1-tick bars close on their seeding trade.
                 if timeframe == 1:
-                    completed.append(
-                        new_candle.freeze(complete=True, reason=CloseReason.COMPLETE)
-                    )
+                    completed.append(new_candle.freeze(complete=True, reason=CloseReason.COMPLETE))
                 else:
                     current[timeframe] = new_candle
                 continue
@@ -202,8 +200,7 @@ class CandleEngine:
         timeframe) order.
         """
         completed = tuple(
-            c.freeze(complete=False, reason=CloseReason.END_OF_DAY)
-            for c in self._current.values()
+            c.freeze(complete=False, reason=CloseReason.END_OF_DAY) for c in self._current.values()
         )
         self._current.clear()
         return completed

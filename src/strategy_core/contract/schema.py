@@ -41,6 +41,7 @@ __all__ = [
     "LabelPolicy",
     "InferencePolicy",
     "DataRequirements",
+    "ResearchSessionExperiment",
     "Provenance",
     "ClassMap",
     "StrategyContract",
@@ -183,6 +184,20 @@ class DataRequirements(_ContractModel):
     depth_usage: str = Field(min_length=1, max_length=32)
 
 
+class ResearchSessionExperiment(_ContractModel):
+    """Research-only train/evaluation/gate session scope emitted by Quant-Lab.
+
+    This does not make a bundle runtime-supported. It records which Strategy-Core
+    sessions were used for model refit, reported OOS stats, and confidence-gated
+    research metrics so experimental bundles remain auditable.
+    """
+
+    training_sessions: tuple[str, ...] = Field(min_length=1, max_length=3)
+    evaluation_sessions: tuple[str, ...] = Field(min_length=1, max_length=3)
+    production_gate_sessions: tuple[str, ...] = Field(min_length=1, max_length=3)
+    report_session_breakdowns: bool = True
+
+
 class Provenance(_ContractModel):
     """Training provenance. Ported from ``strategy_contract.py:115-117``."""
 
@@ -256,6 +271,7 @@ class StrategyContract(_ContractModel):
     inference: InferencePolicy
     data_requirements: DataRequirements
     provenance: Provenance
+    research_session_experiment: ResearchSessionExperiment | None = None
 
     @property
     def feature_count(self) -> int:

@@ -132,9 +132,9 @@ def test_long_hits_tp_before_sl_tradeable_at_right_index() -> None:
     """LONG: TP reached on bar index 2 (no SL) -> tradeable_reversal, bars=2."""
     entry = 100.0
     bars = [
-        _bar(0, high_pts=105.0, low_pts=98.0),   # mfe 5, mae 2
-        _bar(1, high_pts=110.0, low_pts=99.0),   # mfe 10, mae 1
-        _bar(2, high_pts=116.0, low_pts=99.0),   # mfe 16 >= TP -> resolve
+        _bar(0, high_pts=105.0, low_pts=98.0),  # mfe 5, mae 2
+        _bar(1, high_pts=110.0, low_pts=99.0),  # mfe 10, mae 1
+        _bar(2, high_pts=116.0, low_pts=99.0),  # mfe 16 >= TP -> resolve
     ]
     res = _resolve(entry, Direction.LONG, bars)
     assert res.label == TRADEABLE_REVERSAL
@@ -151,7 +151,7 @@ def test_long_single_bar_breaches_both_resolves_to_loss_not_win() -> None:
     bars = [_bar(0, high_pts=120.0, low_pts=69.0)]
     res = _resolve(entry, Direction.LONG, bars)
     assert res.label != TRADEABLE_REVERSAL  # the guard: NOT the win
-    assert res.label == TRAP_REVERSAL       # mfe 20 >= trap_mfe_min -> trap
+    assert res.label == TRAP_REVERSAL  # mfe 20 >= trap_mfe_min -> trap
     assert res.label_encoded == 1
     assert res.bars_to_resolution == 0
     assert res.max_mfe == 20.0
@@ -162,8 +162,8 @@ def test_long_sl_with_mfe_at_or_above_trap_min_is_trap() -> None:
     entry = 100.0
     # bar0 gives mfe 5 (>= trap_mfe_min) and no SL; bar1 breaches SL.
     bars = [
-        _bar(0, high_pts=105.0, low_pts=99.0),   # mfe 5, mae 1
-        _bar(1, high_pts=101.0, low_pts=69.0),   # mae 31 >= SL; running mfe stays 5
+        _bar(0, high_pts=105.0, low_pts=99.0),  # mfe 5, mae 1
+        _bar(1, high_pts=101.0, low_pts=69.0),  # mae 31 >= SL; running mfe stays 5
     ]
     res = _resolve(entry, Direction.LONG, bars)
     assert res.label == TRAP_REVERSAL
@@ -215,15 +215,15 @@ def test_short_hits_tp_before_sl_tradeable() -> None:
     """SHORT: favorable = entry - low. TP reached when price drops 15 below entry."""
     entry = 100.0
     bars = [
-        _bar(0, high_pts=102.0, low_pts=95.0),   # mfe 5, mae 2
-        _bar(1, high_pts=101.0, low_pts=84.0),   # mfe 16 >= TP -> resolve
+        _bar(0, high_pts=102.0, low_pts=95.0),  # mfe 5, mae 2
+        _bar(1, high_pts=101.0, low_pts=84.0),  # mfe 16 >= TP -> resolve
     ]
     res = _resolve(entry, Direction.SHORT, bars)
     assert res.label == TRADEABLE_REVERSAL
     assert res.label_encoded == 0
     assert res.bars_to_resolution == 1
     assert res.max_mfe == 16.0  # entry - low = 100 - 84
-    assert res.max_mae == 2.0   # high - entry = 102 - 100
+    assert res.max_mae == 2.0  # high - entry = 102 - 100
 
 
 def test_short_single_bar_breaches_both_resolves_to_loss() -> None:

@@ -34,9 +34,7 @@ def _bar(
     # Import locally so the test module's only hard dependency is the engine API.
     from strategy_core.types import Bar
 
-    close_ts = datetime(
-        2025, 6, 2, 13, 30 + bar_index + close_offset_minutes, tzinfo=timezone.utc
-    )
+    close_ts = datetime(2025, 6, 2, 13, 30 + bar_index + close_offset_minutes, tzinfo=timezone.utc)
     return Bar(
         timeframe_ticks=100,
         trading_day=TRADING_DAY,
@@ -89,9 +87,7 @@ def test_straddling_bar_fires_one_touch():
     zone = Zone(representative_price=105.0, names=("PDL",), side=Side.LOW)
     bars = [_bar(0, low_ticks=400, high_ticks=440)]  # [100.0, 110.0]
 
-    touches = detect_touches(
-        bars, [zone], tick_size=TICK_SIZE, trading_day=TRADING_DAY
-    )
+    touches = detect_touches(bars, [zone], tick_size=TICK_SIZE, trading_day=TRADING_DAY)
 
     assert len(touches) == 1
     t = touches[0]
@@ -111,9 +107,7 @@ def test_zone_fires_only_on_first_straddling_bar():
         _bar(1, low_ticks=400, high_ticks=440),  # straddles again -> ignored
     ]
 
-    touches = detect_touches(
-        bars, [zone], tick_size=TICK_SIZE, trading_day=TRADING_DAY
-    )
+    touches = detect_touches(bars, [zone], tick_size=TICK_SIZE, trading_day=TRADING_DAY)
 
     assert len(touches) == 1
     # The single touch came from the FIRST bar.
@@ -128,9 +122,7 @@ def test_zone_fires_on_first_straddle_even_if_earlier_bar_misses():
         _bar(2, low_ticks=400, high_ticks=440),  # straddles -> ignored
     ]
 
-    touches = detect_touches(
-        bars, [zone], tick_size=TICK_SIZE, trading_day=TRADING_DAY
-    )
+    touches = detect_touches(bars, [zone], tick_size=TICK_SIZE, trading_day=TRADING_DAY)
 
     assert len(touches) == 1
     assert touches[0].bar_ts_utc == bars[1].close_ts_utc
@@ -158,18 +150,14 @@ def test_multiple_zones_fire_on_same_bar_in_order():
 def test_low_side_maps_to_long():
     zone = Zone(representative_price=105.0, names=("L",), side=Side.LOW)
     bars = [_bar(0, low_ticks=400, high_ticks=440)]
-    touches = detect_touches(
-        bars, [zone], tick_size=TICK_SIZE, trading_day=TRADING_DAY
-    )
+    touches = detect_touches(bars, [zone], tick_size=TICK_SIZE, trading_day=TRADING_DAY)
     assert touches[0].direction == Direction.LONG
 
 
 def test_high_side_maps_to_short():
     zone = Zone(representative_price=105.0, names=("H",), side=Side.HIGH)
     bars = [_bar(0, low_ticks=400, high_ticks=440)]
-    touches = detect_touches(
-        bars, [zone], tick_size=TICK_SIZE, trading_day=TRADING_DAY
-    )
+    touches = detect_touches(bars, [zone], tick_size=TICK_SIZE, trading_day=TRADING_DAY)
     assert touches[0].direction == Direction.SHORT
 
 
@@ -178,9 +166,7 @@ def test_boundary_touch_rep_equals_bar_high_fires():
     zone = Zone(representative_price=110.0, names=("PDH",), side=Side.HIGH)
     bars = [_bar(0, low_ticks=400, high_ticks=440)]  # [100.0, 110.0]
 
-    touches = detect_touches(
-        bars, [zone], tick_size=TICK_SIZE, trading_day=TRADING_DAY
-    )
+    touches = detect_touches(bars, [zone], tick_size=TICK_SIZE, trading_day=TRADING_DAY)
 
     assert len(touches) == 1
     assert touches[0].representative_price == 110.0
@@ -191,9 +177,7 @@ def test_boundary_touch_rep_equals_bar_low_fires():
     zone = Zone(representative_price=100.0, names=("PDL",), side=Side.LOW)
     bars = [_bar(0, low_ticks=400, high_ticks=440)]  # [100.0, 110.0]
 
-    touches = detect_touches(
-        bars, [zone], tick_size=TICK_SIZE, trading_day=TRADING_DAY
-    )
+    touches = detect_touches(bars, [zone], tick_size=TICK_SIZE, trading_day=TRADING_DAY)
 
     assert len(touches) == 1
     assert touches[0].representative_price == 100.0
@@ -203,9 +187,7 @@ def test_no_touch_returns_empty_list():
     zone = Zone(representative_price=200.0, names=("PDH",), side=Side.HIGH)
     bars = [_bar(0, low_ticks=400, high_ticks=440)]  # [100.0, 110.0], rep far above
 
-    touches = detect_touches(
-        bars, [zone], tick_size=TICK_SIZE, trading_day=TRADING_DAY
-    )
+    touches = detect_touches(bars, [zone], tick_size=TICK_SIZE, trading_day=TRADING_DAY)
 
     assert touches == []
     assert zone.touched is False
@@ -213,9 +195,7 @@ def test_no_touch_returns_empty_list():
 
 def test_empty_bars_returns_empty_list():
     zone = Zone(representative_price=105.0, names=("PDL",), side=Side.LOW)
-    touches = detect_touches(
-        [], [zone], tick_size=TICK_SIZE, trading_day=TRADING_DAY
-    )
+    touches = detect_touches([], [zone], tick_size=TICK_SIZE, trading_day=TRADING_DAY)
     assert touches == []
 
 

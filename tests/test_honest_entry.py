@@ -129,9 +129,7 @@ def test_cutoff_drop():
     touch_close = _et(16, 56)  # decision 17:01 ET >= 17:00 cutoff
     fwd = _bar(touch_close + timedelta(minutes=10), high_pts=200.0, low_pts=50.0)
 
-    out = _resolve(
-        _touch(touch_close), [fwd], price=100.0, flatten_time=time(23, 0)
-    )
+    out = _resolve(_touch(touch_close), [fwd], price=100.0, flatten_time=time(23, 0))
 
     assert isinstance(out, HonestEntryDrop)
     assert out.reason == "cutoff"

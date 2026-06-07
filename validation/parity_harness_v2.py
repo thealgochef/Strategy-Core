@@ -15,7 +15,7 @@ What v2 fixes vs parity_harness.py:
      events to a harness-local reference bucketer AND the engine builder, then
      compares them incl. open/close.
 
-CRITICAL WINDOW FINDING (verified, see PARITY_REPORT_V2.md):
+CRITICAL WINDOW FINDING (historical; rerun this harness before citing):
   research's _build_bars_for_date passes a NAIVE datetime(prev,23,0) to DuckDB,
   whose session TimeZone is America/Chicago, so DuckDB interprets the bound as
   23:00 *Chicago*, NOT 23:00 UTC. The real research window is therefore

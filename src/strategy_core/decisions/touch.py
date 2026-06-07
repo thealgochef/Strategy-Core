@@ -31,9 +31,7 @@ from strategy_core.types import Bar, Direction, Side, Touch, Zone
 __all__ = ["is_touch", "detect_touches"]
 
 
-def is_touch(
-    bar_low_points: float, bar_high_points: float, zone_rep_points: float
-) -> bool:
+def is_touch(bar_low_points: float, bar_high_points: float, zone_rep_points: float) -> bool:
     """Return whether a bar's range straddles a zone's representative price.
 
     Closed interval, exactly as canonical

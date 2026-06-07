@@ -7,18 +7,20 @@ name = "strategy-core"
 version = "0.1.0"
 description = "Shared, versioned strategy engine for zero-drift parity between Claude-Quant-Lab (research) and Trade-Lab (runtime)."
 readme = "README.md"
-requires-python = ">=3.11"
+requires-python = ">=3.14"
 license = { text = "Proprietary" }
 authors = [{ name = "algochef" }]
 dependencies = [
     "numpy>=1.26",
     "pydantic>=2.5",
+    "tzdata>=2025.2",
 ]
 
 [project.optional-dependencies]
 dev = [
     "pytest>=8",
     "pandas>=2.0",   # only the candle BATCH builder and its tests touch pandas
+    "ruff>=0.15",
 ]
 
 [tool.hatch.build.targets.wheel]
@@ -30,4 +32,4 @@ addopts = "-q"
 
 [tool.ruff]
 line-length = 100
-target-version = "py311"
+target-version = "py314"

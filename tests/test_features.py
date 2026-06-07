@@ -104,9 +104,9 @@ def test_int_time_beyond_level_skips_gap_over_600s() -> None:
         _trade(0, 99),
         _trade(MAX_DWELL_GAP_SECONDS, 98),
     ]
-    assert int_time_beyond_level(
-        boundary, 100.0, Direction.LONG, 1.0
-    ) == round(MAX_DWELL_GAP_SECONDS, 4)
+    assert int_time_beyond_level(boundary, 100.0, Direction.LONG, 1.0) == round(
+        MAX_DWELL_GAP_SECONDS, 4
+    )
 
 
 def test_int_time_beyond_level_negative_gap_skipped_via_stable_sort() -> None:
@@ -200,12 +200,10 @@ def test_int_absorption_ratio_rounds_to_six_decimals() -> None:
     """1/3 ratio exercises the 6-decimal rounding (builder:537)."""
     trades = [
         _trade(0, 100, size=10),  # at level
-        _trade(1, 98, size=20),   # through (LONG, < 100)
+        _trade(1, 98, size=20),  # through (LONG, < 100)
     ]
     # 10 / 30 = 0.333333... -> round(.,6) = 0.333333
-    assert int_absorption_ratio(trades, 100.0, Direction.LONG, 1.0) == round(
-        10 / 30, 6
-    )
+    assert int_absorption_ratio(trades, 100.0, Direction.LONG, 1.0) == round(10 / 30, 6)
     assert int_absorption_ratio(trades, 100.0, Direction.LONG, 1.0) == 0.333333
 
 

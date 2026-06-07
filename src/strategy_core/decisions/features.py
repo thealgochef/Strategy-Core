@@ -213,6 +213,4 @@ def app_max_spread(quotes: Sequence[Quote], tick_size: float) -> float:
     """
     if not quotes:
         return float("nan")
-    return max(
-        (q.ask_price_ticks - q.bid_price_ticks) * tick_size for q in quotes
-    )
+    return max((q.ask_price_ticks - q.bid_price_ticks) * tick_size for q in quotes)
