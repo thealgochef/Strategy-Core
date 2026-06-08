@@ -2,9 +2,9 @@
 
 Shared, versioned strategy engine for zero-drift parity between **Quant-Lab** research/training and **Trade-Lab** live/replay inference.
 
-`strategy-core` owns the strategy mechanics that must not drift: tick bars, sessions, zones, first-touch detection, feature formulas, outcome resolution, honest decision-time entry orchestration, and the versioned `strategy.json` schema/loader.
+`strategy-core` owns the strategy mechanics that must not drift: Databento historical/live normalization boundaries, deterministic event ordering, replay/runtime state, tick bars, sessions, zones, first-touch detection, feature formulas, outcome resolution, honest decision-time entry orchestration, and the versioned `strategy.json` schema/loader.
 
-> Current status, verified 2026-06-04: **engine v3 is implemented and unit-tested**. `python -m pytest -q` passes; `python -m pytest --collect-only -q` reports **106 tests** across 8 test files. Quant-Lab imports this engine for dashboard-utility training and contract emission. Trade-Lab is still **not v3-compatible**; see [`V3_COMPATIBILITY_MATRIX.md`](V3_COMPATIBILITY_MATRIX.md) and [`MIGRATION.md`](MIGRATION.md).
+> Current status, verified 2026-06-08: **engine v3 plus the shared market-data runtime are implemented and unit-tested**. `uv run --python 3.14 python -m pytest -q` passes; `pytest --collect-only -q` reports **127 tests** across 16 test files. Quant-Lab imports this engine for dashboard-utility training and contract emission. Trade-Lab backend now routes replay/live runtime bars, sessions, levels, zones, and touches through a Strategy-Core adapter, but model-bundle activation/parity remains gated; see [`V3_COMPATIBILITY_MATRIX.md`](V3_COMPATIBILITY_MATRIX.md) and [`MIGRATION.md`](MIGRATION.md).
 
 ---
 
@@ -13,11 +13,12 @@ Shared, versioned strategy engine for zero-drift parity between **Quant-Lab** re
 ```bash
 pip install -e .
 pip install -e ".[dev]"      # pytest + pandas for batch candle builder tests
-python -m pytest -q          # 106 tests passing as of 2026-06-04
+pip install -e ".[databento]" # optional real Databento SDK integration
+python -m pytest -q          # 127 tests passing as of 2026-06-08
 python -m pytest --collect-only -q
 ```
 
-Runtime import intent: stdlib + `numpy` + `pydantic`; pandas is loaded lazily by the batch candle builder only.
+Runtime import intent: stdlib + `numpy` + `pydantic`; pandas is loaded lazily by the batch candle builder only. Databento SDK imports are optional and occur only when an explicit live source is started.
 
 ---
 
@@ -63,6 +64,10 @@ src/strategy_core/
     streaming.py     CandleEngine — event-at-a-time trade tick bars
     batch.py         build_tick_bars_from_frame — pandas batch builder
     _ids.py          stable bar ids
+  data/
+    ordering.py      canonical `(ts_event, sequence, side_signed_price, size)` order
+    databento_parquet.py  Databento-export parquet scanner/normalizer
+    databento_live.py     optional/fake-tested Databento live source boundary
   decisions/
     sessions.py      classify_session / trading_day_for
     zones.py         build_zones
@@ -70,6 +75,10 @@ src/strategy_core/
     features.py      interaction + approach feature formulas
     outcomes.py      classify_mae_first / resolve_outcome
     honest_entry.py  decision-time outcome orchestration
+  runtime/
+    state.py         StrategyRuntime snapshots/updates for replay/live consumers
+    levels.py        streaming v3 level state with availability timestamps
+    replay.py        neutral replay controller over StrategyRuntime/source events
   contract/
     schema.py        Pydantic StrategyContract with engine_version and research_session_experiment
     loader.py        strict fail-closed loader
@@ -80,9 +89,9 @@ validation/          retained validation notes and legacy real-data harnesses
 
 ## What is still not done
 
-1. **Trade-Lab v3 repoint is incomplete.** Current Trade-Lab has its own contract schema without `engine_version` / `decision_offset_minutes`, Chicago session classification, exact-tick level touches, quote-mid dwell features, and level-price outcome tracking.
-2. **A v3 model bundle still needs to be verified/promoted.** Quant-Lab can emit `engine_version=strategy_core_engine_v3` and `research_session_experiment`, but canonical bundle location, file presence, and checksums are intentionally deferred until the local data zip is available.
-3. **Historical validation reports are not current-state docs.** Most stale v1/v2 phase reports were pruned from the working tree; retained validation notes must still be checked against current source/tests before citation.
+1. **Trade-Lab model serving is still gated.** The backend market-data runtime now uses Strategy-Core for bars/sessions/levels/touches, but contract activation, feature-vector parity, and outcome tracking still need a verified v3 bundle path before paper/live model serving.
+2. **A v3 model bundle still needs to be verified/promoted.** Quant-Lab can emit `engine_version=strategy_core_engine_v3` and `research_session_experiment`, but canonical bundle location, file presence, and checksums are intentionally deferred until a candidate bundle is selected.
+3. **Historical validation reports are not current-state docs.** Retained validation notes must still be checked against current source/tests before citation.
 
 ---
 
