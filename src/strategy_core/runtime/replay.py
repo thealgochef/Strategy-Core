@@ -111,6 +111,9 @@ class ReplayRuntime:
         self._state = ReplayState.RUNNING
         self._events_processed = 0
         self._warnings_recorded = 0
+        # audit N7: clear accumulated updates so each run starts clean; otherwise
+        # _record_update appends across every replay and self.updates grows unbounded.
+        self.updates = []
         self._last_event_ts_utc = None
         self._last_error = None
         self._last_message = "historical replay running"

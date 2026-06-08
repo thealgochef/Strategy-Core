@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Iterator
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from decimal import Decimal, InvalidOperation
 from heapq import heappop, heappush
 from itertools import count
@@ -136,7 +136,12 @@ class DatabentoParquetSource:
         except Exception as exc:
             yield self._warning(DataQualityCode.INVALID_RECORD, f"could not open historical parquet: {type(exc).__name__}", source, severity=DataQualitySeverity.ERROR)
             return
-        names = set(parquet.schema_arrow.names)
+        # audit N5: schema_arrow decode can fail on a corrupt file footer; warn-and-skip.
+        try:
+            names = set(parquet.schema_arrow.names)
+        except Exception as exc:
+            yield self._warning(DataQualityCode.INVALID_RECORD, f"could not decode historical parquet: {type(exc).__name__}", source, severity=DataQualitySeverity.ERROR)
+            return
         schema = self.schema.lower()
         is_trade_schema = schema in {"trades", "trade"}
         is_mbp10 = schema in {"mbp-10", "mbp10", "cmbp-10", "cmbp10"}
@@ -154,26 +159,34 @@ class DatabentoParquetSource:
             yield self._warning(DataQualityCode.MISSING_REQUIRED_COLUMN, "missing required historical parquet fields", source, severity=DataQualitySeverity.ERROR, missing=sorted(missing))
             return
         selected = [name for name in TRADE_SELECTED if name in names]
-        front_month_id = self._front_month_instrument_id(parquet, selected) if self.front_month_only else None
-        start = self.start_ts_utc.astimezone(UTC) if self.start_ts_utc is not None else None
-        end = self.end_ts_utc.astimezone(UTC) if self.end_ts_utc is not None else None
-        for batch in parquet.iter_batches(columns=selected, batch_size=self.batch_size):
-            events: list[tuple[SortKey, Trade | Quote]] = []
-            for row in batch.to_pylist():
-                if self.front_month_only and self._is_off_front_month(row, front_month_id):
-                    continue
-                normalized = self._normalize_row(row, schema=schema, source=source, is_trade_schema=is_trade_schema, is_mbp10=is_mbp10, is_tob=is_tob)
-                for item in normalized:
-                    if isinstance(item, DataQualityWarning):
-                        yield item
+        # audit N5: the front-month prescan and iter_batches/to_pylist decode read
+        # actual data pages, so a corrupt page must warn-and-skip this file instead
+        # of aborting the k-way merge. Per-row warn/skip behavior is unchanged: row
+        # warnings are still yielded inline below; only decode failures land here.
+        try:
+            front_month_id = self._front_month_instrument_id(parquet, selected) if self.front_month_only else None
+            start = self.start_ts_utc.astimezone(UTC) if self.start_ts_utc is not None else None
+            end = self.end_ts_utc.astimezone(UTC) if self.end_ts_utc is not None else None
+            for batch in parquet.iter_batches(columns=selected, batch_size=self.batch_size):
+                events: list[tuple[SortKey, Trade | Quote]] = []
+                for row in batch.to_pylist():
+                    if self.front_month_only and self._is_off_front_month(row, front_month_id):
                         continue
-                    key, event = item
-                    if start is not None and event.event_ts_utc < start:
-                        continue
-                    if end is not None and event.event_ts_utc >= end:
-                        continue
-                    events.append((key, event))
-            yield from sorted(events, key=lambda item: item[0])
+                    normalized = self._normalize_row(row, schema=schema, source=source, is_trade_schema=is_trade_schema, is_mbp10=is_mbp10, is_tob=is_tob)
+                    for item in normalized:
+                        if isinstance(item, DataQualityWarning):
+                            yield item
+                            continue
+                        key, event = item
+                        if start is not None and event.event_ts_utc < start:
+                            continue
+                        if end is not None and event.event_ts_utc >= end:
+                            continue
+                        events.append((key, event))
+                yield from sorted(events, key=lambda item: item[0])
+        except Exception as exc:
+            yield self._warning(DataQualityCode.INVALID_RECORD, f"could not decode historical parquet: {type(exc).__name__}", source, severity=DataQualitySeverity.ERROR)
+            return
 
     def _normalize_row(self, row: dict[str, Any], *, schema: str, source: str, is_trade_schema: bool, is_mbp10: bool, is_tob: bool) -> tuple[SourceItem, ...]:
         items: list[SourceItem] = []
@@ -272,7 +285,13 @@ class DatabentoParquetSource:
                 return DatabentoParquetSource._warning(DataQualityCode.INVALID_TIMESTAMP, "invalid historical parquet timestamp", source)
             return value.astimezone(UTC)
         if isinstance(value, int) and not isinstance(value, bool):
-            return datetime.fromtimestamp(value / 1_000_000_000, tz=UTC)
+            # audit #1: guard the int-ns branch like the str branch so a single
+            # out-of-range/garbage ts_event warns-and-skips instead of aborting replay.
+            # audit #2: convert with integer arithmetic to microseconds (no lossy float).
+            try:
+                return datetime(1970, 1, 1, tzinfo=UTC) + timedelta(microseconds=value // 1000)
+            except (OverflowError, OSError, ValueError):
+                return DatabentoParquetSource._warning(DataQualityCode.INVALID_TIMESTAMP, "invalid historical parquet timestamp", source)
         if isinstance(value, str):
             try:
                 parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))

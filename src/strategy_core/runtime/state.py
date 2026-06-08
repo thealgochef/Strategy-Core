@@ -271,7 +271,7 @@ class StrategyRuntime:
         for bar in candle_update.completed:
             if bar.timeframe_ticks != self.decision_timeframe:
                 continue
-            zones = self._zones_for_detection(bar.trading_day, bar.close_ts_utc)
+            zones = self._zones_for_detection(bar.trading_day)
             detected = detect_touches((bar,), zones, tick_size=self.tick_size, trading_day=bar.trading_day)
             for touch in detected:
                 self._touched_zone_keys.add(self._touch_zone_key_from_touch(touch, zones))
@@ -289,15 +289,17 @@ class StrategyRuntime:
             touches=tuple(touches),
         )
 
-    def _zones_for_detection(self, trading_day: date, at_ts_utc: datetime) -> list[Zone]:
-        available_levels = [
-            level
-            for level in self.level_state.levels()
-            if level.available_from is None or level.available_from <= at_ts_utc
-        ]
+    def _zones_for_detection(self, trading_day: date) -> list[Zone]:
+        # audit #3: build zones from ALL current levels -- do NOT pre-filter by
+        # availability before build_zones. Pre-filtering diverged from canonical
+        # merge-all / gate-each-zone-on-MAX semantics and from the snapshot path
+        # (_zones_for_snapshot below). detect_touches (decisions/touch.py:93) already
+        # gates each zone on ``bar.close_ts_utc < zone.available_from``, so the v3
+        # look-ahead protection is preserved while zone composition now matches
+        # canonical (and _zones_for_snapshot's unfiltered build).
         from strategy_core.decisions.zones import build_zones
 
-        zones = build_zones(available_levels)
+        zones = build_zones(list(self.level_state.levels()))
         for zone in zones:
             if self._zone_key(trading_day, zone) in self._touched_zone_keys:
                 zone.touched = True

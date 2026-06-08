@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import Mapping
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from decimal import Decimal, InvalidOperation
 from typing import Any
 
@@ -16,6 +16,7 @@ __all__ = ["DatabentoLiveSource", "normalize_provider_message"]
 
 _TRADE_SCHEMAS = {"trade", "trades"}
 _QUOTE_SCHEMAS = {"mbp-1", "cmbp-1", "bbo", "tbbo", "cbbo"}
+_EPOCH_UTC = datetime(1970, 1, 1, tzinfo=UTC)  # audit #2: base for integer-µs timestamp arithmetic
 
 
 def normalize_provider_message(message: Any, *, requested_symbol: str, schema: str) -> Trade | Quote:
@@ -147,7 +148,11 @@ def _timestamp(value: Any) -> datetime:
             raise ValueError("provider timestamp must be timezone-aware")
         return value.astimezone(UTC)
     if isinstance(value, int) and not isinstance(value, bool):
-        return datetime.fromtimestamp(value / 1_000_000_000, tz=UTC)
+        # audit #2: use integer-microsecond arithmetic instead of the lossy
+        # fromtimestamp(value / 1_000_000_000); value is ns since epoch and
+        # datetime resolves to µs, so floor-divide ns->µs to avoid float
+        # precision loss. Matches the parquet timestamp fix.
+        return _EPOCH_UTC + timedelta(microseconds=value // 1000)
     if isinstance(value, str):
         parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
         if parsed.tzinfo is None:

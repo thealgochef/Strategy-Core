@@ -4,7 +4,7 @@ Shared, versioned strategy engine for zero-drift parity between **Quant-Lab** re
 
 `strategy-core` owns the strategy mechanics that must not drift: Databento historical/live normalization boundaries, deterministic event ordering, replay/runtime state, tick bars, sessions, zones, first-touch detection, feature formulas, outcome resolution, honest decision-time entry orchestration, and the versioned `strategy.json` schema/loader.
 
-> Current status, verified 2026-06-08: **engine v3 plus the shared market-data runtime are implemented and unit-tested**. `uv run --python 3.14 python -m pytest -q` passes; `pytest --collect-only -q` reports **127 tests** across 16 test files. Quant-Lab imports this engine for dashboard-utility training and contract emission. Trade-Lab backend now routes replay/live runtime bars, sessions, levels, zones, and touches through a Strategy-Core adapter, but model-bundle activation/parity remains gated; see [`V3_COMPATIBILITY_MATRIX.md`](V3_COMPATIBILITY_MATRIX.md) and [`MIGRATION.md`](MIGRATION.md).
+> Current status, verified 2026-06-08: **engine v3 plus the shared market-data runtime are implemented and unit-tested**. `uv run --python 3.14 python -m pytest -q` passes; `pytest --collect-only -q` reports **135 tests** across 18 test files. Quant-Lab imports this engine for dashboard-utility training and contract emission. Trade-Lab backend now routes replay/live runtime bars, sessions, levels, zones, and touches through a Strategy-Core adapter, but model-bundle activation/parity remains gated; see [`V3_COMPATIBILITY_MATRIX.md`](V3_COMPATIBILITY_MATRIX.md) and [`MIGRATION.md`](MIGRATION.md).
 
 ---
 
@@ -14,7 +14,7 @@ Shared, versioned strategy engine for zero-drift parity between **Quant-Lab** re
 pip install -e .
 pip install -e ".[dev]"      # pytest + pandas for batch candle builder tests
 pip install -e ".[databento]" # optional real Databento SDK integration
-python -m pytest -q          # 127 tests passing as of 2026-06-08
+python -m pytest -q          # 135 tests passing as of 2026-06-08
 python -m pytest --collect-only -q
 ```
 

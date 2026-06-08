@@ -15,7 +15,7 @@ Updated: 2026-06-08. This is the current migration state, replacing the older v1
 | Quant-Lab dashboard-utility training repoint | ✅ | Production builder calls `engine_decision.process_single_date_engine()`; contract emitter pulls constants/version stamps from Strategy-Core. |
 | Strategy-Core v3 semantics | ✅ | Sessions re-clocked, full-prior-day PDH/PDL, availability guard enforced, 16:40/17:00 cutoffs, `eligible_session=ny`. |
 | Strategy-Core Databento/replay/runtime package | ✅ | `strategy_core.data` owns deterministic ordering plus parquet/live normalization boundaries; `strategy_core.runtime` owns neutral replay/runtime snapshots/updates. |
-| Strategy-Core tests | ✅ | Verified 2026-06-08: `uv run --python 3.14 python -m pytest -q` passes; collect-only count is 127. Also passes under Trade-Lab Python 3.13 via `PYTHONPATH`. |
+| Strategy-Core tests | ✅ | Verified 2026-06-08: `uv run --python 3.14 python -m pytest -q` passes; collect-only count is 135. Also passes under Trade-Lab Python 3.13 via `PYTHONPATH`. |
 | Trade-Lab market-data runtime repoint | ✅ | Trade-Lab `ApplicationRuntime` now routes bars/sessions/levels/zones/touches through `StrategyCoreService`; backend acceptance tests prove direct Strategy-Core touch output matches Trade-Lab DTO/observation output. |
 | Trade-Lab model-contract / feature / outcome compatibility | ⚠️ | Model activation, contract fail-close, feature-vector parity, and decision-time outcome tracking still need a verified v3 bundle path. Do not serve v3 bundles there yet. |
 | Canonical v3 model/data bundle verification | ⏳ | Deferred until local data/model zip is available; verify file presence and checksums later. |
