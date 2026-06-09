@@ -31,7 +31,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping, Set as AbstractSet
 from dataclasses import dataclass
-from datetime import datetime, time, timedelta
+from datetime import date, datetime, time, timedelta
 from types import MappingProxyType
 from typing import Any
 
@@ -215,8 +215,15 @@ class TouchReversalPlugin:
         self._levels.reset()
 
     def set_static_levels(self, levels: tuple[Level, ...]) -> None:
-        """Seed prior-day/static levels — mirrors ``StrategyRuntime.set_static_levels`` (state.py:216-217)."""
+        """Seed prior-day/static levels — mirrors ``StrategyRuntime.set_static_levels`` (state.py:242-243)."""
         self._levels.set_static_levels(levels)
+
+    def load_prior_day_summary(self, trading_day: date, *, high_ticks: int, low_ticks: int) -> None:
+        """Mirror ``StrategyRuntime.load_prior_day_summary`` onto the plugin's level state (W4).
+
+        ``self._levels`` is the SAME ``StrategyLevelState`` class the runtime owns, so this
+        delegates the identical call — keeping PDH/PDL in lockstep with the runtime."""
+        self._levels.load_prior_day_summary(trading_day, high_ticks=high_ticks, low_ticks=low_ticks)
 
     # ---- data requirements (DECLARED) ----
     @staticmethod
@@ -240,15 +247,16 @@ class TouchReversalPlugin:
     def on_bar_closed(
         self, bar: Bar, ctx: PlatformContext, already_fired_keys: AbstractSet[ZoneKey]
     ) -> StrategyStep:
-        # Mirror the hardwired touch fold (state.py:271-280) for ONE decision bar:
-        # guard on the decision timeframe, build zones from ALL current levels
-        # (_zones_for_detection core, state.py:316-318), PRE-MARK zones already fired this
-        # day from the platform-owned dedup set exactly as _zones_for_detection does
-        # (state.py:319-321) using the SHARED zone_key (I3), then detect_touches with the
-        # identical call shape (state.py:287). The platform records newly-fired keys after
-        # this returns; this method only READS already_fired_keys (never mutates it).
-        if bar.timeframe_ticks != _DECISION_TIMEFRAME:  # state.py:284-285
-            return StrategyStep()
+        # The PLATFORM gates which bars reach here. The runtime's plugin-path loop only
+        # calls on_bar_closed for bars whose timeframe == the runtime's decision_timeframe
+        # (state.py else branch), EXACTLY as the None path gates. So this method does NOT
+        # re-gate on its own declared decision bar (_DECISION_TIMEFRAME): re-gating on a
+        # hardcoded timeframe would break byte-identity whenever the runtime's
+        # decision_timeframe differs from it (e.g. a tf=2 acceptance harness). It processes
+        # the decision bar it is handed, mirroring the hardwired fold (state.py:316-321,287):
+        # build zones from ALL current levels, PRE-MARK zones already fired this day from the
+        # platform-owned dedup set using the SHARED zone_key (I3), then detect_touches with
+        # the identical call shape. It only READS already_fired_keys (never mutates it).
         zone_proximity = (
             self._section.touch_rule.zone_proximity_pts
             if self._section is not None

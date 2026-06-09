@@ -229,6 +229,8 @@ class StrategyRuntime:
             self.requested_symbol = requested_symbol
         self.candles = CandleEngine(self.candles.timeframes, scheme=self.scheme)
         self.level_state.reset()
+        if self._plugin is not None:
+            self._plugin.reset()  # W4: keep the plugin's level state in lockstep with reset
         self._recent_closed_bars.clear()
         self._warnings.clear()
         self._touches.clear()
@@ -241,9 +243,14 @@ class StrategyRuntime:
 
     def set_static_levels(self, levels: tuple[Level, ...]) -> None:
         self.level_state.set_static_levels(levels)
+        if self._plugin is not None:
+            self._plugin.set_static_levels(levels)  # W4: mirror onto the plugin's level state
 
     def load_prior_day_summary(self, trading_day: date, *, high_ticks: int, low_ticks: int) -> None:
         self.level_state.load_prior_day_summary(trading_day, high_ticks=high_ticks, low_ticks=low_ticks)
+        if self._plugin is not None:
+            # W4: mirror the prior-day PDH/PDL summary onto the plugin's level state.
+            self._plugin.load_prior_day_summary(trading_day, high_ticks=high_ticks, low_ticks=low_ticks)
 
     def record_warning(self, warning: DataQualityWarning) -> RuntimeUpdate:
         self._warnings.append(warning)

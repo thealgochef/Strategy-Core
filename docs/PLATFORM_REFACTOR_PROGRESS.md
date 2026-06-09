@@ -24,11 +24,11 @@ deviations.
 
 ## Current state
 
-- **Active phase:** B in progress.
-- **Next step:** B2 PART 2 (wire-up).
-- **Drift-net status:** B2 PART 1 (seam): plugin-path byte-identical to the None path across MULTIPLE bars incl. cross-bar first-touch suppression (test_b2_plugin_seam_parity); full SC suite 141 passed; ruff clean; I1–I4 verified by a 5-agent adversarial workflow (all pass, high confidence). Money-path GATE harnesses NOT re-run for PART 1 (the plugin path is test-only; production/TL construction is unchanged and takes the verbatim None path) — they are the PART-2 flag-on gate. Verified 2026-06-08.
+- **Active phase:** B in progress (B2 complete; B3 not started).
+- **Next step:** B3.
+- **Drift-net status:** B2 DONE. Flag `SC_PLUGIN_ROUTING` (default OFF) wired into the TL production construction via `wiring.touch_reversal_kwargs()`. Flag-ON proven byte-identical to flag-OFF on REAL data (GO-LIVE gate: 2025-07-15 + 2025-07-07, 646K trades, OFF==ON per trade; 5 touches / 6 zones each) AND on the tf=2 TL acceptance + replay (3 OFF + 3 ON); decision-fn gates 2 passed; full SC suite 145; ruff clean; W1–W5 verified by a 5-agent adversarial workflow (all pass, high confidence). Verified 2026-06-08.
 - **Last-verified date:** 2026-06-08
-- **Note (B2 PART 2 gating):** PART 2 (wire: feature flag + production/TL construction through the plugin + money-path GATE flag-on) is gated on (a) the architect's gate/dedup-placement decision — now informed by `b2_context.md` (the once-per-day `_touched_zone_keys` dedup is RUNTIME-owned: write @state.py:289, read @state.py:320 & :329; the plugin only READS it via `already_fired_keys`); AND (b) wiring `reset()` / `set_static_levels` / `load_prior_day_summary` propagation to the plugin's level state (PART 1 proves byte-identity only for the no-reset streaming path; the seam test seeds the plugin manually). PART 2 must not flip the construction flag until both are resolved.
+- **Note (B3):** B3 flips the default ON after a green soak, deletes the hardwired touch block, and collapses the redundant level fold (D-B2a). Moving the once-per-day `_touched_zone_keys` dedup INTO the plugin + the raw-`Touch` flow-back onto `RuntimeUpdate.touches` is a SEPARATE later step (B3/E), gated by the multi-bar + go-live harnesses that now exist — NOT part of B2. **Release step (decision 9.6):** TL's SC SHA pin (`backend/pyproject.toml`) must be bumped to a commit that includes `strategy_core/runtime/wiring.py` before deploy — TL imports it at module load even flag-OFF; the editable/working-tree install already resolves it.
 
 ---
 
@@ -147,7 +147,50 @@ implementation:
   level-seed propagation to the plugin, or the drift net diverges when the construction flag
   flips. (Completeness-critic minor.)
 - PART 2 adds the feature flag, production/TL construction through the plugin, and the
-  money-path GATE harnesses run flag-on.
+  money-path GATE harnesses run flag-on. **→ ALL RESOLVED in PART 2 (below).**
+
+### Phase B — deviations / clarifications (B2 PART 2, additive + cross-repo)
+
+- **D-B2f (the flag — resolver):** `strategy_core/config.py` `plugin_routing_enabled()`,
+  env `SC_PLUGIN_ROUTING`, default OFF, truthy `1`/`true`/`yes` (case-insensitive). ONE
+  switch, TRANSIENT (deleted at B3). EVERY construction site reads it only through the single
+  helper `strategy_core/runtime/wiring.py` `touch_reversal_kwargs()` — which lazily imports the
+  plugin module ONLY on the flag-ON branch (so `import strategy_core` leaves the registry
+  empty, W2).
+- **D-B2g (production wiring):** the ONLY production `StrategyRuntime(` site is Trade-Lab
+  `services/strategy_core_service.py` `StrategyCoreService.__init__` — wired via
+  `**touch_reversal_kwargs()` (SC validation harnesses + Quant-Lab construct no runtime). Flag
+  OFF (default) → `{}` → byte-identical None path (W1).
+- **D-B2h (W5 — section matches the runtime):** the runtime's `level_state` uses
+  `RESEARCH_SESSION_SCHEME` (default; no scheme passed) + `DEFAULT_TICK_SIZE` (default) + the
+  hardcoded asia/london level set, with `decision_timeframe = min(display_timeframes) = 147`
+  in production. `default_touch_reversal_section()` round-trips to `RESEARCH_SESSION_SCHEME`
+  (via `_contract_scheme_from_runtime`, the inverse of the plugin's `_runtime_scheme_from_section`)
+  and pins `touch_rule.zone_proximity_pts == ZONE_PROXIMITY_PTS`; the plugin's `configure` uses
+  `ctx.tick_size == runtime.tick_size`. So `self._levels` is built identically to `level_state`.
+- **D-B2i (decision-tf gate removal — refines D-A3b):** the plugin's `on_bar_closed` NO LONGER
+  self-gates on its declared `_DECISION_TIMEFRAME` (147). The runtime's plugin-path `else` branch
+  already gates on `self.decision_timeframe` ONE-FOR-ONE with the None branch, so re-gating on a
+  hardcoded 147 would break byte-identity for ANY other `decision_timeframe` (e.g. the tf=2 TL
+  acceptance harness). The decision-tf gate is now runtime-owned; `required_bars()` still DECLARES
+  147 (advisory). The A3 `test_non_decision_bar` companion was repurposed to assert the new behavior.
+- **D-B2j (W4 — lifecycle propagation):** `reset` / `set_static_levels` / `load_prior_day_summary`
+  propagate to the plugin (each gated on `if self._plugin is not None:`); new plugin
+  `load_prior_day_summary` hook. None path unchanged.
+- **D-B2k (cross-repo — Trade-Lab modified):** Phase A's "do not touch TL" no longer applies — B2
+  PART 2 wires production. TL `services/strategy_core_service.py` modified (import + `**touch_reversal_kwargs()`),
+  committed on TL branch `platform-refactor` (`<b2p2-tl-sha>`). TL imports the NEW SC module
+  `runtime/wiring.py` at load even flag-OFF, so TL's SC SHA pin must include it before deploy
+  (release step, decision 9.6; the editable branch install resolves it today).
+
+**Go-live gate mapping (reviewable, B2's DONE gate):** dates **2025-07-15** and **2025-07-07**;
+harness `validation/test_b2_golive_runtime_parity.py`; **real-store** data
+(`Trade-Dashboard/data/databento/NQ/<DATE>/mbp10.parquet`) front-month trades in WIRE order driven
+**through `StrategyRuntime.process_event`**; off-vs-on runtimes built via `touch_reversal_kwargs()`
+with the flag toggled; per-trade `ua == ub` (≡ `ua.to_dict() == ub.to_dict()`, the deterministic
+serialization) + final-snapshot equality; **339,997 + 306,103 trades, OFF==ON throughout**, 5 touches
+and 6 max zones/day (PDH/PDL via `load_prior_day_summary` + trade-built asia/london availability-gated
++ merged zones — the breadth the synthetic seam harness did not reach).
 
 ---
 
@@ -159,7 +202,7 @@ implementation:
 | A | A2 | Introduce the registry (@register + get_strategy(strategy_id)) in strategy_core/strategies/registry.py, empty | DONE | 2026-06-08 | `68eef26` | golden suite (12) + A3 test all green; unwired-invariant check green | §9.1 registry-time assertion (isinstance StrategyPlugin + BarSpec tuple + SectionModel BaseModel); fail-closed get_strategy. Registry stays empty on `import strategy_core`. |
 | A | A3 | Author TouchReversalSection SectionModel + a TouchReversalPlugin that wraps the existing functions, registered but not yet wired into the runtime | DONE | 2026-06-08 | `68eef26` | test_touch_reversal_plugin (5 incl. equivalence) + golden suite (12) green | Wraps build_zones→detect_touches verbatim; plugin owns level state (R1); scheme←section (R2, D-A3a); decision tf as config (R3, D-A3b). D-A3c..f. |
 | B | B1 | Add an optional plugin param to StrategyRuntime.__init__, defaulting to None; when None, run the exact current state.py:271-280 block | DONE | 2026-06-08 | `1491921` | full SC suite 140 passed (incl. test_runtime_state/touches/touch_zones/levels + A3 test_touch_reversal_plugin); TL test_strategy_core_acceptance + test_strategy_core_replay_integration (3 passed vs branch SC); GATE test_production_pair_parity + test_duckdb_streaming_parity + test_decision_diff (3 passed, store+alpha_lab present) | None-path byte-identical (inner lines unchanged, +4 indent only); else = no-op `pass` (B2 placeholder); `plugin` added last (no param reorder); StrategyPlugin TYPE_CHECKING-only → registry stays empty. Only runtime/state.py changed. |
-| B | B2 | Route _process_trade through plugin.on_bar_closed when a plugin is present, and construct StrategyRuntime with the registered TouchReversalPlugin in a feature-flagged path | IN PROGRESS | 2026-06-08 | `7a5cc96` | full SC suite 141 passed (incl. None-path golden test_runtime_state/touches/touch_zones/levels + A3); test_b2_plugin_seam_parity (multi-bar plugin-path == None-path incl. cross-bar suppression); ruff clean | PART 1/2 (seam) landed; PART 2 (wire: feature flag + production/TL construction + money-path GATE flag-on) PENDING — stays IN PROGRESS, not DONE. Deviations D-B2a..e + PART-2 reqs below. |
+| B | B2 | Route _process_trade through plugin.on_bar_closed when a plugin is present, and construct StrategyRuntime with the registered TouchReversalPlugin in a feature-flagged path | DONE | 2026-06-08 | SC `7a5cc96`+`<b2p2-sc-sha>`; TL `<b2p2-tl-sha>` | full SC suite 145; test_b2_plugin_seam_parity (PART1); test_b2_wiring (resolver/W2/W4-lifecycle); GO-LIVE test_b2_golive_runtime_parity (real days 2025-07-15 339997 trades + 2025-07-07 306103 trades, OFF==ON per trade, 5 touches/6 zones); TL test_strategy_core_acceptance + test_strategy_core_replay_integration (3 OFF + 3 ON); decision-fn gates test_production_pair_parity + test_decision_diff (2 passed); ruff clean | flag SC_PLUGIN_ROUTING default OFF via wiring.touch_reversal_kwargs(); TL StrategyCoreService wired; lifecycle propagation + plugin load_prior_day_summary hook; plugin internal decision-tf gate REMOVED (runtime gates). Deviations D-B2f..k. |
 | B | B3 | Make the plugin path the default for strategy_id="touch_reversal"; remove the dead hardwired duplicate only after a full green soak | NOT STARTED |  |  |  |  |
 | C | C1 | Repoint TL model_registry import from the local contract copy to strategy_core.contract, keeping today's flat StrategyContract shape | NOT STARTED |  |  |  |  |
 | C | C2 | Delete TL's local strategy_contract.py once nothing imports it | NOT STARTED |  |  |  |  |
@@ -177,6 +220,20 @@ implementation:
 
 ## Change log (newest first)
 
+- **2026-06-08** — Phase B Step B2 **PART 2 of 2 (WIRE-UP) landed → B2 DONE.** SC `<b2p2-sc-sha>`
+  on `platform-refactor`; Trade-Lab `<b2p2-tl-sha>` on TL `platform-refactor`. Adds the SC-owned flag
+  `SC_PLUGIN_ROUTING` (default OFF) via `strategy_core/config.py` + the single construction helper
+  `strategy_core/runtime/wiring.py` `touch_reversal_kwargs()` (lazy plugin import on the ON branch only);
+  wires TL `StrategyCoreService` to construct via `**touch_reversal_kwargs()`; adds `default_touch_reversal_section()`
+  (round-trips to RESEARCH, W5); propagates `reset`/`set_static_levels`/`load_prior_day_summary` to the plugin
+  (W4, + new plugin `load_prior_day_summary` hook); and REMOVES the plugin's internal decision-tf gate so the
+  runtime is the sole gate authority (flag-ON byte-identical at any `decision_timeframe`). Harnesses: full SC
+  suite 145; `test_b2_wiring` (resolver/W2/W4); GO-LIVE `test_b2_golive_runtime_parity` (real days 2025-07-15 +
+  2025-07-07, 646K trades, OFF==ON through `StrategyRuntime.process_event`); TL `test_strategy_core_acceptance` +
+  `test_strategy_core_replay_integration` 3 passed flag-OFF AND 3 passed flag-ON; decision-fn gates
+  `test_production_pair_parity` + `test_decision_diff` 2 passed; ruff clean. Verified by a 5-agent adversarial
+  workflow (W1–W5 + TL/completeness, all pass, high confidence; one W4 test-strength nit fixed). Default stays OFF;
+  the hardwired block is NOT deleted (that is B3).
 - **2026-06-08** — Phase B Step B2 **PART 1 of 2 (the plugin SEAM)** landed on `platform-refactor`,
   commit `7a5cc96`. Routes `_process_trade` through `self._plugin.on_bar_closed(bar, ctx,
   already_fired_keys)` when a plugin is present (else branch), folds each trade into the plugin via

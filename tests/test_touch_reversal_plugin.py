@@ -170,8 +170,11 @@ def test_plugin_touch_output_equals_direct_detect_touches() -> None:
     assert tuple(decision.touch for decision in step.decisions) == direct_touches
 
 
-def test_non_decision_bar_returns_empty_step() -> None:
-    """A bar whose timeframe is not the decision timeframe yields an empty delta."""
+def test_on_bar_closed_processes_the_handed_bar_no_internal_gate() -> None:
+    """B2 PART 2: the plugin no longer self-gates on its declared decision timeframe — the
+    RUNTIME gates which bars reach on_bar_closed (so the plugin path is byte-identical for any
+    runtime decision_timeframe, not only 147). A straddling bar of a DIFFERENT timeframe still
+    produces the touch when handed directly to on_bar_closed."""
     plugin = get_strategy("touch_reversal")()
     plugin.configure(_section(), _Ctx())
     plugin.set_static_levels((Level("pdl", 100.0, Side.LOW, None),))
@@ -179,8 +182,8 @@ def test_non_decision_bar_returns_empty_step() -> None:
     bar = _bar(decision_tf + 1, round(99.0 / DEFAULT_TICK_SIZE), round(101.0 / DEFAULT_TICK_SIZE),
                date(2026, 1, 6), datetime(2026, 1, 6, 14, 2, tzinfo=UTC))
     step = plugin.on_bar_closed(bar, _Ctx(), frozenset())
-    assert step.setups == ()
-    assert step.decisions == ()
+    assert len(step.touches) == 1  # processed despite tf != the declared decision bar
+    assert step.touches[0].representative_price == 100.0
 
 
 def test_registry_resolves_touch_reversal_and_fails_closed() -> None:
