@@ -6,7 +6,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass, field
 from datetime import date, datetime
 from types import MappingProxyType
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from strategy_core.candles.streaming import CandleEngine
 from strategy_core.constants import DEFAULT_TICK_SIZE, RESEARCH_SESSION_SCHEME
@@ -15,6 +15,13 @@ from strategy_core.decisions.sessions import classify_session
 from strategy_core.decisions.touch import detect_touches
 from strategy_core.runtime.levels import StrategyLevelState
 from strategy_core.types import Bar, Quote, SessionScheme, Touch, Trade, Zone, Level
+
+if TYPE_CHECKING:
+    # Annotation-only (under `from __future__ import annotations`): importing the plugin
+    # protocol here would NOT execute at runtime, so `import strategy_core` still imports
+    # nothing from the strategies package and the registry stays empty. The B1 `plugin`
+    # param is dead in production (defaults to None) until B2 wires the routing.
+    from strategy_core.strategies.protocols import StrategyPlugin
 
 __all__ = ["FeedStatus", "RuntimeSnapshot", "RuntimeUpdate", "StrategyRuntime"]
 
@@ -180,10 +187,14 @@ class StrategyRuntime:
         tick_size: float = DEFAULT_TICK_SIZE,
         recent_closed_bar_limit: int = 500,
         warning_limit: int = 100,
+        plugin: StrategyPlugin | None = None,
     ) -> None:
         self.requested_symbol = requested_symbol
         self.tick_size = tick_size
         self.scheme = scheme
+        # B1: dead in production — `plugin` defaults to None, so _process_trade runs the
+        # verbatim hardwired touch fold. B2 routes through plugin.on_bar_closed when set.
+        self._plugin = plugin
         self.candles = CandleEngine(timeframes, scheme=scheme)
         self.decision_timeframe = decision_timeframe or min(timeframes)
         self.level_state = StrategyLevelState(scheme=scheme, tick_size=tick_size)
@@ -268,14 +279,19 @@ class StrategyRuntime:
                 del self._recent_closed_bars[: len(self._recent_closed_bars) - self._recent_closed_bar_limit]
         levels = self.level_state.process_trade(trade)
         touches: list[Touch] = []
-        for bar in candle_update.completed:
-            if bar.timeframe_ticks != self.decision_timeframe:
-                continue
-            zones = self._zones_for_detection(bar.trading_day)
-            detected = detect_touches((bar,), zones, tick_size=self.tick_size, trading_day=bar.trading_day)
-            for touch in detected:
-                self._touched_zone_keys.add(self._touch_zone_key_from_touch(touch, zones))
-            touches.extend(detected)
+        if self._plugin is None:
+            for bar in candle_update.completed:
+                if bar.timeframe_ticks != self.decision_timeframe:
+                    continue
+                zones = self._zones_for_detection(bar.trading_day)
+                detected = detect_touches((bar,), zones, tick_size=self.tick_size, trading_day=bar.trading_day)
+                for touch in detected:
+                    self._touched_zone_keys.add(self._touch_zone_key_from_touch(touch, zones))
+                touches.extend(detected)
+        else:
+            # B2: route through self._plugin.on_bar_closed(...) and map its touches back
+            # onto `touches`. No-op in B1 (the plugin path is dead until B2).
+            pass
         if touches:
             self._touches.extend(touches)
         session, trading_day = self._session_state()

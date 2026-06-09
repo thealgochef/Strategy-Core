@@ -24,10 +24,11 @@ deviations.
 
 ## Current state
 
-- **Active phase:** A complete.
-- **Next step:** B1.
-- **Drift-net status:** Phase A: golden unit suite + A3 equivalence test green (verified 2026-06-08); money-path GATE harnesses (test_production_pair_parity, test_decision_diff, test_duckdb_streaming_parity, TL test_strategy_core_acceptance) NOT required at Phase A (additive/unimported) — they are the B2 gate and need the local data/model zip.
+- **Active phase:** B in progress.
+- **Next step:** B2.
+- **Drift-net status:** B1: None-path byte-identical (char-level proof + green None-path tests); full SC suite 140 passed; TL cross-runtime acceptance + replay 3 passed vs branch SC; money-path GATE harnesses (test_production_pair_parity, test_duckdb_streaming_parity, test_decision_diff) ran GREEN this session (local databento store + alpha_lab present). Verified 2026-06-08.
 - **Last-verified date:** 2026-06-08
+- **Note (B2 gating):** B2 is gated on (a) the local data/model zip for the money-path GATE harnesses and (b) the architect's design decision on gate/dedup placement (how much touch logic moves into the plugin vs stays in the runtime) — B2 must not start until both are resolved. (Re (a): the GATE store/data was confirmed present and the GATE harnesses ran green this session; (b) the gate/dedup placement decision — esp. the cross-bar `_touched_zone_keys` first-touch dedup, per deviation D-A3d — remains OPEN and is required before B2.)
 
 ---
 
@@ -121,7 +122,7 @@ implementation:
 | A | A1 | Introduce the StrategyPlugin Protocol + BarSpec/SetupState/DecisionEvent/Barrier types in strategy_core, unused | DONE | 2026-06-08 | `68eef26` | golden suite (12) + A3 test all green; full SC suite 140 passed | New submodule `strategies/protocols.py`; declaration-only, unimported by runtime. D-A1, D-A1b. |
 | A | A2 | Introduce the registry (@register + get_strategy(strategy_id)) in strategy_core/strategies/registry.py, empty | DONE | 2026-06-08 | `68eef26` | golden suite (12) + A3 test all green; unwired-invariant check green | §9.1 registry-time assertion (isinstance StrategyPlugin + BarSpec tuple + SectionModel BaseModel); fail-closed get_strategy. Registry stays empty on `import strategy_core`. |
 | A | A3 | Author TouchReversalSection SectionModel + a TouchReversalPlugin that wraps the existing functions, registered but not yet wired into the runtime | DONE | 2026-06-08 | `68eef26` | test_touch_reversal_plugin (5 incl. equivalence) + golden suite (12) green | Wraps build_zones→detect_touches verbatim; plugin owns level state (R1); scheme←section (R2, D-A3a); decision tf as config (R3, D-A3b). D-A3c..f. |
-| B | B1 | Add an optional plugin param to StrategyRuntime.__init__, defaulting to None; when None, run the exact current state.py:271-280 block | NOT STARTED |  |  |  |  |
+| B | B1 | Add an optional plugin param to StrategyRuntime.__init__, defaulting to None; when None, run the exact current state.py:271-280 block | DONE | 2026-06-08 | `<b1-sha>` | full SC suite 140 passed (incl. test_runtime_state/touches/touch_zones/levels + A3 test_touch_reversal_plugin); TL test_strategy_core_acceptance + test_strategy_core_replay_integration (3 passed vs branch SC); GATE test_production_pair_parity + test_duckdb_streaming_parity + test_decision_diff (3 passed, store+alpha_lab present) | None-path byte-identical (inner lines unchanged, +4 indent only); else = no-op `pass` (B2 placeholder); `plugin` added last (no param reorder); StrategyPlugin TYPE_CHECKING-only → registry stays empty. Only runtime/state.py changed. |
 | B | B2 | Route _process_trade through plugin.on_bar_closed when a plugin is present, and construct StrategyRuntime with the registered TouchReversalPlugin in a feature-flagged path | NOT STARTED |  |  |  |  |
 | B | B3 | Make the plugin path the default for strategy_id="touch_reversal"; remove the dead hardwired duplicate only after a full green soak | NOT STARTED |  |  |  |  |
 | C | C1 | Repoint TL model_registry import from the local contract copy to strategy_core.contract, keeping today's flat StrategyContract shape | NOT STARTED |  |  |  |  |
@@ -140,6 +141,15 @@ implementation:
 
 ## Change log (newest first)
 
+- **2026-06-08** — Phase B Step B1 landed on `platform-refactor`, commit `<b1-sha>`. Additive
+  keyword-only `plugin: StrategyPlugin | None = None` on `StrategyRuntime.__init__` (stored as
+  `self._plugin`); the hardwired touch fold in `_process_trade` is wrapped in `if self._plugin is None:`
+  (verbatim block, +4 indentation only) with an `else: pass` B2 placeholder. `StrategyPlugin` imported
+  TYPE_CHECKING-only so `import strategy_core` still leaves the registry empty. ONLY `runtime/state.py`
+  changed. Harnesses: full SC suite 140 passed; None-path tests (test_runtime_state/touches/touch_zones/levels)
+  green; TL test_strategy_core_acceptance + test_strategy_core_replay_integration 3 passed vs branch SC;
+  GATE test_production_pair_parity + test_duckdb_streaming_parity + test_decision_diff 3 passed (data present);
+  ruff clean. Verified by a 4-agent adversarial workflow (all pass, high confidence).
 - **2026-06-08** — Phase A (A1–A3) landed on branch `platform-refactor`, commit `68eef26`.
   Additive + unwired plugin SDK: `strategies/protocols.py` (StrategyPlugin/PlatformContext/
   BarSpec/SetupState/DecisionEvent/Barrier/StrategyStep/FeatureSpec/LabelPolicySpec/
