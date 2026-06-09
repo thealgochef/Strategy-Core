@@ -1,0 +1,77 @@
+{
+  "days": {
+    "2025-07-10": {
+      "day": "2025-07-10",
+      "n_trades": 247828,
+      "seq_sha256": "a4b1a9c61168941e6daf533ba4ef311e5f18975b8c386afc2c490b530049ad6d",
+      "skip": false,
+      "snapshot_sha256": "b2cd887bdd9561ac53b66bd55f7894b7ae5da3763bb64b470fb42cb1252d9128",
+      "touches": 4
+    },
+    "2025-07-11": {
+      "day": "2025-07-11",
+      "n_trades": 292586,
+      "seq_sha256": "fbbcab9d32c060876e41ef28aeefe7bc14a80e6444392c9f6198de24b2174bd3",
+      "skip": false,
+      "snapshot_sha256": "4657ea4c6156423d4d423966a1888e57e7d4c372ee77c8231e8795ad533f17f4",
+      "touches": 3
+    },
+    "2025-07-14": {
+      "day": "2025-07-14",
+      "n_trades": 263663,
+      "seq_sha256": "4142a773511ff955448aea849b22efee124a2ee85719baa2b302c1e79fe66fc6",
+      "skip": false,
+      "snapshot_sha256": "d91f961d830f604b0660bf685ce3819415b4f5cd26d9f34cab7d7c54e9c58acd",
+      "touches": 6
+    },
+    "2025-07-15": {
+      "day": "2025-07-15",
+      "n_trades": 339997,
+      "seq_sha256": "dbdee4f2023c062f6e6d99a63f6631208dd19ed474e7aeac0b92198c0decbbb8",
+      "skip": false,
+      "snapshot_sha256": "a85d73a05b79b13c4db10314b324face5d3091882fb7d059fcf0c194d9346a40",
+      "touches": 4
+    },
+    "2025-07-16": {
+      "day": "2025-07-16",
+      "n_trades": 362141,
+      "seq_sha256": "6520d1b2406371c7015c226092d701911a5b35e5b3b323bf82fb1116c5a4593f",
+      "skip": false,
+      "snapshot_sha256": "43e265a983b632132f1f3ee75f74f62555202c808c12aa0fd2804697c43e0d4d",
+      "touches": 5
+    },
+    "2025-07-17": {
+      "day": "2025-07-17",
+      "n_trades": 279919,
+      "seq_sha256": "c7aad9b3d3d52b4b36ac60c4e13666142ea8b96979a37c9995c6c89ff0f3432c",
+      "skip": false,
+      "snapshot_sha256": "1b9fc98f917a2a34efddd69b8bcac8503be2346ed216752bfd6f464c777b172a",
+      "touches": 4
+    },
+    "2025-07-18": {
+      "day": "2025-07-18",
+      "n_trades": 273353,
+      "seq_sha256": "ffb94186b0edacefe01aeb42ed7dcff77be4946380fd8ec84253795a577f971f",
+      "skip": false,
+      "snapshot_sha256": "28242078d46ad553439c487e9b4e97e5f9de44e35da6cb1b86b5b150fce91a9b",
+      "touches": 5
+    },
+    "2025-07-21": {
+      "day": "2025-07-21",
+      "n_trades": 242286,
+      "seq_sha256": "161c88bb7d28953036b205ae4bac1b9664596b67310090446fd31183a24c0e4f",
+      "skip": false,
+      "snapshot_sha256": "06771b255e913723a16336a6103029b4b29c6887e1c19d5750b7fc3403bf2100",
+      "touches": 6
+    },
+    "2025-07-22": {
+      "day": "2025-07-22",
+      "n_trades": 336902,
+      "seq_sha256": "730961629ea043d17339950482673ec33a35b679a74e3bb831c5b88e76f06aa5",
+      "skip": false,
+      "snapshot_sha256": "bea0e14de61a36b6074045f8075143a290b9e998253fa2f8746bf3a2d1044b54",
+      "touches": 5
+    }
+  },
+  "seeding": "multiday_reset_bracketed_real_prior_day"
+}

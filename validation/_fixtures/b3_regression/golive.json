@@ -1,0 +1,19 @@
+{
+  "days": {
+    "2025-07-07": {
+      "day": "2025-07-07",
+      "n_trades": 306103,
+      "seq_sha256": "b0de7a306097c81c20567e65ce973c5c5d636c6a4716e840857a0f7f465728e2",
+      "snapshot_sha256": "e067f4aeeeff74399b3d081f27b94216ffac16aa51550762863b995bd1761488",
+      "touches": 5
+    },
+    "2025-07-15": {
+      "day": "2025-07-15",
+      "n_trades": 339997,
+      "seq_sha256": "03e4be3b995172ef222314a09009e76999869ea7df21719e998b8f376ba01d85",
+      "snapshot_sha256": "f36a836ee61a7fca5548b973e8e144764a8fe7c2a1bd01a7bade2ee1b552deca",
+      "touches": 5
+    }
+  },
+  "seeding": "golive_synthetic_inside_range_pdh_pdl"
+}

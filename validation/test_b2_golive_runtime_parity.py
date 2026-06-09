@@ -1,19 +1,15 @@
-"""B2 go-live gate: flag-ON == flag-OFF on REAL data, THROUGH StrategyRuntime.process_event.
+"""B3 plugin-path REGRESSION (go-live days): the plugin path reproduces the canonical digests.
 
-This is B2's DONE gate. PART 1's seam harness proved the plugin path byte-identical to the
-None path on a SYNTHETIC single-zone stream; this replays REAL NQ trading days through TWO
-runtimes — one built flag-OFF (the verbatim None path), one built flag-ON (the registered
-``touch_reversal`` plugin, via the SAME ``touch_reversal_kwargs()`` helper Trade-Lab now uses)
-— and asserts the ``RuntimeUpdate`` sequence is identical per trade.
+(Originally the B2 go-live OFF-vs-ON parity gate. B3 removed the hardwired None path, so there
+is no comparator runtime any more. This re-runs the registered ``touch_reversal`` plugin over
+the same real NQ days + synthetic inside-range PDH/PDL seeding and asserts the per-trade
+``RuntimeUpdate.to_dict()`` sequence digest + touch count + final-snapshot digest match the
+canonical fixtures in ``validation/_fixtures/b3_regression/golive.json``. Those digests were
+FROZEN from the final green run while ``plugin == None`` was still provable — so they ARE the
+canonical (former None-path) behavior, and matching them proves the removal changed nothing.)
 
-This is on-vs-off SELF-parity through the runtime (W3): both call the same decision functions,
-so on==off transitively gives plugin==canonical (the decision-fn gates already pin canonical).
-It exercises the breadth the synthetic harness did NOT: trade-built asia/london session levels
-(availability-gated), prior-day PDH/PDL (W4 load_prior_day_summary propagation), merged zones,
-and multiple zones in one day.
-
-Real-store data: ``C:/Users/gonza/Documents/Trade-Dashboard/data/databento/NQ/<DATE>/mbp10.parquet``.
-Skips cleanly if the store is absent. Reads parquet directly (pandas) — no alpha_lab dependency.
+Real-store data: ``Trade-Dashboard/data/databento/NQ/<DATE>/mbp10.parquet``. Skips if absent.
+Also exposes ``_read_trades`` / ``_window`` / ``DATA_DIR`` for the multi-day regression to reuse.
 
 Run:    python validation/test_b2_golive_runtime_parity.py
 pytest: pytest validation/test_b2_golive_runtime_parity.py
@@ -21,13 +17,13 @@ pytest: pytest validation/test_b2_golive_runtime_parity.py
 
 from __future__ import annotations
 
-import os
 from datetime import date, timedelta
 from pathlib import Path
 
 import pandas as pd
 
-from strategy_core.config import PLUGIN_ROUTING_ENV
+from _b3_regression_util import GOLIVE_DAYS, golive_day_digest, load_fixture
+
 from strategy_core.runtime.state import StrategyRuntime
 from strategy_core.runtime.wiring import touch_reversal_kwargs
 from strategy_core.types import Trade
@@ -38,8 +34,8 @@ if not DATA_DIR.exists():
 SYMBOL = "NQ"
 TICK_SIZE = 0.25
 DECISION_TF = 147
-# Liquid days confirmed present by the standing production-pair gate.
-SAMPLE_DAYS = ["2025-07-15", "2025-07-07"]
+
+_DIGEST_KEYS = ("n_trades", "touches", "seq_sha256", "snapshot_sha256")
 
 
 def _window(day: str):
@@ -83,94 +79,50 @@ def _read_trades(day: str) -> list[Trade]:
     ]
 
 
-def _build_runtime(flag_on: bool) -> StrategyRuntime:
-    prev = os.environ.get(PLUGIN_ROUTING_ENV)
-    os.environ[PLUGIN_ROUTING_ENV] = "1" if flag_on else ""
-    try:
-        return StrategyRuntime(
-            requested_symbol=SYMBOL,
-            timeframes=(DECISION_TF,),
-            decision_timeframe=DECISION_TF,
-            **touch_reversal_kwargs(),
-        )
-    finally:
-        if prev is None:
-            os.environ.pop(PLUGIN_ROUTING_ENV, None)
-        else:
-            os.environ[PLUGIN_ROUTING_ENV] = prev
+def _build_runtime() -> StrategyRuntime:
+    """The production plugin runtime (touch_reversal attached via the unconditional helper)."""
+    return StrategyRuntime(
+        requested_symbol=SYMBOL,
+        timeframes=(DECISION_TF,),
+        decision_timeframe=DECISION_TF,
+        **touch_reversal_kwargs(),
+    )
 
 
-def run_day(day: str) -> dict:
-    trades = _read_trades(day)
-    if not trades:
-        return {"day": day, "skip": True}
-    prev, _, _ = _window(day)
-    ticks = [t.price_ticks for t in trades]
-    lo, hi = min(ticks), max(ticks)
-    span = hi - lo
-    # Prior-day PDH/PDL placed INSIDE the day's range so they are touchable (exercises
-    # load_prior_day_summary propagation + PDH/PDL zones on top of the trade-built session levels).
-    pdh = lo + round(0.66 * span)
-    pdl = lo + round(0.33 * span)
-
-    off = _build_runtime(flag_on=False)
-    on = _build_runtime(flag_on=True)
-    assert off._plugin is None and on._plugin is not None
-    for rt in (off, on):
-        rt.load_prior_day_summary(prev, high_ticks=pdh, low_ticks=pdl)
-
-    touches = 0
-    zones_seen = 0
-    for tr in trades:
-        ua = off.process_event(tr)
-        ub = on.process_event(tr)
-        if ua != ub:
-            # Surface a readable diff via the serialized form on the first divergence.
-            assert ua.to_dict() == ub.to_dict(), f"plugin path diverged on {day} at {tr.event_ts_utc}"
-            raise AssertionError(f"RuntimeUpdate diverged on {day} at {tr.event_ts_utc}")
-        if ua.touches:
-            assert ua.to_dict() == ub.to_dict()  # spec-explicit cross-check on touch-bearing updates
-            touches += len(ua.touches)
-        zones_seen = max(zones_seen, len(ua.zones))
-
-    snap_off, snap_on = off.snapshot(), on.snapshot()
-    assert snap_off.to_dict() == snap_on.to_dict(), f"final snapshot diverged on {day}"
-    return {"day": day, "skip": False, "trades": len(trades), "touches": touches,
-            "max_zones": zones_seen, "final_touches": len(snap_on.touches)}
-
-
-def test_b2_golive_runtime_parity():
+def test_b3_golive_plugin_regression():
     import pytest
 
     if not DATA_DIR.exists():
         pytest.skip(f"databento store not available at {DATA_DIR}")
-    ran = 0
-    total_touches = 0
-    for day in SAMPLE_DAYS:
-        r = run_day(day)
-        if r.get("skip"):
+    fixture = load_fixture("golive")["days"]
+    matched = 0
+    for day in GOLIVE_DAYS:
+        dig = golive_day_digest(_build_runtime(), day, _read_trades, _window)
+        if dig is None:
             continue
-        ran += 1
-        total_touches += r["touches"]
-        # off == on already asserted per trade in run_day; sanity that the day was non-trivial.
-        assert r["max_zones"] >= 1, r
-    if ran == 0:
-        pytest.skip("no sample days available in the local store")
-    # The gate is only meaningful if the plugin/touch path actually fired on real data.
-    assert total_touches > 0, "no touches across the sampled days — gate would be vacuous"
+        assert day in fixture, f"no frozen digest for {day}"
+        assert {k: dig[k] for k in _DIGEST_KEYS} == {k: fixture[day][k] for k in _DIGEST_KEYS}, (
+            f"plugin-path digest diverged from the frozen canonical on {day}: "
+            f"{ {k: dig[k] for k in _DIGEST_KEYS} } vs { {k: fixture[day][k] for k in _DIGEST_KEYS} }"
+        )
+        matched += 1
+    if matched == 0:
+        pytest.skip("no go-live days available in the local store")
 
 
 if __name__ == "__main__":
     import warnings
 
     warnings.simplefilter("ignore")
-    print(f"B2 go-live: flag-OFF (None path) == flag-ON (touch_reversal plugin) through StrategyRuntime\n"
+    fixture = load_fixture("golive")["days"]
+    print("B3 go-live plugin-path regression vs frozen canonical digests\n"
           f"store = {DATA_DIR}\n")
-    for day in SAMPLE_DAYS:
-        r = run_day(day)
-        if r.get("skip"):
+    for day in GOLIVE_DAYS:
+        dig = golive_day_digest(_build_runtime(), day, _read_trades, _window)
+        if dig is None:
             print(f"  {day}: NO DATA")
             continue
-        print(f"  {day}: trades={r['trades']} touches={r['touches']} "
-              f"max_zones={r['max_zones']} final_touches={r['final_touches']}  ->  OFF == ON [OK]")
-    print("\nVERDICT: plugin path byte-identical to the None path on real data (flag on vs off).")
+        ok = {k: dig[k] for k in _DIGEST_KEYS} == {k: fixture[day][k] for k in _DIGEST_KEYS}
+        print(f"  {day}: trades={dig['n_trades']} touches={dig['touches']} "
+              f"seq={dig['seq_sha256'][:12]}…  -> {'MATCH' if ok else 'DIVERGED'}")
+    print("\nVERDICT: plugin path reproduces the canonical (former None-path) digests.")

@@ -13,16 +13,17 @@ from strategy_core.constants import DEFAULT_TICK_SIZE, RESEARCH_SESSION_SCHEME
 from strategy_core.data.events import DataQualityWarning, safe_text
 from strategy_core.decisions.dedup import ZoneKey, zone_key
 from strategy_core.decisions.sessions import classify_session
-from strategy_core.decisions.touch import detect_touches
 from strategy_core.runtime.context import RuntimePlatformContext, point_value_for_symbol
 from strategy_core.runtime.levels import StrategyLevelState
 from strategy_core.types import Bar, Quote, SessionScheme, Touch, Trade, Zone, Level
 
 if TYPE_CHECKING:
     # Annotation-only (under `from __future__ import annotations`): importing the plugin
-    # protocol here would NOT execute at runtime, so `import strategy_core` still imports
-    # nothing from the strategies package and the registry stays empty. The B1 `plugin`
-    # param is dead in production (defaults to None) until B2 wires the routing.
+    # protocol here would NOT execute at runtime, so a bare `import strategy_core` still
+    # imports nothing from the strategies package and the registry stays empty until a
+    # runtime is constructed — at which point the touch_reversal plugin is auto-attached
+    # (B3: the plugin is the sole path; the `plugin` param is optional only to allow a
+    # caller to inject a specific plugin, else the default is attached).
     from strategy_core.strategies.protocols import StrategyPlugin
 
 __all__ = ["FeedStatus", "RuntimeSnapshot", "RuntimeUpdate", "StrategyRuntime"]
@@ -195,8 +196,26 @@ class StrategyRuntime:
         self.requested_symbol = requested_symbol
         self.tick_size = tick_size
         self.scheme = scheme
-        # B1: dead in production — `plugin` defaults to None, so _process_trade runs the
-        # verbatim hardwired touch fold. B2 routes through plugin.on_bar_closed when set.
+        # B3: the touch strategy runs ONLY through the plugin — the hardwired None path is
+        # gone, so ``self._plugin`` must ALWAYS be present. A runtime constructed without an
+        # explicit plugin auto-attaches the registered ``touch_reversal`` plugin (+ its
+        # default section), per PLAN §7 B3 ("plugin defaults to the registered touch plugin").
+        # The default section uses RESEARCH_SESSION_SCHEME; a non-default scheme MUST supply
+        # its own plugin+section so the plugin's level state cannot silently diverge from the
+        # runtime's ``level_state`` (fail-loud rather than wrong).
+        if plugin is None:
+            if scheme != RESEARCH_SESSION_SCHEME:
+                raise ValueError(
+                    "StrategyRuntime auto-attaches the default touch_reversal plugin "
+                    "(RESEARCH_SESSION_SCHEME); pass an explicit plugin + strategy_section "
+                    "to run a non-default session scheme."
+                )
+            from strategy_core.runtime.wiring import touch_reversal_kwargs
+
+            _defaults = touch_reversal_kwargs()
+            plugin = _defaults["plugin"]
+            if strategy_section is None:
+                strategy_section = _defaults["strategy_section"]
         self._plugin = plugin
         self.candles = CandleEngine(timeframes, scheme=scheme)
         self.decision_timeframe = decision_timeframe or min(timeframes)
@@ -211,9 +230,8 @@ class StrategyRuntime:
         self._touched_zone_keys: set[tuple[date, tuple[str, ...], float, str]] = set()
         self._metadata: dict[str, Any] = {}
         self._feed_status = FeedStatus(state="disconnected", mode="idle", requested_symbol=requested_symbol, last_message="Market-data feed is not started.")
-        # B2: the platform context the plugin reads. INERT on the None path (never read
-        # there). Backed by live accessors so closed_bars/current_bar/session_at reflect
-        # current runtime state across reset(). configure() the plugin if one was supplied.
+        # The platform context the plugin reads. Backed by live accessors so
+        # closed_bars/current_bar/session_at reflect current runtime state across reset().
         self._ctx = RuntimePlatformContext(
             tick_size=tick_size,
             point_value=point_value_for_symbol(requested_symbol),
@@ -221,7 +239,9 @@ class StrategyRuntime:
             get_closed_bars=lambda: self._recent_closed_bars,
             get_scheme=lambda: self.scheme,
         )
-        if self._plugin is not None and strategy_section is not None:
+        # The plugin is mandatory now (auto-attached above when not supplied); configure it
+        # from the default or supplied section.
+        if strategy_section is not None:
             self._plugin.configure(strategy_section, self._ctx)
 
     def reset(self, *, requested_symbol: str | None = None) -> RuntimeUpdate:
@@ -229,8 +249,7 @@ class StrategyRuntime:
             self.requested_symbol = requested_symbol
         self.candles = CandleEngine(self.candles.timeframes, scheme=self.scheme)
         self.level_state.reset()
-        if self._plugin is not None:
-            self._plugin.reset()  # W4: keep the plugin's level state in lockstep with reset
+        self._plugin.reset()  # keep the plugin's level state in lockstep with reset
         self._recent_closed_bars.clear()
         self._warnings.clear()
         self._touches.clear()
@@ -243,14 +262,12 @@ class StrategyRuntime:
 
     def set_static_levels(self, levels: tuple[Level, ...]) -> None:
         self.level_state.set_static_levels(levels)
-        if self._plugin is not None:
-            self._plugin.set_static_levels(levels)  # W4: mirror onto the plugin's level state
+        self._plugin.set_static_levels(levels)  # mirror onto the plugin's level state
 
     def load_prior_day_summary(self, trading_day: date, *, high_ticks: int, low_ticks: int) -> None:
         self.level_state.load_prior_day_summary(trading_day, high_ticks=high_ticks, low_ticks=low_ticks)
-        if self._plugin is not None:
-            # W4: mirror the prior-day PDH/PDL summary onto the plugin's level state.
-            self._plugin.load_prior_day_summary(trading_day, high_ticks=high_ticks, low_ticks=low_ticks)
+        # mirror the prior-day PDH/PDL summary onto the plugin's level state.
+        self._plugin.load_prior_day_summary(trading_day, high_ticks=high_ticks, low_ticks=low_ticks)
 
     def record_warning(self, warning: DataQualityWarning) -> RuntimeUpdate:
         self._warnings.append(warning)
@@ -300,33 +317,20 @@ class StrategyRuntime:
             if len(self._recent_closed_bars) > self._recent_closed_bar_limit:
                 del self._recent_closed_bars[: len(self._recent_closed_bars) - self._recent_closed_bar_limit]
         levels = self.level_state.process_trade(trade)
-        if self._plugin is not None:
-            # Keep-both-folds (B2 PART 1, deviation 3b): the runtime level fold above stays
-            # for RuntimeUpdate.levels + the snapshot; the plugin folds the SAME trade into
-            # its OWN level state so its on_bar_closed detection sees identical levels (I4d).
-            # B3 collapses this redundancy once the plugin owns the single fold.
-            self._plugin.on_event(trade, self._ctx)
+        # Keep-both-folds (D-B2a — DEFERRED cleanup, split out of B3): the runtime's level
+        # fold above stays for RuntimeUpdate.levels + the snapshot; the plugin folds the SAME
+        # trade into its OWN level state so its on_bar_closed detection sees identical levels.
+        # The follow-up tidy (the last Phase-B step, before C) collapses this redundancy and
+        # moves the once-per-day dedup into the plugin; B3 deliberately leaves both here.
+        self._plugin.on_event(trade, self._ctx)
         touches: list[Touch] = []
-        if self._plugin is None:
-            for bar in candle_update.completed:
-                if bar.timeframe_ticks != self.decision_timeframe:
-                    continue
-                zones = self._zones_for_detection(bar.trading_day)
-                detected = detect_touches((bar,), zones, tick_size=self.tick_size, trading_day=bar.trading_day)
-                for touch in detected:
-                    self._touched_zone_keys.add(self._touch_zone_key_from_touch(touch, zones))
-                touches.extend(detected)
-        else:
-            # Plugin path — mirrors the None branch one-for-one (same loop, same
-            # decision-timeframe gate, same dedup write shape) with detected -> step.touches
-            # and zones -> step.zones, so any divergence is obvious on review.
-            for bar in candle_update.completed:
-                if bar.timeframe_ticks != self.decision_timeframe:
-                    continue
-                step = self._plugin.on_bar_closed(bar, self._ctx, self._touched_zone_keys)
-                for touch in step.touches:
-                    self._touched_zone_keys.add(self._touch_zone_key_from_touch(touch, step.zones))
-                touches.extend(step.touches)
+        for bar in candle_update.completed:
+            if bar.timeframe_ticks != self.decision_timeframe:
+                continue
+            step = self._plugin.on_bar_closed(bar, self._ctx, self._touched_zone_keys)
+            for touch in step.touches:
+                self._touched_zone_keys.add(self._touch_zone_key_from_touch(touch, step.zones))
+            touches.extend(step.touches)
         if touches:
             self._touches.extend(touches)
         session, trading_day = self._session_state()
@@ -339,22 +343,6 @@ class StrategyRuntime:
             zones=tuple(self._zones_for_snapshot(trading_day)),
             touches=tuple(touches),
         )
-
-    def _zones_for_detection(self, trading_day: date) -> list[Zone]:
-        # audit #3: build zones from ALL current levels -- do NOT pre-filter by
-        # availability before build_zones. Pre-filtering diverged from canonical
-        # merge-all / gate-each-zone-on-MAX semantics and from the snapshot path
-        # (_zones_for_snapshot below). detect_touches (decisions/touch.py:93) already
-        # gates each zone on ``bar.close_ts_utc < zone.available_from``, so the v3
-        # look-ahead protection is preserved while zone composition now matches
-        # canonical (and _zones_for_snapshot's unfiltered build).
-        from strategy_core.decisions.zones import build_zones
-
-        zones = build_zones(list(self.level_state.levels()))
-        for zone in zones:
-            if self._zone_key(trading_day, zone) in self._touched_zone_keys:
-                zone.touched = True
-        return zones
 
     def _zones_for_snapshot(self, trading_day: date | None) -> list[Zone]:
         zones = self.level_state.zones()
