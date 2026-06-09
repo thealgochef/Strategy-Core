@@ -11,8 +11,10 @@ from typing import TYPE_CHECKING, Any
 from strategy_core.candles.streaming import CandleEngine
 from strategy_core.constants import DEFAULT_TICK_SIZE, RESEARCH_SESSION_SCHEME
 from strategy_core.data.events import DataQualityWarning, safe_text
+from strategy_core.decisions.dedup import ZoneKey, zone_key
 from strategy_core.decisions.sessions import classify_session
 from strategy_core.decisions.touch import detect_touches
+from strategy_core.runtime.context import RuntimePlatformContext, point_value_for_symbol
 from strategy_core.runtime.levels import StrategyLevelState
 from strategy_core.types import Bar, Quote, SessionScheme, Touch, Trade, Zone, Level
 
@@ -188,6 +190,7 @@ class StrategyRuntime:
         recent_closed_bar_limit: int = 500,
         warning_limit: int = 100,
         plugin: StrategyPlugin | None = None,
+        strategy_section: Any | None = None,
     ) -> None:
         self.requested_symbol = requested_symbol
         self.tick_size = tick_size
@@ -208,6 +211,18 @@ class StrategyRuntime:
         self._touched_zone_keys: set[tuple[date, tuple[str, ...], float, str]] = set()
         self._metadata: dict[str, Any] = {}
         self._feed_status = FeedStatus(state="disconnected", mode="idle", requested_symbol=requested_symbol, last_message="Market-data feed is not started.")
+        # B2: the platform context the plugin reads. INERT on the None path (never read
+        # there). Backed by live accessors so closed_bars/current_bar/session_at reflect
+        # current runtime state across reset(). configure() the plugin if one was supplied.
+        self._ctx = RuntimePlatformContext(
+            tick_size=tick_size,
+            point_value=point_value_for_symbol(requested_symbol),
+            get_candles=lambda: self.candles,
+            get_closed_bars=lambda: self._recent_closed_bars,
+            get_scheme=lambda: self.scheme,
+        )
+        if self._plugin is not None and strategy_section is not None:
+            self._plugin.configure(strategy_section, self._ctx)
 
     def reset(self, *, requested_symbol: str | None = None) -> RuntimeUpdate:
         if requested_symbol is not None:
@@ -278,6 +293,12 @@ class StrategyRuntime:
             if len(self._recent_closed_bars) > self._recent_closed_bar_limit:
                 del self._recent_closed_bars[: len(self._recent_closed_bars) - self._recent_closed_bar_limit]
         levels = self.level_state.process_trade(trade)
+        if self._plugin is not None:
+            # Keep-both-folds (B2 PART 1, deviation 3b): the runtime level fold above stays
+            # for RuntimeUpdate.levels + the snapshot; the plugin folds the SAME trade into
+            # its OWN level state so its on_bar_closed detection sees identical levels (I4d).
+            # B3 collapses this redundancy once the plugin owns the single fold.
+            self._plugin.on_event(trade, self._ctx)
         touches: list[Touch] = []
         if self._plugin is None:
             for bar in candle_update.completed:
@@ -289,9 +310,16 @@ class StrategyRuntime:
                     self._touched_zone_keys.add(self._touch_zone_key_from_touch(touch, zones))
                 touches.extend(detected)
         else:
-            # B2: route through self._plugin.on_bar_closed(...) and map its touches back
-            # onto `touches`. No-op in B1 (the plugin path is dead until B2).
-            pass
+            # Plugin path — mirrors the None branch one-for-one (same loop, same
+            # decision-timeframe gate, same dedup write shape) with detected -> step.touches
+            # and zones -> step.zones, so any divergence is obvious on review.
+            for bar in candle_update.completed:
+                if bar.timeframe_ticks != self.decision_timeframe:
+                    continue
+                step = self._plugin.on_bar_closed(bar, self._ctx, self._touched_zone_keys)
+                for touch in step.touches:
+                    self._touched_zone_keys.add(self._touch_zone_key_from_touch(touch, step.zones))
+                touches.extend(step.touches)
         if touches:
             self._touches.extend(touches)
         session, trading_day = self._session_state()
@@ -331,8 +359,10 @@ class StrategyRuntime:
         return zones
 
     @staticmethod
-    def _zone_key(trading_day: date, zone: Zone) -> tuple[date, tuple[str, ...], float, str]:
-        return (trading_day, zone.names, zone.representative_price, zone.side.value)
+    def _zone_key(trading_day: date, zone: Zone) -> ZoneKey:
+        # Delegate to the single-sourced key (I3) so the runtime and the plugin cannot
+        # drift. The result is identical to the prior inline body.
+        return zone_key(trading_day, zone)
 
     def _touch_zone_key_from_touch(self, touch: Touch, zones: list[Zone]) -> tuple[date, tuple[str, ...], float, str]:
         for zone in zones:

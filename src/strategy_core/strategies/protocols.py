@@ -35,13 +35,14 @@ What lives here (PLAN §2.2, the full plugin surface):
 
 from __future__ import annotations
 
-from collections.abc import Mapping, Sequence
+from collections.abc import Mapping, Sequence, Set as AbstractSet
 from dataclasses import dataclass
 from datetime import datetime, time
 from enum import StrEnum
 from typing import Any, Protocol, runtime_checkable
 
-from strategy_core.types import Bar, Quote, Trade
+from strategy_core.decisions.dedup import ZoneKey
+from strategy_core.types import Bar, Quote, Touch, Trade, Zone
 
 __all__ = [
     "BarKind",
@@ -181,6 +182,12 @@ class StrategyStep:
     setups: tuple[SetupState, ...] = ()
     decisions: tuple[DecisionEvent, ...] = ()
     features: tuple[Mapping[str, float], ...] = ()
+    #: B2: the raw engine touches this bar produced and the (post-detection) zones they
+    #: came from, so the platform runtime can fold them onto ``RuntimeUpdate.touches`` and
+    #: compute the cross-bar dedup key off the same zones. Both default empty so the step
+    #: stays default-constructible.
+    touches: tuple[Touch, ...] = ()
+    zones: tuple[Zone, ...] = ()
 
 
 # ── Declarations consumed by the platform + consumers ─────────────────────────
@@ -272,8 +279,17 @@ class StrategyPlugin(Protocol):
         """Fold a trade/quote; return any setup-state deltas."""
         ...
 
-    def on_bar_closed(self, bar: Bar, ctx: PlatformContext) -> StrategyStep:
-        """Fold a closed bar; return the sparse strategy delta (setups/decisions/features)."""
+    def on_bar_closed(
+        self, bar: Bar, ctx: PlatformContext, already_fired_keys: AbstractSet[ZoneKey]
+    ) -> StrategyStep:
+        """Fold a closed bar; return the sparse strategy delta (setups/decisions/features/touches/zones).
+
+        ``already_fired_keys`` is the cross-bar first-touch dedup set the PLATFORM owns
+        (the runtime's ``_touched_zone_keys``). The plugin pre-marks its zones from it
+        (so an already-fired zone does not re-fire) using the shared
+        ``strategy_core.decisions.dedup.zone_key``, and MUST NOT mutate it — the platform
+        records newly-fired keys after this returns.
+        """
         ...
 
     # ---- declarations consumed by platform + consumers ----

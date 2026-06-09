@@ -25,10 +25,10 @@ deviations.
 ## Current state
 
 - **Active phase:** B in progress.
-- **Next step:** B2.
-- **Drift-net status:** B1: None-path byte-identical (char-level proof + green None-path tests); full SC suite 140 passed; TL cross-runtime acceptance + replay 3 passed vs branch SC; money-path GATE harnesses (test_production_pair_parity, test_duckdb_streaming_parity, test_decision_diff) ran GREEN this session (local databento store + alpha_lab present). Verified 2026-06-08.
+- **Next step:** B2 PART 2 (wire-up).
+- **Drift-net status:** B2 PART 1 (seam): plugin-path byte-identical to the None path across MULTIPLE bars incl. cross-bar first-touch suppression (test_b2_plugin_seam_parity); full SC suite 141 passed; ruff clean; I1–I4 verified by a 5-agent adversarial workflow (all pass, high confidence). Money-path GATE harnesses NOT re-run for PART 1 (the plugin path is test-only; production/TL construction is unchanged and takes the verbatim None path) — they are the PART-2 flag-on gate. Verified 2026-06-08.
 - **Last-verified date:** 2026-06-08
-- **Note (B2 gating):** B2 is gated on (a) the local data/model zip for the money-path GATE harnesses and (b) the architect's design decision on gate/dedup placement (how much touch logic moves into the plugin vs stays in the runtime) — B2 must not start until both are resolved. (Re (a): the GATE store/data was confirmed present and the GATE harnesses ran green this session; (b) the gate/dedup placement decision — esp. the cross-bar `_touched_zone_keys` first-touch dedup, per deviation D-A3d — remains OPEN and is required before B2.)
+- **Note (B2 PART 2 gating):** PART 2 (wire: feature flag + production/TL construction through the plugin + money-path GATE flag-on) is gated on (a) the architect's gate/dedup-placement decision — now informed by `b2_context.md` (the once-per-day `_touched_zone_keys` dedup is RUNTIME-owned: write @state.py:289, read @state.py:320 & :329; the plugin only READS it via `already_fired_keys`); AND (b) wiring `reset()` / `set_static_levels` / `load_prior_day_summary` propagation to the plugin's level state (PART 1 proves byte-identity only for the no-reset streaming path; the seam test seeds the plugin manually). PART 2 must not flip the construction flag until both are resolved.
 
 ---
 
@@ -108,10 +108,46 @@ implementation:
 - **D-A3e (A3):** `touch_reversal/__init__.py` imports the plugin so importing the PACKAGE
   registers it (PLAN §5.2). `strategy_core/__init__.py` and `strategy_core/strategies/__init__.py`
   remain import-free, so NO `import strategy_core` path registers a plugin (verified).
-- **D-A3f (A3):** the new test file adds 4 companion assertions beyond the required
+- **D-A3f (A3):** the A3 test file adds 4 companion assertions beyond the required
   equivalence test (non-decision-bar → empty step; registry resolves + fails closed;
-  section `extra="forbid"`; declarations match engine constants). All live in the one new
-  test file, which remains the SOLE importer of the plugin.
+  section `extra="forbid"`; declarations match engine constants). As of B2 PART 1 the
+  plugin has TWO importers: the A3 test and the B2 seam-parity test (no production path).
+
+### Phase B — deviations / clarifications (B2 PART 1, additive)
+
+- **D-B2a (3b keep-both-folds):** on the plugin path the runtime KEEPS its level fold
+  (`level_state.process_trade`, feeding `RuntimeUpdate.levels` + the snapshot) AND adds the
+  plugin's `on_event` fold into the plugin's OWN level state (feeding its detection).
+  Redundant by design; B3 collapses it once the plugin owns the single fold.
+- **D-B2b (dedup stays runtime-owned):** the cross-bar `_touched_zone_keys` set stays the
+  RUNTIME's; the plugin only READS it (the new `already_fired_keys` param) to pre-mark its
+  zones and never mutates it. FORCED because the end-of-`_process_trade` snapshot pre-marks
+  off `_touched_zone_keys` (not only detection), so the platform must own the set. The final
+  placement (runtime vs plugin) is the open architect decision (see b2_context.md).
+- **D-B2c (single-sourced zone key, I3):** new `strategy_core/decisions/dedup.py` hoists the
+  zone-identity key; `StrategyRuntime._zone_key` delegates to it and the plugin pre-marks
+  with it, so the two cannot drift.
+- **D-B2d:** `StrategyStep` gained `touches`/`zones` (both defaulted; still
+  default-constructible); `StrategyPlugin.on_bar_closed` gained `already_fired_keys:
+  AbstractSet[ZoneKey]`; new `strategy_core/runtime/context.py` `RuntimePlatformContext`
+  (backed by live getters so it survives `reset()`); `StrategyRuntime.__init__` gained a
+  trailing `strategy_section` param + builds an inert `self._ctx`. The A3 test's
+  `on_bar_closed` calls now pass `frozenset()`. `AbstractSet` is imported as
+  `collections.abc.Set as AbstractSet` (the spec's `collections.abc.AbstractSet` does not exist).
+- **D-B2e (I4b precondition):** the seam harness pins `section.touch_rule.zone_proximity_pts
+  == build_zones' default (ZONE_PROXIMITY_PTS)` — the byte-identity precondition between the
+  plugin's section-driven zones and the runtime's default-proximity zones.
+
+**PART 2 (wire) requirements surfaced by PART 1 (must land before flag-on):**
+
+- `StrategyRuntime.reset()` does NOT call `self._plugin.reset()`, and
+  `set_static_levels` / `load_prior_day_summary` write only to `self.level_state`, not the
+  plugin's `self._plugin._levels`. PART 1's byte-identity is proven only for the no-reset
+  streaming path (the seam test seeds the plugin manually). PART 2 MUST wire reset +
+  level-seed propagation to the plugin, or the drift net diverges when the construction flag
+  flips. (Completeness-critic minor.)
+- PART 2 adds the feature flag, production/TL construction through the plugin, and the
+  money-path GATE harnesses run flag-on.
 
 ---
 
@@ -123,7 +159,7 @@ implementation:
 | A | A2 | Introduce the registry (@register + get_strategy(strategy_id)) in strategy_core/strategies/registry.py, empty | DONE | 2026-06-08 | `68eef26` | golden suite (12) + A3 test all green; unwired-invariant check green | §9.1 registry-time assertion (isinstance StrategyPlugin + BarSpec tuple + SectionModel BaseModel); fail-closed get_strategy. Registry stays empty on `import strategy_core`. |
 | A | A3 | Author TouchReversalSection SectionModel + a TouchReversalPlugin that wraps the existing functions, registered but not yet wired into the runtime | DONE | 2026-06-08 | `68eef26` | test_touch_reversal_plugin (5 incl. equivalence) + golden suite (12) green | Wraps build_zones→detect_touches verbatim; plugin owns level state (R1); scheme←section (R2, D-A3a); decision tf as config (R3, D-A3b). D-A3c..f. |
 | B | B1 | Add an optional plugin param to StrategyRuntime.__init__, defaulting to None; when None, run the exact current state.py:271-280 block | DONE | 2026-06-08 | `1491921` | full SC suite 140 passed (incl. test_runtime_state/touches/touch_zones/levels + A3 test_touch_reversal_plugin); TL test_strategy_core_acceptance + test_strategy_core_replay_integration (3 passed vs branch SC); GATE test_production_pair_parity + test_duckdb_streaming_parity + test_decision_diff (3 passed, store+alpha_lab present) | None-path byte-identical (inner lines unchanged, +4 indent only); else = no-op `pass` (B2 placeholder); `plugin` added last (no param reorder); StrategyPlugin TYPE_CHECKING-only → registry stays empty. Only runtime/state.py changed. |
-| B | B2 | Route _process_trade through plugin.on_bar_closed when a plugin is present, and construct StrategyRuntime with the registered TouchReversalPlugin in a feature-flagged path | NOT STARTED |  |  |  |  |
+| B | B2 | Route _process_trade through plugin.on_bar_closed when a plugin is present, and construct StrategyRuntime with the registered TouchReversalPlugin in a feature-flagged path | IN PROGRESS | 2026-06-08 | `<b2p1-sha>` | full SC suite 141 passed (incl. None-path golden test_runtime_state/touches/touch_zones/levels + A3); test_b2_plugin_seam_parity (multi-bar plugin-path == None-path incl. cross-bar suppression); ruff clean | PART 1/2 (seam) landed; PART 2 (wire: feature flag + production/TL construction + money-path GATE flag-on) PENDING — stays IN PROGRESS, not DONE. Deviations D-B2a..e + PART-2 reqs below. |
 | B | B3 | Make the plugin path the default for strategy_id="touch_reversal"; remove the dead hardwired duplicate only after a full green soak | NOT STARTED |  |  |  |  |
 | C | C1 | Repoint TL model_registry import from the local contract copy to strategy_core.contract, keeping today's flat StrategyContract shape | NOT STARTED |  |  |  |  |
 | C | C2 | Delete TL's local strategy_contract.py once nothing imports it | NOT STARTED |  |  |  |  |
@@ -141,6 +177,18 @@ implementation:
 
 ## Change log (newest first)
 
+- **2026-06-08** — Phase B Step B2 **PART 1 of 2 (the plugin SEAM)** landed on `platform-refactor`,
+  commit `<b2p1-sha>`. Routes `_process_trade` through `self._plugin.on_bar_closed(bar, ctx,
+  already_fired_keys)` when a plugin is present (else branch), folds each trade into the plugin via
+  `on_event`, and builds an inert `RuntimePlatformContext`. New `decisions/dedup.py` single-sources the
+  cross-bar zone key (I3); `protocols.py` `StrategyStep` += `touches`/`zones` and `on_bar_closed` +=
+  `already_fired_keys`; new `runtime/context.py`. Production/TL construction is UNCHANGED (plugin-less →
+  None path); the plugin path is reachable only from `tests/test_b2_plugin_seam_parity.py`. None-path
+  byte-identical to B1 (I1); registry empty on `import strategy_core` (I2). Harnesses: full SC suite 141
+  passed; the multi-bar seam-parity test proves plugin-path == None-path incl. cross-bar first-touch
+  suppression (a zone fires once across 3 re-straddling bars); ruff clean. Verified by a 5-agent
+  adversarial workflow (I1/I2/I3/I4 + completeness — all pass, high confidence; I4 empirically falsified:
+  1 touch with premark vs 3 without). B2 stays IN PROGRESS — PART 2 (wire-up) pending.
 - **2026-06-08** — Phase B Step B1 landed on `platform-refactor`, commit `1491921`. Additive
   keyword-only `plugin: StrategyPlugin | None = None` on `StrategyRuntime.__init__` (stored as
   `self._plugin`); the hardwired touch fold in `_process_trade` is wrapped in `if self._plugin is None:`

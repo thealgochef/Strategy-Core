@@ -6,12 +6,15 @@ plugin is a thin declaration + dispatch shell that IMPORTS and CALLS the existin
 functions verbatim (PLAN "ADDITIVE COROLLARY": Phase A does NOT physically move
 ``StrategyLevelState``/``build_zones``/``detect_touches`` — it wraps them in place).
 
-Phase A note (PLAN §7 / Step A3): the plugin is registered but **NOT wired into the
-runtime** — ``runtime/state.py:271-280`` is still the live touch path. Importing this
-module is the ONLY thing that registers ``touch_reversal`` (the ``@register`` side
-effect); no ``import strategy_core`` path reaches it. The A3 equivalence test is the
-sole importer, and it proves the wrapper's ``detect_touches`` output is byte-identical
-to a direct ``detect_touches`` call on the same bars+zones.
+Wiring note (PLAN §7 / Steps A3, B2): the plugin is registered but **NOT constructed by
+any production path** — production/Trade-Lab build ``StrategyRuntime`` plugin-less, so the
+verbatim hardwired touch fold is still live. As of B2 PART 1 the runtime CAN route through
+``on_bar_closed`` when a plugin is explicitly passed, but that path is exercised only by
+tests. Importing this module is the ONLY thing that registers ``touch_reversal`` (the
+``@register`` side effect); no ``import strategy_core`` path reaches it. Its only importers
+are the A3 equivalence test (proves ``detect_touches`` output is byte-identical to a direct
+call) and the B2 seam-parity test (proves the runtime plugin-path equals the None path
+across multiple bars, incl. cross-bar suppression).
 
 Authoritative resolutions honored (see PROGRESS "Plan clarifications"):
 * R1 — the plugin OWNS its level state (``self._levels``), configured in
@@ -26,7 +29,7 @@ Authoritative resolutions honored (see PROGRESS "Plan clarifications"):
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Mapping, Set as AbstractSet
 from dataclasses import dataclass
 from datetime import datetime, time, timedelta
 from types import MappingProxyType
@@ -48,6 +51,7 @@ from strategy_core.constants import (
     RUNTIME_APPROACH_FEATURES,
     ZONE_PROXIMITY_PTS,
 )
+from strategy_core.decisions.dedup import ZoneKey, zone_key
 from strategy_core.decisions.touch import detect_touches
 from strategy_core.decisions.zones import build_zones
 from strategy_core.runtime.levels import StrategyLevelState
@@ -233,13 +237,17 @@ class TouchReversalPlugin:
             self._levels.process_trade(event)
         return ()
 
-    def on_bar_closed(self, bar: Bar, ctx: PlatformContext) -> StrategyStep:
+    def on_bar_closed(
+        self, bar: Bar, ctx: PlatformContext, already_fired_keys: AbstractSet[ZoneKey]
+    ) -> StrategyStep:
         # Mirror the hardwired touch fold (state.py:271-280) for ONE decision bar:
         # guard on the decision timeframe, build zones from ALL current levels
-        # (_zones_for_detection core, state.py:300-302), then detect_touches with the
-        # identical call shape (state.py:275). Cross-bar first-touch dedup
-        # (_touched_zone_keys) is runtime bookkeeping that the seam carries in Phase B.
-        if bar.timeframe_ticks != _DECISION_TIMEFRAME:  # state.py:272-273
+        # (_zones_for_detection core, state.py:316-318), PRE-MARK zones already fired this
+        # day from the platform-owned dedup set exactly as _zones_for_detection does
+        # (state.py:319-321) using the SHARED zone_key (I3), then detect_touches with the
+        # identical call shape (state.py:287). The platform records newly-fired keys after
+        # this returns; this method only READS already_fired_keys (never mutates it).
+        if bar.timeframe_ticks != _DECISION_TIMEFRAME:  # state.py:284-285
             return StrategyStep()
         zone_proximity = (
             self._section.touch_rule.zone_proximity_pts
@@ -247,12 +255,18 @@ class TouchReversalPlugin:
             else ZONE_PROXIMITY_PTS
         )
         zones = build_zones(list(self._levels.levels()), zone_proximity_pts=zone_proximity)
+        for zone in zones:
+            if zone_key(bar.trading_day, zone) in already_fired_keys:  # mirrors state.py:319-321
+                zone.touched = True
         touches = detect_touches(
             (bar,), zones, tick_size=ctx.tick_size, trading_day=bar.trading_day
-        )  # state.py:275
+        )  # state.py:287
         setups = tuple(self._setup_for(touch) for touch in touches)
         decisions = tuple(self._decision_for(touch) for touch in touches)
-        return StrategyStep(setups=setups, decisions=decisions, features=())
+        return StrategyStep(
+            setups=setups, decisions=decisions, features=(),
+            touches=tuple(touches), zones=tuple(zones),
+        )
 
     # ---- declarations consumed by platform + consumers ----
     @staticmethod
