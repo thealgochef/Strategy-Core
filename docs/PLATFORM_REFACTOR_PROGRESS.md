@@ -666,7 +666,7 @@ batch 0-based; gate A compares raw, gate B normalizes the tracker's 1-based coun
 Ratified semantics implemented exactly: full honest alignment — the dashboard serves the
 D1a streaming resolver's outcomes; drops are surfaced explicitly with reasons;
 SESSION_END classification retires; entry is the real trade print. The legacy
-`OutcomeTracker` is DELETED. SC PART 1 (`945f381`) is additive; TL PART 2 (`29b5caf`) is
+`OutcomeTracker` is DELETED. SC PART 1 (`945f381`) is additive; TL PART 2 (`94610ff`) is
 the flip.
 
 - **D-D1b-a (SC `resolved_ts_utc` + the documented asymmetry).** `StreamResolution`
