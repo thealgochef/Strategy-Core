@@ -24,8 +24,8 @@ deviations.
 
 ## Current state
 
-- **Active phase:** **Phase B COMPLETE** — S-B3a DONE and committed (SC `f6e9be8` on `platform-refactor`): the plugin owns the SOLE level fold + the first-touch dedup; the runtime's redundant copies are deleted. Next phase: C.
-- **Next step:** C1 (repoint TL `model_registry` onto `strategy_core.contract`).
+- **Active phase:** **Phase B COMPLETE** — S-B3a DONE and committed (SC `f6e9be8` on `platform-refactor`): the plugin owns the SOLE level fold + the first-touch dedup; the runtime's redundant copies are deleted. Post-Phase-B tidy **S-B3b DONE** (protocol seed-path declarations + drift-net file renames + V3-matrix de-stale — D-SB3b-a..c). Next phase: C.
+- **Next step:** C1 (repoint TL `model_registry` onto `strategy_core.contract`). C1 also picks up the deferred TL pin bump (S-B3b has no TL-facing change).
 - **Drift-net status:** **S-B3a DONE (fold-collapse + dedup-into-plugin), byte-identical.** The runtime's `level_state`, `_zones_for_snapshot`, `_touched_zone_keys`/`_zone_key`/`_touch_zone_key_from_touch` are DELETED; `RuntimeUpdate.levels` ← `plugin.on_event` return, snapshot/update `zones` ← `plugin.snapshot_zones`, snapshot `levels` ← `plugin.current_levels`, dedup = plugin-owned `_fired_keys`, touches flow back VERBATIM. Proven against the **FROZEN, UNTOUCHED** B3 digests: `test_b3_golive_plugin_regression` + `test_b3_multiday_reset_plugin_regression` **2 passed** (3,284,775 trades, 8 reset boundaries — every per-trade `to_dict()` + snapshot byte-identical). Full SC suite **144**; TL acceptance+replay **3**; decision-fn gates **2** (UNCHANGED); ruff clean. 5-agent adversarial verify: **5 PASS (all high confidence)**. Verified 2026-06-09 on the final tree.
 - **Last-verified date:** 2026-06-09
 - **Note (release, decision 9.6):** TL's SC SHA pin (`backend/pyproject.toml`) is bumped to the post-S-B3a stamp commit as S-B3a's release step — TL constructs `StrategyRuntime` (collapsed internals) via `runtime/wiring.py`; the editable/working-tree install already resolves it.
@@ -399,6 +399,39 @@ state — explicitly out of scope).
 against the exact reviewed bytes (byte-identical diff comparison at commit time), and
 committed as SC `f6e9be8` on `platform-refactor`.
 
+### Post-Phase-B tidy — S-B3b deviations (protocol seed path + drift-net renames + doc de-stale)
+
+S-B3b closes three recorded debts: S-B3a adversarial-verify items (i) and (ii), and
+D-B3b's cosmetic filename debt. No runtime/plugin behavior change; the frozen digest
+fixtures are untouched. TL/QL untouched — the TL pin bump is deliberately DEFERRED to C1
+(S-B3b has no TL-facing change; the editable install resolves the working tree).
+
+- **D-SB3b-a (protocol declares the seed path — closes verify item ii).** `StrategyPlugin`
+  gained `set_static_levels(levels)` and `load_prior_day_summary(trading_day, *,
+  high_ticks, low_ticks)` in the lifecycle section, mirroring the touch plugin's
+  signatures exactly — the SOLE level-seed path since S-B3a (W4/D-B2j). Because the
+  Protocol is `@runtime_checkable`, the §9.1 registry-time assertion now also requires
+  these methods at registration — deliberate strengthening: a future plugin missing the
+  seed hooks fails at `@register`, not with an `AttributeError` mid-session. The touch
+  plugin already implements both (since B2 PART 2 / D-B2j).
+- **D-SB3b-b (drift-net renames — closes D-B3b's cosmetic debt).** `git mv`, contents/
+  function names/assertions UNCHANGED:
+  `tests/test_b2_wiring.py` → `tests/test_plugin_wiring.py`;
+  `tests/test_b2_plugin_seam_parity.py` → `tests/test_plugin_cross_bar_suppression.py`;
+  `validation/test_b2_golive_runtime_parity.py` → `validation/test_b3_golive_plugin_regression.py`;
+  `validation/test_b3_multiday_reset_parity.py` → `validation/test_b3_multiday_reset_plugin_regression.py`.
+  Living references updated (the complete set, from a 3-repo grep): the `Run:/pytest:`
+  docstring self-hints in both renamed validation files, and the multiday file's LIVE
+  cross-import (`from test_b3_golive_plugin_regression import DATA_DIR, TICK_SIZE,
+  _build_runtime, _read_trades` — previously the old golive module name). Historical
+  PROGRESS/change-log mentions left untouched (they are the record); TL's untracked
+  `test.md` scratch note left untouched; QL has zero references; no CI/script references
+  exist in any repo.
+- **D-SB3b-c (V3 matrix de-stale — closes verify item i).** `V3_COMPATIBILITY_MATRIX.md`
+  PDH/PDL row reworded to the post-S-B3a reality: level state is plugin-owned
+  (`StrategyLevelState` under the `touch_reversal` plugin); the runtime seeds it through
+  its lifecycle methods and reads levels/zones back via the plugin accessors.
+
 ---
 
 ## Status table
@@ -412,6 +445,7 @@ committed as SC `f6e9be8` on `platform-refactor`.
 | B | B2 | Route _process_trade through plugin.on_bar_closed when a plugin is present, and construct StrategyRuntime with the registered TouchReversalPlugin in a feature-flagged path | DONE | 2026-06-08 | SC `7a5cc96`+`5061163`; TL `242c606` | full SC suite 145; test_b2_plugin_seam_parity (PART1); test_b2_wiring (resolver/W2/W4-lifecycle); GO-LIVE test_b2_golive_runtime_parity (real days 2025-07-15 339997 trades + 2025-07-07 306103 trades, OFF==ON per trade, 5 touches/6 zones); TL test_strategy_core_acceptance + test_strategy_core_replay_integration (3 OFF + 3 ON); decision-fn gates test_production_pair_parity + test_decision_diff (2 passed); ruff clean | flag SC_PLUGIN_ROUTING default OFF via wiring.touch_reversal_kwargs(); TL StrategyCoreService wired; lifecycle propagation + plugin load_prior_day_summary hook; plugin internal decision-tf gate REMOVED (runtime gates). Deviations D-B2f..k. |
 | B | B3 | Make the plugin path the default for strategy_id="touch_reversal"; remove the dead hardwired duplicate only after a full green soak | DONE | 2026-06-09 | `85cb7b6` | pre-removal off-vs-on parity 7 (FINAL green, both paths present); digests frozen (off==on on 3,284,775 trades/path); full SC suite 144; real-data plugin regressions vs frozen digests (golive + multiday) 2; TL acceptance+replay 3; decision-fn gates 2; ruff clean | flip+delete: None path + `SC_PLUGIN_ROUTING`/`config.py` removed; plugin auto-attached (D-B3a, fail-loud non-default-scheme guard); off-vs-on real-data tests repurposed to frozen-digest regressions + seam/wiring converted (D-B3b); W2 guard retired (D-B3c); dead `_zones_for_detection`+`detect_touches` import removed, level_state fold/snapshot/dedup KEPT (D-B3d); fold-collapse + dedup-move SPLIT to S-B3a. 6-agent adversarial verify 5 PASS + 1 stale-comment fixed. |
 | (added) | S-B3a | Collapse the redundant runtime level fold (D-B2a) + move the once-per-day `_touched_zone_keys` dedup INTO the plugin + flow the raw `Touch` back onto `RuntimeUpdate.touches` | DONE | 2026-06-09 | `f6e9be8` | frozen-digest regressions `test_b3_golive_plugin_regression` + `test_b3_multiday_reset_plugin_regression` 2 (fixtures UNTOUCHED; 3,284,775 trades, 8 reset boundaries, byte-identical); full SC suite 144; TL acceptance+replay 3; decision-fn gates 2 (UNCHANGED); ruff clean | runtime `level_state`/`_zones_for_snapshot`/`_touched_zone_keys`/`_zone_key`/`_touch_zone_key_from_touch` DELETED; plugin = sole owner (on_event returns the level fold; new `current_levels`/`snapshot_zones` accessors; plugin-owned `_fired_keys`; `already_fired_keys` retired; key helper relocated verbatim); raw `Touch` flow-back verbatim; D-B2b RESOLVED plugin-owned (owner-ratified); D-B2i gate + D-B3a guard untouched. Deviations D-SB3a-a..g. 5-agent adversarial verify 5 PASS (high). the LAST Phase-B tidy, before C; split out of B3's flip+delete prompt (added step, not in plan §7 — per deviation rule) |
+| (added) | S-B3b | Tidy: declare the plugin seed path (`set_static_levels`/`load_prior_day_summary`) in the StrategyPlugin Protocol; rename the repurposed drift-net files off their `test_b2_*`/`parity` names; de-stale the V3 matrix PDH/PDL row | DONE | 2026-06-09 | pending (stamped on commit) | full SC suite 144 (same tests, new paths); digest regressions under the NEW filenames `test_b3_golive_plugin_regression` + `test_b3_multiday_reset_plugin_regression` 2 (fixtures untouched); ruff clean | closes S-B3a verify items (i)+(ii) and D-B3b's filename debt. §9.1 registry assertion now requires the seed hooks (deliberate strengthening). Living refs updated incl. the multiday file's live cross-import; historical PROGRESS mentions left as record. Deviations D-SB3b-a..c. TL pin bump DEFERRED to C1 (no TL-facing change). added step, not in plan §7 — per deviation rule |
 | C | C1 | Repoint TL model_registry import from the local contract copy to strategy_core.contract, keeping today's flat StrategyContract shape | NOT STARTED |  |  |  |  |
 | C | C2 | Delete TL's local strategy_contract.py once nothing imports it | NOT STARTED |  |  |  |  |
 | D | D1 | Retire TL's local outcome tracker in favor of the engine's honest decision-time fill | NOT STARTED |  |  |  |  |
@@ -428,6 +462,19 @@ committed as SC `f6e9be8` on `platform-refactor`.
 
 ## Change log (newest first)
 
+- **2026-06-09** — **S-B3b tidy landed → S-B3b DONE** (post-Phase-B, pre-C1). Three recorded
+  debts closed in one doc/declaration-only pass (no runtime/plugin behavior change; frozen
+  digest fixtures untouched): (1) `StrategyPlugin` now DECLARES the seed path —
+  `set_static_levels` + `load_prior_day_summary` — so the §9.1 registry-time assertion
+  fail-closes a plugin missing the hooks at `@register` instead of an `AttributeError`
+  mid-session (closes S-B3a verify item ii); (2) the repurposed drift-net files renamed off
+  their stale `test_b2_*`/`parity` names via `git mv` (contents/function names/assertions
+  unchanged; living refs updated incl. the multiday gate's live cross-import; map in
+  D-SB3b-b — closes D-B3b's cosmetic debt); (3) the V3 compatibility matrix PDH/PDL row
+  reworded to plugin-owned level state (closes S-B3a verify item i). Harnesses on the final
+  tree: full SC suite **144** (same tests, new paths); digest regressions under the NEW
+  filenames **2 passed** (fixtures untouched); ruff clean. TL/QL untouched; TL pin bump
+  deferred to C1. Deviations **D-SB3b-a..c**. PLAN unmodified.
 - **2026-06-09** — Phase B Step **S-B3a landed → S-B3a DONE, Phase B COMPLETE** (committed as SC
   `f6e9be8` on `platform-refactor` after review + a byte-identical diff comparison against the
   reviewed export; the LAST Phase-B step). One behavior-preserving collapse: the plugin's level state is now the

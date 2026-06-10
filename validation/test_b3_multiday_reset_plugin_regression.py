@@ -16,14 +16,14 @@ The sequence digest is reset-CHAIN dependent (each day's reseed sources the PREC
 processed day), so the gate requires ALL frozen days present; it skips cleanly if the store
 is absent or too few days resolve.
 
-Run:    python validation/test_b3_multiday_reset_parity.py
-pytest: pytest validation/test_b3_multiday_reset_parity.py
+Run:    python validation/test_b3_multiday_reset_plugin_regression.py
+pytest: pytest validation/test_b3_multiday_reset_plugin_regression.py
 """
 
 from __future__ import annotations
 
 # Reuse the go-live store reader + the production plugin-runtime builder.
-from test_b2_golive_runtime_parity import DATA_DIR, TICK_SIZE, _build_runtime, _read_trades
+from test_b3_golive_plugin_regression import DATA_DIR, TICK_SIZE, _build_runtime, _read_trades
 
 from _b3_regression_util import MULTIDAY_DAYS, load_fixture, multiday_digests
 

@@ -11,8 +11,8 @@ canonical (former None-path) behavior, and matching them proves the removal chan
 Real-store data: ``Trade-Dashboard/data/databento/NQ/<DATE>/mbp10.parquet``. Skips if absent.
 Also exposes ``_read_trades`` / ``_window`` / ``DATA_DIR`` for the multi-day regression to reuse.
 
-Run:    python validation/test_b2_golive_runtime_parity.py
-pytest: pytest validation/test_b2_golive_runtime_parity.py
+Run:    python validation/test_b3_golive_plugin_regression.py
+pytest: pytest validation/test_b3_golive_plugin_regression.py
 """
 
 from __future__ import annotations

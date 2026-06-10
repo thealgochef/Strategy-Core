@@ -262,6 +262,16 @@ class StrategyPlugin(Protocol):
         """Clear the plugin's own state (the platform resets candles/feed)."""
         ...
 
+    def set_static_levels(self, levels: tuple[Level, ...]) -> None:
+        """Seed static reference levels — written through by the runtime's lifecycle
+        method; the SOLE level-seed path since S-B3a (W4/D-B2j)."""
+        ...
+
+    def load_prior_day_summary(self, trading_day: date, *, high_ticks: int, low_ticks: int) -> None:
+        """Seed the prior-day PDH/PDL summary — written through by the runtime's
+        lifecycle method; the SOLE level-seed path since S-B3a (W4/D-B2j)."""
+        ...
+
     # ---- data requirements (DECLARED, tick AND time) ----
     @staticmethod
     def required_bars() -> tuple[BarSpec, ...]:
