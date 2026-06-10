@@ -109,9 +109,11 @@ def default_touch_reversal_section() -> TouchReversalSection:
     """The canonical archetype-1 section matching the runtime's DEFAULT construction (W5).
 
     Its ``session_scheme`` round-trips to the runtime default ``RESEARCH_SESSION_SCHEME``
-    (so the plugin's ``self._levels`` is built with the SAME scheme as the runtime's
-    ``level_state``), and ``touch_rule.zone_proximity_pts == ZONE_PROXIMITY_PTS`` (the
-    ``build_zones`` default the runtime's ``_zones_for_detection`` uses). Every value is
+    (so the plugin's ``self._levels`` — the sole level fold since S-B3a — is built with
+    the SAME scheme the runtime classifies sessions with), and
+    ``touch_rule.zone_proximity_pts == ZONE_PROXIMITY_PTS`` (the ``build_zones`` default,
+    so the section-driven DETECTION zones match the default-proximity zones
+    ``StrategyLevelState.zones()`` builds for the snapshot). Every value is
     single-sourced from ``strategy_core.constants`` — no restated literals — so this is the
     same section the QL emitter will generate from the plugin (a later phase). The non-detection
     fields are descriptive and do not affect the plugin's touch output.

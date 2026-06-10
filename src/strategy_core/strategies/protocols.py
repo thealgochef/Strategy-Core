@@ -1,11 +1,10 @@
 """The strategy-plugin SDK surface — Protocols + supporting types (PLAN §2.2).
 
-DECLARATION-ONLY (PLAN §7 Phase A / Step A1). This module introduces the thin-waist
-boundary between the PLATFORM (the event loop, candles, transport, contract loader)
-and a STRATEGY PLUGIN, but **nothing in the platform imports it yet**: the runtime's
-hardwired touch fold at ``runtime/state.py:271-280`` is still the live path, so touch
-behavior is byte-identical. These types only become load-bearing in Phase B, when
-``StrategyRuntime`` gains an optional ``plugin`` param.
+Introduced declaration-only in Phase A (Step A1); LOAD-BEARING since Phase B — the
+runtime routes the touch strategy solely through this seam (B3 deleted the hardwired
+fold), and since S-B3a the plugin also owns the single level fold and the cross-bar
+first-touch dedup (the platform reads levels/zones back through ``on_event``'s return
+and the ``current_levels``/``snapshot_zones`` accessors).
 
 It lives in a SUBMODULE (not the package ``__init__``) so the registry (A2) and the
 plugin (A3) import the protocol types without the package ``__init__`` running any
@@ -35,14 +34,13 @@ What lives here (PLAN §2.2, the full plugin surface):
 
 from __future__ import annotations
 
-from collections.abc import Mapping, Sequence, Set as AbstractSet
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
-from datetime import datetime, time
+from datetime import date, datetime, time
 from enum import StrEnum
 from typing import Any, Protocol, runtime_checkable
 
-from strategy_core.decisions.dedup import ZoneKey
-from strategy_core.types import Bar, Quote, Touch, Trade, Zone
+from strategy_core.types import Bar, Level, Quote, Touch, Trade, Zone
 
 __all__ = [
     "BarKind",
@@ -182,10 +180,11 @@ class StrategyStep:
     setups: tuple[SetupState, ...] = ()
     decisions: tuple[DecisionEvent, ...] = ()
     features: tuple[Mapping[str, float], ...] = ()
-    #: B2: the raw engine touches this bar produced and the (post-detection) zones they
-    #: came from, so the platform runtime can fold them onto ``RuntimeUpdate.touches`` and
-    #: compute the cross-bar dedup key off the same zones. Both default empty so the step
-    #: stays default-constructible.
+    #: The raw engine touches this bar produced (folded VERBATIM onto
+    #: ``RuntimeUpdate.touches`` — the platform performs no re-derivation, re-keying, or
+    #: filtering since S-B3a) and the post-detection zones they came from (informational;
+    #: the cross-bar dedup key is derived INSIDE the plugin since S-B3a). Both default
+    #: empty so the step stays default-constructible.
     touches: tuple[Touch, ...] = ()
     zones: tuple[Zone, ...] = ()
 
@@ -275,20 +274,41 @@ class StrategyPlugin(Protocol):
         ...
 
     # ---- event consumption ----
-    def on_event(self, event: Trade | Quote, ctx: PlatformContext) -> tuple[SetupState, ...]:
-        """Fold a trade/quote; return any setup-state deltas."""
+    def on_event(self, event: Trade | Quote, ctx: PlatformContext) -> tuple[Level, ...]:
+        """Fold a trade/quote into the plugin's own state; return the level delta.
+
+        S-B3a: the plugin owns the SOLE level fold (R1), so for a ``Trade`` this returns
+        the plugin's full post-fold level set (the platform maps it onto
+        ``RuntimeUpdate.levels`` — previously the runtime's own redundant fold supplied
+        it); for a ``Quote`` it returns ``()``.
+        """
         ...
 
-    def on_bar_closed(
-        self, bar: Bar, ctx: PlatformContext, already_fired_keys: AbstractSet[ZoneKey]
-    ) -> StrategyStep:
+    def on_bar_closed(self, bar: Bar, ctx: PlatformContext) -> StrategyStep:
         """Fold a closed bar; return the sparse strategy delta (setups/decisions/features/touches/zones).
 
-        ``already_fired_keys`` is the cross-bar first-touch dedup set the PLATFORM owns
-        (the runtime's ``_touched_zone_keys``). The plugin pre-marks its zones from it
-        (so an already-fired zone does not re-fire) using the shared
-        ``strategy_core.decisions.dedup.zone_key``, and MUST NOT mutate it — the platform
-        records newly-fired keys after this returns.
+        S-B3a: the cross-bar first-touch dedup is PLUGIN-owned (the D-B2b placement was
+        resolved to the plugin). The plugin pre-marks its zones from its OWN fired-keys
+        set and records newly-fired keys itself — the retired ``already_fired_keys``
+        parameter is gone and the platform performs no dedup bookkeeping.
+        """
+        ...
+
+    # ---- platform-read state accessors (S-B3a; see the deviation note below) ----
+    def current_levels(self) -> tuple[Level, ...]:
+        """The plugin's full current level set (feeds the platform snapshot's ``levels``)."""
+        ...
+
+    def snapshot_zones(self, trading_day: date | None) -> tuple[Zone, ...]:
+        """Display zones with already-fired zones pre-marked ``touched`` (feeds the
+        platform snapshot's / per-trade update's ``zones``). ``trading_day=None`` (no
+        event processed yet) returns the zones unmarked.
+
+        Deviation (S-B3a, recorded in PROGRESS): the protocol temporarily carries touch
+        vocabulary (``current_levels``/``snapshot_zones``, like ``StrategyStep.touches``/
+        ``zones`` per D-B2d) because ``RuntimeUpdate``/``RuntimeSnapshot`` still expose
+        typed ``levels``/``zones`` fields; the generic plugin-event payload that removes
+        them stays deferred per PLAN §2.1(5).
         """
         ...
 

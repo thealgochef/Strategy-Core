@@ -11,10 +11,8 @@ from typing import TYPE_CHECKING, Any
 from strategy_core.candles.streaming import CandleEngine
 from strategy_core.constants import DEFAULT_TICK_SIZE, RESEARCH_SESSION_SCHEME
 from strategy_core.data.events import DataQualityWarning, safe_text
-from strategy_core.decisions.dedup import ZoneKey, zone_key
 from strategy_core.decisions.sessions import classify_session
 from strategy_core.runtime.context import RuntimePlatformContext, point_value_for_symbol
-from strategy_core.runtime.levels import StrategyLevelState
 from strategy_core.types import Bar, Quote, SessionScheme, Touch, Trade, Zone, Level
 
 if TYPE_CHECKING:
@@ -201,8 +199,9 @@ class StrategyRuntime:
         # explicit plugin auto-attaches the registered ``touch_reversal`` plugin (+ its
         # default section), per PLAN §7 B3 ("plugin defaults to the registered touch plugin").
         # The default section uses RESEARCH_SESSION_SCHEME; a non-default scheme MUST supply
-        # its own plugin+section so the plugin's level state cannot silently diverge from the
-        # runtime's ``level_state`` (fail-loud rather than wrong).
+        # its own plugin+section so the plugin's level state (the SOLE level fold since
+        # S-B3a) cannot silently diverge from the scheme the runtime classifies sessions
+        # and builds candles with (fail-loud rather than wrong).
         if plugin is None:
             if scheme != RESEARCH_SESSION_SCHEME:
                 raise ValueError(
@@ -219,7 +218,6 @@ class StrategyRuntime:
         self._plugin = plugin
         self.candles = CandleEngine(timeframes, scheme=scheme)
         self.decision_timeframe = decision_timeframe or min(timeframes)
-        self.level_state = StrategyLevelState(scheme=scheme, tick_size=tick_size)
         self._recent_closed_bar_limit = recent_closed_bar_limit
         self._warning_limit = warning_limit
         self._recent_closed_bars: list[Bar] = []
@@ -227,7 +225,6 @@ class StrategyRuntime:
         self._last_quote: Quote | None = None
         self._last_event_ts_utc: datetime | None = None
         self._touches: list[Touch] = []
-        self._touched_zone_keys: set[tuple[date, tuple[str, ...], float, str]] = set()
         self._metadata: dict[str, Any] = {}
         self._feed_status = FeedStatus(state="disconnected", mode="idle", requested_symbol=requested_symbol, last_message="Market-data feed is not started.")
         # The platform context the plugin reads. Backed by live accessors so
@@ -248,12 +245,12 @@ class StrategyRuntime:
         if requested_symbol is not None:
             self.requested_symbol = requested_symbol
         self.candles = CandleEngine(self.candles.timeframes, scheme=self.scheme)
-        self.level_state.reset()
-        self._plugin.reset()  # keep the plugin's level state in lockstep with reset
+        # S-B3a: the plugin owns the level state AND the first-touch dedup; its reset
+        # clears both (the runtime keeps no level/dedup state of its own).
+        self._plugin.reset()
         self._recent_closed_bars.clear()
         self._warnings.clear()
         self._touches.clear()
-        self._touched_zone_keys.clear()
         self._last_quote = None
         self._last_event_ts_utc = None
         self._metadata.clear()
@@ -261,12 +258,11 @@ class StrategyRuntime:
         return RuntimeUpdate(feed_status=self._feed_status)
 
     def set_static_levels(self, levels: tuple[Level, ...]) -> None:
-        self.level_state.set_static_levels(levels)
-        self._plugin.set_static_levels(levels)  # mirror onto the plugin's level state
+        # S-B3a: written through to the plugin's level state — the sole level fold.
+        self._plugin.set_static_levels(levels)
 
     def load_prior_day_summary(self, trading_day: date, *, high_ticks: int, low_ticks: int) -> None:
-        self.level_state.load_prior_day_summary(trading_day, high_ticks=high_ticks, low_ticks=low_ticks)
-        # mirror the prior-day PDH/PDL summary onto the plugin's level state.
+        # S-B3a: written through to the plugin's level state — the sole level fold.
         self._plugin.load_prior_day_summary(trading_day, high_ticks=high_ticks, low_ticks=low_ticks)
 
     def record_warning(self, warning: DataQualityWarning) -> RuntimeUpdate:
@@ -288,12 +284,13 @@ class StrategyRuntime:
     def snapshot(self) -> RuntimeSnapshot:
         candle_update = self.candles.snapshot_update(())
         session, trading_day = self._session_state()
-        zones = tuple(self._zones_for_snapshot(trading_day))
+        # S-B3a: levels and zones are read back from the plugin — the sole owner of the
+        # level fold and the first-touch dedup that pre-marks the display zones.
         return RuntimeSnapshot(
             current_bars=candle_update.current,
             recent_closed_bars=tuple(self._recent_closed_bars),
-            levels=self.level_state.levels(),
-            zones=zones,
+            levels=self._plugin.current_levels(),
+            zones=self._plugin.snapshot_zones(trading_day),
             touches=tuple(self._touches),
             warnings=tuple(self._warnings),
             feed_status=self._feed_status,
@@ -316,20 +313,17 @@ class StrategyRuntime:
             self._recent_closed_bars.extend(candle_update.completed)
             if len(self._recent_closed_bars) > self._recent_closed_bar_limit:
                 del self._recent_closed_bars[: len(self._recent_closed_bars) - self._recent_closed_bar_limit]
-        levels = self.level_state.process_trade(trade)
-        # Keep-both-folds (D-B2a — DEFERRED cleanup, split out of B3): the runtime's level
-        # fold above stays for RuntimeUpdate.levels + the snapshot; the plugin folds the SAME
-        # trade into its OWN level state so its on_bar_closed detection sees identical levels.
-        # The follow-up tidy (the last Phase-B step, before C) collapses this redundancy and
-        # moves the once-per-day dedup into the plugin; B3 deliberately leaves both here.
-        self._plugin.on_event(trade, self._ctx)
+        # S-B3a: the plugin owns the SOLE level fold (R1; the runtime's redundant
+        # ``level_state`` copy is deleted) — on_event folds the trade and returns the
+        # post-fold level set for RuntimeUpdate.levels.
+        levels = self._plugin.on_event(trade, self._ctx)
         touches: list[Touch] = []
         for bar in candle_update.completed:
             if bar.timeframe_ticks != self.decision_timeframe:
                 continue
-            step = self._plugin.on_bar_closed(bar, self._ctx, self._touched_zone_keys)
-            for touch in step.touches:
-                self._touched_zone_keys.add(self._touch_zone_key_from_touch(touch, step.zones))
+            # The plugin owns the cross-bar first-touch dedup (S-B3a); its touches flow
+            # back VERBATIM — no re-derivation, re-keying, or filtering here.
+            step = self._plugin.on_bar_closed(bar, self._ctx)
             touches.extend(step.touches)
         if touches:
             self._touches.extend(touches)
@@ -340,30 +334,9 @@ class StrategyRuntime:
             current_bars=candle_update.current,
             closed_bars=candle_update.completed,
             levels=levels,
-            zones=tuple(self._zones_for_snapshot(trading_day)),
+            zones=self._plugin.snapshot_zones(trading_day),
             touches=tuple(touches),
         )
-
-    def _zones_for_snapshot(self, trading_day: date | None) -> list[Zone]:
-        zones = self.level_state.zones()
-        if trading_day is None:
-            return zones
-        for zone in zones:
-            if self._zone_key(trading_day, zone) in self._touched_zone_keys:
-                zone.touched = True
-        return zones
-
-    @staticmethod
-    def _zone_key(trading_day: date, zone: Zone) -> ZoneKey:
-        # Delegate to the single-sourced key (I3) so the runtime and the plugin cannot
-        # drift. The result is identical to the prior inline body.
-        return zone_key(trading_day, zone)
-
-    def _touch_zone_key_from_touch(self, touch: Touch, zones: list[Zone]) -> tuple[date, tuple[str, ...], float, str]:
-        for zone in zones:
-            if zone.representative_price == touch.representative_price and touch.level_type in zone.names:
-                return self._zone_key(touch.trading_day, zone)
-        return (touch.trading_day, (touch.level_type,), touch.representative_price, touch.direction.value)
 
     def _session_state(self) -> tuple[str | None, date | None]:
         if self._last_event_ts_utc is None:

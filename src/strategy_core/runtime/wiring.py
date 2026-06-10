@@ -6,9 +6,11 @@ of B3 the plugin is the production strategy path: there is no flag and no None p
 UNCONDITIONALLY builds the registered ``touch_reversal`` plugin + its default section.
 
 The default section matches the runtime's default RESEARCH scheme + ``ZONE_PROXIMITY_PTS``
-proximity, so the plugin's ``self._levels`` is built identically to the runtime's
-``level_state``. Importing this module registers the ``touch_reversal`` plugin (the
-``@register`` side effect) — intended, since it is the production strategy.
+proximity, so the plugin's ``self._levels`` — the SOLE level fold since S-B3a (the
+runtime's redundant copy is deleted) — is built with the same scheme the runtime
+classifies sessions and builds candles with. Importing this module registers the
+``touch_reversal`` plugin (the ``@register`` side effect) — intended, since it is the
+production strategy.
 """
 
 from __future__ import annotations

@@ -1,10 +1,14 @@
-"""Plugin construction + lifecycle regression (post-B3).
+"""Plugin construction + lifecycle regression (post-B3 / post-S-B3a).
 
 (Originally the B2 PART 2 flag-resolver / W2 / W4-off-vs-on tests. B3 removed the
-``SC_PLUGIN_ROUTING`` flag and the None path, so the resolver / kwargs-OFF / W2-empty-registry
-assertions are retired. What remains and still matters: ``touch_reversal_kwargs()`` attaches
-the plugin, a bare runtime auto-attaches it, and the level-state lifecycle propagation keeps
-the plugin's level state byte-identical to the runtime's ``level_state`` across reset+reseed.)
+``SC_PLUGIN_ROUTING`` flag and the None path; S-B3a then deleted the runtime's redundant
+``level_state`` copy and moved the first-touch dedup into the plugin, so the old
+runtime-vs-plugin fingerprint lockstep has nothing to compare against. What remains and
+still matters: ``touch_reversal_kwargs()`` attaches the plugin, a bare runtime
+auto-attaches it, and the runtime's lifecycle methods (``load_prior_day_summary`` /
+``set_static_levels`` / ``reset``) write through to the plugin's level state AND its
+fired-keys dedup — including that ``reset()`` clears the dedup so a re-seeded same-day
+replay re-fires.)
 """
 
 from __future__ import annotations
@@ -54,10 +58,11 @@ def test_bare_runtime_auto_attaches_touch_plugin() -> None:
     assert rt._plugin is not None and rt._plugin.strategy_id == "touch_reversal"
 
 
-def test_lifecycle_propagation_keeps_plugin_levels_in_lockstep() -> None:
-    """The plugin's level state stays byte-identical to the runtime's ``level_state`` when the
-    levels come from ``load_prior_day_summary`` + ``set_static_levels``, AND across ``reset()``
-    + re-seed — and the seeded levels actually fire touches (non-vacuous)."""
+def test_lifecycle_propagation_reaches_plugin_state() -> None:
+    """The runtime's lifecycle methods write through to the plugin's level state — the SOLE
+    level fold since S-B3a — and ``reset()`` clears BOTH the plugin's level state and its
+    plugin-owned ``_fired_keys`` dedup, so a re-seeded same-day replay re-fires the same
+    zone (non-vacuous; were the dedup not cleared, the second pass would be suppressed)."""
     rt = _runtime()
     base = datetime(2026, 1, 6, 14, 30, tzinfo=UTC)  # NY session, trading_day 2026-01-06
 
@@ -68,18 +73,20 @@ def test_lifecycle_propagation_keeps_plugin_levels_in_lockstep() -> None:
     def _run(trades: list[Trade]) -> int:
         return sum(len(rt.process_event(tr).touches) for tr in trades)
 
-    # Pass 1: seed via the lifecycle methods (which must propagate to the plugin), replay.
+    # Pass 1: seed via the lifecycle methods (which must reach the plugin), replay.
     _seed()
     assert _run(_bar_trades(3, base)) > 0, "expected the seeded levels to be touched"
-    assert _fingerprint(rt.level_state) == _fingerprint(rt._plugin._levels)
+    fp = _fingerprint(rt._plugin._levels)
+    assert fp[4] == {date(2026, 1, 5): (403, 397)}, "summary did not reach the plugin"
+    assert fp[5] and fp[5][0][0] == "manual", "static level did not reach the plugin"
+    assert len(rt._plugin._fired_keys) > 0, "the fired touch was not recorded in the plugin dedup"
 
-    # Pass 2: reset() must clear the plugin's level state too (else stale plugin state would
-    # survive); white-box the fingerprints equal (both cleared) right after reset.
+    # Pass 2: reset() clears the plugin's level state AND its fired-keys dedup.
     rt.reset()
-    assert _fingerprint(rt.level_state) == _fingerprint(rt._plugin._levels)
     assert (rt._plugin._levels._trading_day, rt._plugin._levels._day_high, rt._plugin._levels._day_low) == (None, None, None)
+    assert rt._plugin._fired_keys == set()
 
-    # Re-seed + same-day replay again: touches fire, fingerprints stay in lockstep.
+    # Re-seed + SAME-day replay: the same zone fires again — proof the reset cleared the
+    # day-scoped dedup (and the reseed reached the plugin) end-to-end.
     _seed()
     assert _run(_bar_trades(3, base + timedelta(hours=1))) > 0
-    assert _fingerprint(rt.level_state) == _fingerprint(rt._plugin._levels)

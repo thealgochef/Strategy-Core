@@ -1,35 +1,36 @@
-"""TouchReversalPlugin — archetype 1 as a behavior-identical WRAPPER (PLAN §4).
+"""TouchReversalPlugin — archetype 1 (touch / zone-reversal) behind the §2.2 protocol.
 
-This is the existing hardwired touch/zone/level pipeline expressed behind the §2.2
-``StrategyPlugin`` protocol. Nothing in the decision/feature/label kernel changes: the
-plugin is a thin declaration + dispatch shell that IMPORTS and CALLS the existing
-functions verbatim (PLAN "ADDITIVE COROLLARY": Phase A does NOT physically move
-``StrategyLevelState``/``build_zones``/``detect_touches`` — it wraps them in place).
+THE PRODUCTION STRATEGY PATH. Since B3 the runtime routes the touch strategy SOLELY
+through this plugin (auto-attached by ``StrategyRuntime`` when none is supplied; built by
+``runtime/wiring.touch_reversal_kwargs()`` for production/Trade-Lab). Importing this
+module registers ``touch_reversal`` (the ``@register`` side effect) — intended, since it
+is the production strategy. Nothing in the decision/feature/label kernel changed: the
+plugin IMPORTS and CALLS the existing functions (``build_zones`` → ``detect_touches``)
+verbatim.
 
-Wiring note (PLAN §7 / Steps A3, B2): the plugin is registered but **NOT constructed by
-any production path** — production/Trade-Lab build ``StrategyRuntime`` plugin-less, so the
-verbatim hardwired touch fold is still live. As of B2 PART 1 the runtime CAN route through
-``on_bar_closed`` when a plugin is explicitly passed, but that path is exercised only by
-tests. Importing this module is the ONLY thing that registers ``touch_reversal`` (the
-``@register`` side effect); no ``import strategy_core`` path reaches it. Its only importers
-are the A3 equivalence test (proves ``detect_touches`` output is byte-identical to a direct
-call) and the B2 seam-parity test (proves the runtime plugin-path equals the None path
-across multiple bars, incl. cross-bar suppression).
+Since S-B3a the plugin is also the SOLE OWNER of the level fold and the cross-bar
+first-touch dedup (the runtime's redundant ``level_state`` copy and its
+``_touched_zone_keys`` set were deleted): ``on_event`` folds each trade into
+``self._levels`` and returns the level delta the platform maps onto
+``RuntimeUpdate.levels``; ``on_bar_closed`` pre-marks zones from the plugin-owned
+``self._fired_keys`` and records newly-fired keys itself; ``current_levels()`` /
+``snapshot_zones()`` feed the platform snapshot.
 
 Authoritative resolutions honored (see PROGRESS "Plan clarifications"):
 * R1 — the plugin OWNS its level state (``self._levels``), configured in
-  ``configure(section, ctx)``; it folds trades into it via ``on_event`` (mirroring the
-  runtime's ``level_state.process_trade`` at ``state.py:269``).
+  ``configure(section, ctx)``; it folds trades into it via ``on_event``.
 * R2 — the scheme comes from ``section.session_scheme`` and zones come from
   ``self._levels``, never from ``ctx`` (``ctx`` exposes no levels/scheme accessor).
 * R3 — ``TouchRule`` has NO ``decision_tf``; the decision timeframe is the engine's
-  default min tick-count (``state.py:188`` resolves ``decision_timeframe or min(timeframes)``;
+  default min tick-count (``state.py`` resolves ``decision_timeframe or min(timeframes)``;
   the default timeframes are ``(147, 987, 2000)`` so the default is ``DEFAULT_TICK_COUNT``).
+* D-B2b (resolved at S-B3a) — the once-per-zone-per-day dedup is PLUGIN-owned
+  (``self._fired_keys``); the runtime keeps no dedup bookkeeping.
 """
 
 from __future__ import annotations
 
-from collections.abc import Mapping, Set as AbstractSet
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from datetime import date, datetime, time, timedelta
 from types import MappingProxyType
@@ -74,12 +75,13 @@ from strategy_core.types import (
     SessionWindow,
     Touch,
     Trade,
+    Zone,
 )
 
 __all__ = ["TouchReversalPlugin", "FixedPointsBarrier"]
 
 # R3: the decision timeframe is the engine's default smallest tick-count. The runtime
-# resolves ``decision_timeframe = decision_timeframe or min(timeframes)`` (state.py:188)
+# resolves ``decision_timeframe = decision_timeframe or min(timeframes)``
 # with default timeframes (147, 987, 2000), i.e. DEFAULT_TICK_COUNT. Held as a constant
 # because required_bars()/decision_bar_label() are @staticmethod per §2.2; a configurable
 # decision tf is a wiring concern deferred to Phase B.
@@ -196,12 +198,16 @@ class TouchReversalPlugin:
         self._tick_size: float = DEFAULT_TICK_SIZE
         # Default level state until configure() rebuilds it from the section scheme.
         self._levels: StrategyLevelState = StrategyLevelState(tick_size=DEFAULT_TICK_SIZE)
+        # S-B3a: the plugin-owned cross-bar first-touch dedup (the D-B2b placement,
+        # resolved to the plugin). Keys are day-scoped (zone_key embeds trading_day), so
+        # the set accumulates across day rolls and is cleared ONLY on reset() — the exact
+        # lifecycle the runtime's deleted ``_touched_zone_keys`` had.
+        self._fired_keys: set[ZoneKey] = set()
 
     # ---- lifecycle ----
     def configure(self, section: TouchReversalSection, ctx: PlatformContext) -> None:
         # R1: the plugin OWNS the level state; R2: scheme from the section, tick_size
-        # from ctx. This mirrors the runtime's __init__ wiring at state.py:187-189, but
-        # owned by the plugin instead of the runtime.
+        # from ctx.
         self._section = section
         self._tick_size = ctx.tick_size
         self._levels = StrategyLevelState(
@@ -210,19 +216,18 @@ class TouchReversalPlugin:
         )
 
     def reset(self) -> None:
-        # Mirror StrategyRuntime.reset's level_state.reset() (state.py:205); the platform
-        # still owns candle/feed reset.
+        # Clear the plugin's own state (the platform owns candle/feed reset): the level
+        # state AND the first-touch dedup — matching the runtime reset's prior clearing
+        # of both ``level_state`` and ``_touched_zone_keys``.
         self._levels.reset()
+        self._fired_keys.clear()
 
     def set_static_levels(self, levels: tuple[Level, ...]) -> None:
-        """Seed prior-day/static levels — mirrors ``StrategyRuntime.set_static_levels`` (state.py:242-243)."""
+        """Seed static reference levels (written through the runtime's lifecycle method)."""
         self._levels.set_static_levels(levels)
 
     def load_prior_day_summary(self, trading_day: date, *, high_ticks: int, low_ticks: int) -> None:
-        """Mirror ``StrategyRuntime.load_prior_day_summary`` onto the plugin's level state (W4).
-
-        ``self._levels`` is the SAME ``StrategyLevelState`` class the runtime owns, so this
-        delegates the identical call — keeping PDH/PDL in lockstep with the runtime."""
+        """Seed the prior-day PDH/PDL summary (written through the runtime's lifecycle method)."""
         self._levels.load_prior_day_summary(trading_day, high_ticks=high_ticks, low_ticks=low_ticks)
 
     # ---- data requirements (DECLARED) ----
@@ -236,27 +241,26 @@ class TouchReversalPlugin:
         return _DECISION_BAR_LABEL
 
     # ---- event consumption ----
-    def on_event(self, event: Trade | Quote, ctx: PlatformContext) -> tuple:
-        # Fold trades into the plugin-owned level state — mirrors state.py:269
-        # (level_state.process_trade). Quotes are inert here (as today; the runtime's
-        # _process_quote only buffers the last quote).
+    def on_event(self, event: Trade | Quote, ctx: PlatformContext) -> tuple[Level, ...]:
+        # The SOLE level fold (R1 / S-B3a). For a Trade, fold it into the plugin-owned
+        # level state and return the full post-fold level set — the platform maps it onto
+        # ``RuntimeUpdate.levels``. Quotes are inert (the runtime's _process_quote only
+        # buffers the last quote and never reaches here).
         if isinstance(event, Trade):
-            self._levels.process_trade(event)
+            return self._levels.process_trade(event)
         return ()
 
-    def on_bar_closed(
-        self, bar: Bar, ctx: PlatformContext, already_fired_keys: AbstractSet[ZoneKey]
-    ) -> StrategyStep:
-        # The PLATFORM gates which bars reach here. The runtime's plugin-path loop only
-        # calls on_bar_closed for bars whose timeframe == the runtime's decision_timeframe
-        # (state.py else branch), EXACTLY as the None path gates. So this method does NOT
-        # re-gate on its own declared decision bar (_DECISION_TIMEFRAME): re-gating on a
-        # hardcoded timeframe would break byte-identity whenever the runtime's
-        # decision_timeframe differs from it (e.g. a tf=2 acceptance harness). It processes
-        # the decision bar it is handed, mirroring the hardwired fold (state.py:316-321,287):
-        # build zones from ALL current levels, PRE-MARK zones already fired this day from the
-        # platform-owned dedup set using the SHARED zone_key (I3), then detect_touches with
-        # the identical call shape. It only READS already_fired_keys (never mutates it).
+    def on_bar_closed(self, bar: Bar, ctx: PlatformContext) -> StrategyStep:
+        # The PLATFORM gates which bars reach here (D-B2i). The runtime's loop only calls
+        # on_bar_closed for bars whose timeframe == the runtime's decision_timeframe, so
+        # this method does NOT re-gate on its own declared decision bar
+        # (_DECISION_TIMEFRAME): re-gating on a hardcoded timeframe would break
+        # byte-identity whenever the runtime's decision_timeframe differs from it (e.g. a
+        # tf=2 acceptance harness). It processes the decision bar it is handed: build
+        # zones from ALL current levels (merge-all, then detect_touches gates each merged
+        # zone on its MAX availability), PRE-MARK zones already fired this day from the
+        # PLUGIN-OWNED dedup set (S-B3a) via the single-sourced zone_key (I3), detect,
+        # then record each new touch's key so the zone never re-fires the same day.
         zone_proximity = (
             self._section.touch_rule.zone_proximity_pts
             if self._section is not None
@@ -264,17 +268,41 @@ class TouchReversalPlugin:
         )
         zones = build_zones(list(self._levels.levels()), zone_proximity_pts=zone_proximity)
         for zone in zones:
-            if zone_key(bar.trading_day, zone) in already_fired_keys:  # mirrors state.py:319-321
+            if zone_key(bar.trading_day, zone) in self._fired_keys:
                 zone.touched = True
         touches = detect_touches(
             (bar,), zones, tick_size=ctx.tick_size, trading_day=bar.trading_day
-        )  # state.py:287
+        )
+        for touch in touches:
+            self._fired_keys.add(self._touch_zone_key_from_touch(touch, zones))
         setups = tuple(self._setup_for(touch) for touch in touches)
         decisions = tuple(self._decision_for(touch) for touch in touches)
         return StrategyStep(
             setups=setups, decisions=decisions, features=(),
             touches=tuple(touches), zones=tuple(zones),
         )
+
+    # ---- platform-read state accessors (S-B3a) ----
+    def current_levels(self) -> tuple[Level, ...]:
+        """The plugin's full current level set (feeds the platform snapshot's ``levels``)."""
+        return self._levels.levels()
+
+    def snapshot_zones(self, trading_day: date | None) -> tuple[Zone, ...]:
+        """Display zones with already-fired zones pre-marked ``touched``.
+
+        Sources zones from ``StrategyLevelState.zones()`` (the default-proximity display
+        derivation the runtime's deleted ``_zones_for_snapshot`` used — distinct from
+        ``on_bar_closed``'s section-driven DETECTION derivation), then pre-marks from the
+        plugin-owned fired-keys set. ``trading_day=None`` (no event processed yet — e.g.
+        an early snapshot) returns the zones unmarked.
+        """
+        zones = self._levels.zones()
+        if trading_day is None:
+            return tuple(zones)
+        for zone in zones:
+            if zone_key(trading_day, zone) in self._fired_keys:
+                zone.touched = True
+        return tuple(zones)
 
     # ---- declarations consumed by platform + consumers ----
     @staticmethod
@@ -320,6 +348,18 @@ class TouchReversalPlugin:
         )
 
     # ---- helpers ----
+    @staticmethod
+    def _touch_zone_key_from_touch(touch: Touch, zones: Sequence[Zone]) -> ZoneKey:
+        # Relocated VERBATIM from the runtime at S-B3a (it was StrategyRuntime's; the
+        # dedup writes moved here with the set). Resolve the fired touch back to its zone
+        # and key it via the single-sourced zone_key (I3); the fallback covers a touch
+        # whose zone is not resolvable (defensive — detect_touches always yields from a
+        # supplied zone).
+        for zone in zones:
+            if zone.representative_price == touch.representative_price and touch.level_type in zone.names:
+                return zone_key(touch.trading_day, zone)
+        return (touch.trading_day, (touch.level_type,), touch.representative_price, touch.direction.value)
+
     @staticmethod
     def _setup_for(touch: Touch) -> TouchSetup:
         return TouchSetup(

@@ -1,7 +1,8 @@
 """audit #3 regression: runtime touch detection merges ALL levels, then gates.
 
-Proves that ``_zones_for_detection`` builds zones from every current level
-(canonical merge-all semantics, matching ``_zones_for_snapshot``) and that
+Proves that the touch path builds zones from every current level (canonical
+merge-all semantics — since B3/S-B3a that derivation lives in the touch plugin's
+``on_bar_closed``, matching the snapshot's zone derivation) and that
 ``detect_touches`` gates each *merged* zone on its MAX availability -- rather than
 the old behavior of pre-filtering levels by availability before ``build_zones``
 (which could change zone composition near an availability boundary).
@@ -74,7 +75,7 @@ def test_merged_zone_gated_on_max_availability_fires_once_at_mean_price() -> Non
     assert touch.level_type == "pdh"
 
     # (c) A later bar straddling the same merged zone the same day must NOT re-fire
-    # (first-touch-per-cluster-per-day dedup via _touched_zone_keys).
+    # (first-touch-per-cluster-per-day dedup — plugin-owned ``_fired_keys`` since S-B3a).
     runtime.process_event(Trade(_ts(13), 402, 1, "B"))
     again = runtime.process_event(Trade(_ts(14), 406, 1, "B"))
     assert again.touches == ()

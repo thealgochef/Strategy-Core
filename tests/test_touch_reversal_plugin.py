@@ -152,7 +152,7 @@ def test_plugin_touch_output_equals_direct_detect_touches() -> None:
     high_ticks = round(101.0 / DEFAULT_TICK_SIZE)
     bar = _bar(tf, low_ticks, high_ticks, day, close_ts)
 
-    step = plugin.on_bar_closed(bar, _Ctx(), frozenset())
+    step = plugin.on_bar_closed(bar, _Ctx())
     plugin_touches = tuple(setup.touch for setup in step.setups)
 
     # Direct call on the SAME bar and the SAME zones, derived the identical way.
@@ -181,7 +181,7 @@ def test_on_bar_closed_processes_the_handed_bar_no_internal_gate() -> None:
     decision_tf = plugin.required_bars()[0].size
     bar = _bar(decision_tf + 1, round(99.0 / DEFAULT_TICK_SIZE), round(101.0 / DEFAULT_TICK_SIZE),
                date(2026, 1, 6), datetime(2026, 1, 6, 14, 2, tzinfo=UTC))
-    step = plugin.on_bar_closed(bar, _Ctx(), frozenset())
+    step = plugin.on_bar_closed(bar, _Ctx())
     assert len(step.touches) == 1  # processed despite tf != the declared decision bar
     assert step.touches[0].representative_price == 100.0
 
