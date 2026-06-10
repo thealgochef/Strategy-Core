@@ -24,8 +24,8 @@ deviations.
 
 ## Current state
 
-- **Active phase:** **Phase D IN PROGRESS** — **D1a (streaming honest resolver, DARK) landed LOCALLY** (SC `c7564fd` + TL `c7f2a84`, both on `platform-refactor`, **NOT pushed**): SC gained `decisions/streaming.py` (`StreamingHonestResolver` — the incremental `resolve_honest_outcome`), the runtime trade ring + `trade_price_at` accessor, and the fail-loud forward-timeframe activation validation; TL runs the resolver DARK alongside the tracker (parallel ring, no WS/DTO/frontend change). GATE A: **EXACT streaming==batch per-touch parity** on the 9 real days. GATE B characterization emitted (29 predictions; mean |entry Δ| 55.6 ticks; 6 label changes). **D2 DONE locally** (TL `73aa7df`): dormant `CandleEngine`/`SessionLevelEngine` shadow engines DELETED (live DTO types kept), acceptance guard strengthened to an src-wide reintroduction ban, httpx2 → dev extra rider. Decision 9.6 unchanged (pin DECLARED c615e40; enforcement DEFERRED; QL cold-install debt open).
-- **Next step:** D1b (flip + delete: serve the honest resolver, retire the tracker + SESSION_END classification + WS/DTO surface change) — **pending owner review of the gate-B characterization + greenlight of the D-window diffs**. PIN NOTE: the SC D1a commit is CONSUMER-FACING — per the pin convention TL's pin bump to the final pushed SC sha happens AT GREENLIGHT (amend the TL commit before push); QL's bump is deferred to its next window.
+- **Active phase:** **Phase D — D1 DONE locally (D1a + D1b), D2 DONE locally; ALL LOCAL, NOT pushed.** **D1b (flip + delete) landed LOCALLY** (SC `945f381` + TL `94610ff`, both on `platform-refactor`): the dashboard now SERVES the streaming honest resolver — resolutions adapt to served `Outcome`s (entry = the real trade print, NEW `entry_price` field; TL-side correctness; SC ZERO-BASED `bars_to_resolution`; `resolved_ts` from the new SC `StreamResolution.resolved_ts_utc`), drops surface explicitly (`prediction.dropped` WS frame + snapshot `dropped` ring + `RuntimeUpdate.dropped` + IntelligencePanel badge w/ reason, NO chart marker), and the legacy `OutcomeTracker` + its 16 tests + the gate-B characterization harness are DELETED; `ResolutionType.SESSION_END`/`NO_RESOLUTION` REMOVED (grep-proven zero refs). Gates: TL suite **419** (= 420 − 16 tracker + 13 adapter + 1 dropped-frame + 1 swallow pin); seam-by-name **4** (acceptance 3 incl. the D2 guard + replay 1); TL ruff clean; frontend typecheck + vitest **142** + build green; SC suite **152** + ruff + frozen b3 regressions **2** (fixtures untouched). 6-agent adversarial verify on the exact commits: **5 PASS (high) + 1 finding REPAIRED in-window** (the `_track_outcomes` per-item swallow guard). Prior D-window state (D1a DARK SC `c7564fd` + TL `c7f2a84`; D2 TL `73aa7df`) unchanged beneath. Decision 9.6 unchanged (pin DECLARED c615e40; enforcement DEFERRED; QL cold-install debt open).
+- **Next step:** **FULL STOP — owner review of the D1b diffs (`D1B_SC_DIFF.txt` / `D1B_TL_DIFF.txt`), then push at greenlight.** PIN NOTE: SC `945f381` (D1b PART 1) is CONSUMER-FACING — TL's adapter reads the new `StreamResolution.resolved_ts_utc`, so a COLD install from TL's current pin (`c7564fd`, D1a) would AttributeError on the first resolution (dev resolves SC editable, masking it) — per the pin convention TL's pin bump to the final pushed SC sha rides the greenlight as a NEW chore commit (same flow as the D-window pin chore `4bb9290`); QL's bump stays deferred to its next window.
 - **Drift-net status:** **S-B3a DONE (fold-collapse + dedup-into-plugin), byte-identical.** The runtime's `level_state`, `_zones_for_snapshot`, `_touched_zone_keys`/`_zone_key`/`_touch_zone_key_from_touch` are DELETED; `RuntimeUpdate.levels` ← `plugin.on_event` return, snapshot/update `zones` ← `plugin.snapshot_zones`, snapshot `levels` ← `plugin.current_levels`, dedup = plugin-owned `_fired_keys`, touches flow back VERBATIM. Proven against the **FROZEN, UNTOUCHED** B3 digests: `test_b3_golive_plugin_regression` + `test_b3_multiday_reset_plugin_regression` **2 passed** (3,284,775 trades, 8 reset boundaries — every per-trade `to_dict()` + snapshot byte-identical). Full SC suite **144**; TL acceptance+replay **3**; decision-fn gates **2** (UNCHANGED); ruff clean. 5-agent adversarial verify: **5 PASS (all high confidence)**. Verified 2026-06-09 on the final tree.
 - **Last-verified date:** 2026-06-09
 - **Note (release, decision 9.6):** BOTH consumers now pin SC at `c615e40` (the post-S-B3b stamp commit): TL `backend/pyproject.toml:19` (bumped cbf9b99 → c615e40 in `0e1c7ce`, the deferred S-B3b bump) and QL `pyproject.toml` (declared in `9b8e798`). PIN CONVENTION (clarification): the pin tracks the latest SC commit with CONSUMER-FACING content; doc-only SC commits (like this C-window record commit) do NOT move it. **STATUS (amended 2026-06-09): pin DECLARED (c615e40); enforcement DEFERRED** — dev resolves SC via the editable install; nothing currently exercises the pin. **NAMED DEBT: QL cold-install resolution check (the analog of TL's cold-install CI) — required to make 9.6 enforced rather than declared.**
@@ -656,8 +656,136 @@ batch 0-based; gate A compares raw, gate B normalizes the tracker's 1-based coun
   (carried from the C-window, unchanged). INFORMATIONAL: the repo test fixture keeps the
   synthetic policy (tp15/**sl30**/16:15) while the deployed bundle carries
   tp15/**sl15**/17:00 — tests deliberately keep the synthetic policy; recorded, not changed.
+  **AMENDED at D1b:** the D2 guard's `outcome_tracker.py` docstring carve-out (the
+  tracker's cutoff wall-clock math, "dies WITH the tracker at D1b") is **RETIRED on
+  schedule** — the tracker is deleted and the bullet removed; the guard's scan code never
+  carved the tracker out, so no code change.
 
----
+### Phase D — D1b deviations / clarifications (flip + delete: serve the honest resolver, retire the tracker)
+
+Ratified semantics implemented exactly: full honest alignment — the dashboard serves the
+D1a streaming resolver's outcomes; drops are surfaced explicitly with reasons;
+SESSION_END classification retires; entry is the real trade print. The legacy
+`OutcomeTracker` is DELETED. SC PART 1 (`945f381`) is additive; TL PART 2 (`29b5caf`) is
+the flip.
+
+- **D-D1b-a (SC `resolved_ts_utc` + the documented asymmetry).** `StreamResolution`
+  gained `resolved_ts_utc` (the RESOLVING bar's `close_ts_utc`, stamped in `on_bar`).
+  DELIBERATE ASYMMETRY, documented in the `StreamResolution` docstring: the kernel batch
+  `OutcomeResult` carries NO timestamp (a batch caller indexes `bars_to_resolution` into
+  the `day_bars` list it already holds; the timestamp is the envelope's concern). Gate A
+  cannot arbitrate the field against batch, so it is PINNED in
+  `tests/test_streaming_resolver.py`. CLARIFICATION vs the prompt's "extend the
+  resolution-path test": that file had NO resolution-path test (gate A owned resolutions;
+  the D-D1a-j tests pin terminal arms only), so one was **ADDED**
+  (`test_resolution_carries_the_resolving_bars_close_instant` — also pins
+  label/entry/decision_ts/zero-based bars on the same emission). Gate A verified
+  field-read-only (never constructs `StreamResolution`, never compares whole dataclasses);
+  no other construction site exists in SC/TL/QL.
+- **D-D1b-b (the adapter + `parse_bar_type`'s new home).** NEW
+  `services/inference/resolution_adapter.py` (TL) — placed in `services/inference/` rather
+  than beside `outcome_to_dto` (api/dto.py) because the runtime consumes it to build
+  DOMAIN objects; api/ importing into the hot path would invert layering. Mapping table
+  (ratified): `tradeable_reversal → TP_HIT`; `aggressive_blowthrough → SL_HIT`;
+  `trap_reversal → SL_HIT`; an unmapped label fails LOUD (`ValueError`), so a future
+  4th engine label must be mapped deliberately. `correct = (result.label ==
+  prediction.predicted_class)` computed TL-side (SC stays correctness-free).
+  `_parse_bar_type` RELOCATED here VERBATIM (regex + strip().lower() + ValueError message
+  intact) as **public `parse_bar_type`** — its sole src consumer is the resolver build
+  (`runtime._build_honest_resolver`); parse unit tests kept alive in
+  `tests/test_resolution_adapter.py` (2 accept forms + 5 reject cases).
+- **D-D1b-c (bars semantics + entry price — SERVED SHAPE CHANGE).** `bars_to_resolution`
+  is now the SC ZERO-BASED index of the resolving bar within the forward window; the
+  retired tracker served a 1-based bar count (gate B normalized old−1 for comparison —
+  same fact, now documented in `domain/outcomes.py` + the adapter). `Outcome`/`OutcomeDTO`
+  gained `entry_price` (ADDITIVE) — the honest decision-time fill the excursions were
+  anchored on, replacing the tracker's level-price anchor (which was never surfaced).
+- **D-D1b-d (the drop surface).** New domain `DroppedPrediction` {prediction_id,
+  touch_id, reason, decision_ts_utc, entry_price?} + `DroppedPredictionDTO`; WS frame
+  `prediction.dropped` with payload `{"dropped": {…}}` (mirrors `prediction.resolved`'s
+  `{"outcome": {…}}` wrapper); snapshot gains a `dropped` ring beside `outcomes` (SAME
+  cap, `outcome_limit=500`); `RuntimeUpdate.dropped` (+ `has_deltas`); replay
+  `_coalesce_replay_updates` accumulates it event-style (the audit-#N4 rule). Reason
+  vocabulary = the SC `StreamDrop.reason` arms verbatim: registration {flatten, cutoff,
+  no_fill} (entry None — never queried/no fill) + terminal {no_forward, no_resolution}
+  (entry carried). Frontend: `MessageType` + DTO + `normalizeDropped` + store ring (cap
+  100, de-dupe by prediction id, cleared on reset/clear) + per-prediction annotation
+  (`prediction.dropped`, parallel to `prediction.outcome`) + IntelligencePanel `dropped`
+  badge with the reason; drops NEVER enter `prediction.outcome`, so
+  `normalizeOutcomeMarkers` produces no chart marker by construction.
+- **D-D1b-e (runtime rewiring).** `_track_outcomes` serves resolver emissions through the
+  adapter (resolutions → outcomes ring + `prediction.resolved`; terminal drops → dropped
+  ring + `prediction.dropped`); registration-time drops from `_register_prediction` (ex
+  `_register_dark` — same touch anchors, same fail-loud missing-anchor ValueError, same
+  swallow-on-exception posture) ride the same `RuntimeUpdate`. New `_open_predictions`
+  map (prediction_id → `Prediction`) correlates resolver keys back to predictions —
+  populated on live registration, popped on emission, cleared in LOCKSTEP with
+  `resolver.reset()` (reset / hot-swap / clear_predictions); an emission with no open
+  prediction logs a warning and is skipped (lifecycle-bug guard, hot path never breaks).
+  The dark ring, `dark_outcomes` property, `_append_dark`, and `_build_outcome_tracker`
+  are DELETED — the resolver IS the serving path. **VERIFY-DRIVEN REPAIR (in-window):**
+  the first cut guarded only `resolver.on_bar`, leaving the per-emission consumption
+  (pop → adapt → ring-append) unguarded — a failing adaptation (e.g. the adapter's
+  deliberate fail-loud arm, or a stale-pin AttributeError on a cold install) would have
+  escaped the hot path and orphaned same-loop ring-appended drops off the
+  `RuntimeUpdate`, contradicting the docstring's swallow invariant. Repaired with a
+  PER-ITEM guard (a failing adaptation loses only that emission, logged; the bar's other
+  emissions, the drops already collected, and the trade event all survive) and PINNED by
+  `test_failing_adaptation_never_breaks_the_hot_path` (monkeypatched adapter raise →
+  nothing propagates, loss logged, subsequent trades process).
+- **D-D1b-f (ResolutionType TRIM — REMOVED).** `SESSION_END` and `NO_RESOLUTION` members
+  REMOVED. Grep proof (backend/src + backend/tests + frontend/src, post-flip): zero
+  references — the producers/consumers were exactly the deleted tracker, its deleted
+  tests, and the deleted gate-B harness. Surviving string hits are unrelated: the contract
+  key `label_policy.no_resolution_dropped` (fixture), the `StreamDrop.reason`
+  "no_resolution" vocabulary (a drop reason, not a resolution type), and the adapter
+  test's use of "session_end" as an example UNMAPPED label.
+- **D-D1b-g (gate-B harness RETIRED — deleted).** `validation/d1_characterization_harness.py`
+  deleted: its comparison subject (the tracker) is gone, and a single-path repoint would
+  count resolver events while characterizing nothing. `backend/D1_CHARACTERIZATION.md`
+  (untracked export) + git history are the record. `backend/validation/` is now empty and
+  gone; TL's ruff invocation drops it from scope.
+- **D-D1b-h (test accounting — the complete assertion-change enumeration).**
+  (1) `tests/test_outcome_tracker.py` DELETED (−16) — every assertion tested the retired
+  tracker/classification. (2) `tests/test_dark_honest_resolver.py` → git mv →
+  `tests/test_honest_resolver_serving.py` (7 → 7, rewritten to the served surfaces):
+  dark-ring assertions → outcomes/dropped ring + `RuntimeUpdate`/snapshot assertions;
+  tracker-parallel assertions dropped WITH the tracker; the isolation test now asserts the
+  dark surfaces are GONE + served streams stay domain-typed; includes the drop-frame
+  END-TO-END test (flatten registration drop → `prediction.dropped` WS envelope) and the
+  0-BASED-BARS-SERVED pin (first in-window bar resolves at index 0; the tracker would have
+  served 1). (3) NEW `tests/test_resolution_adapter.py` (+13): mapping table ×3 labels,
+  correctness both directions, fail-loud unmapped label, outcome-id uniqueness, drop
+  mapping ×2, `parse_bar_type` ×2 accept + 5 reject. (4) `tests/test_inference_api.py`:
+  the synthesized `Outcome` gains `entry_price` (construction would fail without it); the
+  resolved-payload test ADDS a full key-set pin incl. `entry_price` (the old test asserted
+  DTO round-trip equality only); NEW `test_dropped_prediction_envelope_validates` (+1).
+  (5) `tests/test_api_contract.py`: both snapshot key-set assertions + the empty-snapshot
+  key-set gain `"dropped"`; new `dropped == []` empty assertion. (6)
+  `tests/test_strategy_core_acceptance.py`: docstring bullet removal ONLY — zero assertion
+  changes. (7) Frontend: fixture builders gain the new required fields
+  (`entryPrice`/`entry_price`, `dropped: null`) in viewModels/ChartWorkspace/
+  IntelligencePanel/stores/client/normalize tests; `normalize.test.ts`'s full-equality
+  `normalizeOutcome` expectation gains `entryPrice`; +5 new tests (store annotate/cap ×2,
+  client route ×1, panel badge ×1, normalize ×1); the clear-test also asserts `dropped`
+  clears. (8) +1 NEW `test_failing_adaptation_never_breaks_the_hot_path` (the
+  verify-driven swallow pin, D-D1b-e). **Suite math: TL 420 → 419 = −16 +13 +1 +1 (dark
+  file 7→8); frontend 137 → 142.**
+- **D-D1b-i (adversarial-verify record + informational findings).** 6-agent read-only
+  verify on the exact local commits: flip-correctness **FAIL → REPAIRED in-window**
+  (the per-item guard, D-D1b-e — the other 5 lenses and the FAIL's own sweep verified
+  registration semantics, lockstep, no-double-serve, caps, surfaces, deletion totality,
+  adapter fidelity, frontend, and scope all clean at high confidence). INFORMATIONAL
+  (recorded, deliberately NOT changed): (i) `StreamingHonestResolver.flush()` has no TL
+  src caller — setups still open at a replay day-end / session shutdown are cleared by
+  `reset()` without emitting their `no_forward`/`no_resolution` drops; LIVE continuity is
+  unaffected (the next session's bars cross the ABSOLUTE cutoff and finalize via
+  `on_bar`, exactly D-D1a-d's design), so this is an end-of-stream drop-GENERATION gap,
+  not a transport gap — candidate flush hook at replay completion, future window. (ii)
+  The frontend snapshot-with-drops seeding path is code-verified but not test-covered
+  (the only snapshot fixture omits `dropped`; reconnect-to-older-backend clears stale
+  drops via `?? []` — verified by reading). (iii) The cold-install pin reachability is
+  the PIN NOTE above.
 
 ## Status table
 
@@ -673,7 +801,7 @@ batch 0-based; gate A compares raw, gate B normalizes the tracker's 1-based coun
 | (added) | S-B3b | Tidy: declare the plugin seed path (`set_static_levels`/`load_prior_day_summary`) in the StrategyPlugin Protocol; rename the repurposed drift-net files off their `test_b2_*`/`parity` names; de-stale the V3 matrix PDH/PDL row | DONE | 2026-06-09 | `19c64da` | full SC suite 144 (same tests, new paths); digest regressions under the NEW filenames `test_b3_golive_plugin_regression` + `test_b3_multiday_reset_plugin_regression` 2 (fixtures untouched); ruff clean | closes S-B3a verify items (i)+(ii) and D-B3b's filename debt. §9.1 registry assertion now requires the seed hooks (deliberate strengthening). Living refs updated incl. the multiday file's live cross-import; historical PROGRESS mentions left as record. Deviations D-SB3b-a..c. TL pin bump DEFERRED to C1 (no TL-facing change). added step, not in plan §7 — per deviation rule |
 | C | C1 | Repoint TL model_registry import from the local contract copy to strategy_core.contract, keeping today's flat StrategyContract shape | DONE | 2026-06-09 | TL `0e1c7ce` | TL full suite 435 passed + 1 skip (benchmark, flag-gated); real-bundle registry gate (exactly 3 v3 discoverable; all 3 activate end-to-end incl. hot-swap; legacy/v1/v2 rejected fail-closed); TL seam test_strategy_core_acceptance + test_strategy_core_replay_integration 3; QL suite 739 (incl. nodrift 9 + repoint 11); TL ruff clean; QL ruff unchanged (13 pre-existing, scratch files) | ALL 9 import sites (4 prod + 5 test) → strategy_core package root; engine hook at BOTH registry loader entries (D-C1a); legacy loads-unbound RETIRED, owner-ratified (D-C1b); fixture → minimal valid SC-v3, +2 keys only (D-C1e); binding tests → hook call shape (D-C1d); TL pin cbf9b99→c615e40 rode this commit (deferred S-B3b bump). 6-agent adversarial verify 6 PASS (high). Deviations D-C1a..e |
 | C | C2 | Delete TL's local strategy_contract.py once nothing imports it | DONE | 2026-06-09 | TL `0e1c7ce` (same commit as C1) | full-repo grep: zero live importers (D-C2a); TL full suite 435 + 1 skip post-deletion; ruff clean | `domain/contracts/strategy_contract.py` + `__init__.py` git rm'd; emptied dir removed; only historical docs/plans prose + untracked BASELINE_REPORT.md/test.md still mention it (left as record) |
-| D | D1 | Retire TL's local outcome tracker in favor of the engine's honest decision-time fill | IN PROGRESS (D1a DARK landed locally; D1b flip+delete pending owner review of gate B) | 2026-06-10 | SC `c7564fd` + TL `c7f2a84` (LOCAL, not pushed) | GATE A `test_d1_streaming_vs_batch_parity` EXACT per-touch parity (9 days, 42 touches/35 resolved, drops {flatten: 7}); SC suite 144 + ruff; b3 frozen-digest regressions 2 (fixtures untouched); decision-fn gates 2; TL suite 442+1 skip at D1a (420/0 after D2); seam 3; 7 new dark-seat unit tests; GATE B characterization emitted (29 preds; mean abs entry delta 55.6 ticks; 6 label changes; 5/29 correctness flips) | SC: streaming.py resolver + runtime trade ring/accessor + fail-loud forward-tf activation validation; TL: DARK parallel seat, touch-anchored registration, dark ring only — zero WS/DTO/frontend change. Deviations D-D1a-a..i |
+| D | D1 | Retire TL's local outcome tracker in favor of the engine's honest decision-time fill | DONE (LOCAL, not pushed — D1a DARK + D1b flip+delete) | 2026-06-10 | D1a: SC `c7564fd` + TL `c7f2a84`; D1b: SC `945f381` + TL `94610ff` (all LOCAL) | D1a: GATE A `test_d1_streaming_vs_batch_parity` EXACT per-touch parity (9 days, 42 touches/35 resolved, drops {flatten: 7}); GATE B characterization (29 preds; mean abs entry delta 55.6 ticks; 6 label changes; 5/29 correctness flips). D1b: SC suite 152 + ruff + b3 frozen-digest regressions 2 (fixtures untouched); TL suite 419 (= 420 − 16 tracker + 13 adapter + 1 dropped-frame + 1 swallow pin; dark file 7→8) + ruff; seam-by-name 4 (acceptance 3 incl. D2 guard + replay 1); frontend typecheck + vitest 142 (+5) + build green; 6-agent adversarial verify 5 PASS + 1 repaired | D1a: SC streaming resolver + trade ring + fail-loud activation validation; TL DARK seat (D-D1a-a..i). D1b: resolver SERVES via the new resolution adapter (TP/SL mapping, TL-side correctness, 0-BASED bars, additive `entry_price`, `resolved_ts` from new SC `StreamResolution.resolved_ts_utc`); drops surfaced (`prediction.dropped` + snapshot ring + RuntimeUpdate + frontend badge w/ reason, no chart marker); tracker + 16 tests + gate-B harness DELETED; ResolutionType SESSION_END/NO_RESOLUTION REMOVED (grep-proven); `parse_bar_type` relocated public; D2-guard tracker carve-out retired (D-D1b-a..i) |
 | D | D2 | Confirm TL holds no local candle/session/level recompute, then assert it via test | DONE (LOCAL, not pushed) | 2026-06-10 | TL `73aa7df` | TL suite 420 passed 0 skipped (443 collected − 24 deleted engine tests + 1 new guard); strengthened guard + seam green; src-wide grep zero engine names; ruff clean | CandleEngine/_MutableCandle/CandleUpdate + SessionLevelEngine/_SessionRange/_DaySummary/LevelUpdate/SESSION_LEVELS/LEVEL_ORIGIN deleted, DTO types kept; guard = src-wide reintroduction ban + SessionClassifier confinement + DTO-surface pin with documented carve-outs; sessions.py NOT deleted (seed.py debt); httpx2→dev rider. Deviations D-D2-a..c + named debts |
 | E | E1 | Introduce platform_version alongside ENGINE_VERSION, both stamped, loader fail-closes on either | NOT STARTED |  |  |  |  |
 | E | E2 | Add per-plugin strategy_version/strategy_id, fail-closed via registry-lookup equality; turn strategy_id into a router | NOT STARTED |  |  |  |  |
@@ -687,6 +815,43 @@ batch 0-based; gate A compares raw, gate B normalizes the tracker's 1-based coun
 
 ## Change log (newest first)
 
+- **2026-06-10** — **D1b (flip + delete: SERVE the honest resolver, RETIRE the tracker)
+  landed as LOCAL commits → D1 DONE locally — FULL STOP before push** (SC `945f381` + TL
+  `94610ff` on `platform-refactor`; QL untouched at `9b8e798`; diffs exported as
+  `D1B_SC_DIFF.txt` / `D1B_TL_DIFF.txt` for owner review). SC PART 1 (additive):
+  `StreamResolution.resolved_ts_utc` = the resolving bar's `close_ts_utc`, stamped in
+  `on_bar`; the batch `OutcomeResult` deliberately stays timestamp-free (caller concern) —
+  asymmetry documented in the `StreamResolution` docstring; gate A cannot arbitrate the
+  field, so it is pinned by a NEW resolution-path unit test (the file had none — gate A
+  owned resolutions; D-D1b-a). TL PART 2 (the flip): NEW
+  `services/inference/resolution_adapter.py` maps `StreamResolution`+`Prediction` → served
+  `Outcome` (tradeable_reversal→TP_HIT, blowthrough/trap→SL_HIT, fail-loud unmapped;
+  correct computed TL-side; ZERO-BASED bars — the tracker was 1-based; NEW additive
+  `entry_price` = the honest fill) and `StreamDrop`+`Prediction` → NEW `DroppedPrediction`;
+  drops broadcast as `prediction.dropped`, ride the snapshot (`dropped` ring, same cap) +
+  `RuntimeUpdate.dropped` + replay coalesce, and render in IntelligencePanel as a distinct
+  badge with reason (no chart marker — drops never enter `prediction.outcome`);
+  `ApplicationRuntime` serves resolver emissions through the adapter with the new
+  `_open_predictions` correlation map (lockstep clear with `resolver.reset()`); the DARK
+  ring + `dark_outcomes` + gate-B plumbing DELETED; `outcome_tracker.py` + its 16 tests
+  DELETED (`parse_bar_type` relocated VERBATIM, now public in the adapter module);
+  `ResolutionType.SESSION_END`/`NO_RESOLUTION` REMOVED (grep proof: zero post-flip refs);
+  `validation/d1_characterization_harness.py` RETIRED (deleted — comparison subject gone;
+  the md artifact + git history are the record); the D2 guard's tracker carve-out bullet
+  removed ON SCHEDULE. Gates on the final trees: SC suite **152** + ruff + frozen b3
+  digest regressions **2** (fixtures untouched); TL suite **419** (accounted exactly:
+  420 − 16 tracker + 13 adapter + 1 dropped-frame + 1 swallow pin; dark file 7→8
+  adapted); seam-by-name **4**; TL ruff clean; frontend typecheck clean + vitest **142**
+  (137 + 5 new) + vite build green. Assertion changes enumerated in D-D1b-h. 6-agent
+  read-only adversarial verify on the exact local commits: **5 PASS (high) + 1 FAIL
+  REPAIRED in-window** (the `_track_outcomes` per-emission consumption was unguarded
+  vs the docstring's hot-path swallow invariant → per-item guard + pinning test;
+  D-D1b-e/D-D1b-i; informational findings recorded in D-D1b-i). Deviations
+  **D-D1b-a..i**. PLAN unmodified. PIN NOTE: SC `945f381` is CONSUMER-FACING — TL's
+  adapter reads `resolved_ts_utc`, so a cold install from the current `c7564fd` pin would
+  AttributeError on the first resolution (dev editable masks it); the pin bump to the
+  final pushed SC sha rides the greenlight as a NEW chore commit (same flow as
+  `4bb9290`).
 - **2026-06-10** — **D-WINDOW: D1a (streaming honest resolver, DARK) + D2 (shadow-engine
   deletion + guard) landed as LOCAL commits — FULL STOP before push** (SC `c7564fd`, TL
   `c7f2a84` + `73aa7df`; QL untouched; pushes + the TL pin amend await explicit owner
