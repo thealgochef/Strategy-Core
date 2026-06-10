@@ -24,11 +24,11 @@ deviations.
 
 ## Current state
 
-- **Active phase:** **Phase B COMPLETE** — S-B3a DONE and committed (SC `f6e9be8` on `platform-refactor`): the plugin owns the SOLE level fold + the first-touch dedup; the runtime's redundant copies are deleted. Post-Phase-B tidy **S-B3b DONE** (protocol seed-path declarations + drift-net file renames + V3-matrix de-stale — D-SB3b-a..c). Next phase: C.
-- **Next step:** C1 (repoint TL `model_registry` onto `strategy_core.contract`). C1 also picks up the deferred TL pin bump (S-B3b has no TL-facing change).
+- **Active phase:** **Phase C COMPLETE** — C1+C2 DONE in ONE TL commit (`0e1c7ce` on TL `platform-refactor`): every TL contract import repointed onto the `strategy_core` package-root surface with the fail-closed engine hook (`expected_engine_version=ENGINE_VERSION`) at BOTH `model_registry` loader entries, and the local copy `trade_lab/domain/contracts/` DELETED. Decision **9.6 IMPLEMENTED** (QL `9b8e798`): QL declares + SHA-pins strategy-core identically to TL. Next phase: D.
+- **Next step:** D1 (retire TL's local outcome tracker in favor of the engine's honest decision-time fill — decision 9.8 Option A / Barrier abstraction).
 - **Drift-net status:** **S-B3a DONE (fold-collapse + dedup-into-plugin), byte-identical.** The runtime's `level_state`, `_zones_for_snapshot`, `_touched_zone_keys`/`_zone_key`/`_touch_zone_key_from_touch` are DELETED; `RuntimeUpdate.levels` ← `plugin.on_event` return, snapshot/update `zones` ← `plugin.snapshot_zones`, snapshot `levels` ← `plugin.current_levels`, dedup = plugin-owned `_fired_keys`, touches flow back VERBATIM. Proven against the **FROZEN, UNTOUCHED** B3 digests: `test_b3_golive_plugin_regression` + `test_b3_multiday_reset_plugin_regression` **2 passed** (3,284,775 trades, 8 reset boundaries — every per-trade `to_dict()` + snapshot byte-identical). Full SC suite **144**; TL acceptance+replay **3**; decision-fn gates **2** (UNCHANGED); ruff clean. 5-agent adversarial verify: **5 PASS (all high confidence)**. Verified 2026-06-09 on the final tree.
 - **Last-verified date:** 2026-06-09
-- **Note (release, decision 9.6):** TL's SC SHA pin (`backend/pyproject.toml`) is bumped to the post-S-B3a stamp commit as S-B3a's release step — TL constructs `StrategyRuntime` (collapsed internals) via `runtime/wiring.py`; the editable/working-tree install already resolves it.
+- **Note (release, decision 9.6):** BOTH consumers now pin SC at `c615e40` (the post-S-B3b stamp commit): TL `backend/pyproject.toml:19` (bumped cbf9b99 → c615e40 in `0e1c7ce`, the deferred S-B3b bump) and QL `pyproject.toml` (declared in `9b8e798`). PIN CONVENTION (clarification): the pin tracks the latest SC commit with CONSUMER-FACING content; doc-only SC commits (like this C-window record commit) do NOT move it. The machine-local editable/`PYTHONPATH=src` installs stay for dev; the pin is the cold-install declaration.
 - **B3-prep (PRE-FLIP soak):** the multi-day reset-bracketed real-data coverage authored as a soak (2026-06-09) is now **repurposed into the plugin-path regression** `test_b3_multiday_reset_plugin_regression` (9 days, 8 reset boundaries) vs the frozen digests — see the "Phase B — B3 deviations (flip+delete)" subsection.
 
 ---
@@ -40,7 +40,7 @@ deviations.
 - **9.3** = two-axis version (platform_version + per-plugin strategy_version).
 - **9.4** = time-bars land in Phase F.
 - **9.5** = keep `strategy_core` name, layout `strategy_core/strategies/<id>/`.
-- **9.6** = declare+SHA-pin strategy-core in Quant-Lab.
+- **9.6** = declare+SHA-pin strategy-core in Quant-Lab. **IMPLEMENTED 2026-06-09 (QL `9b8e798`):** pin `strategy-core @ git+https://github.com/thealgochef/Strategy-Core.git@c615e40ec13ef5a34d69910a78d144c677b138a8` added to QL `[project].dependencies`, byte-identical to TL's pin form; `requires-python` rider `>=3.14` → `>=3.13` (see D-9.6a).
 - **9.7** = delete TL's local contract copy.
 - **9.8** = Option A (Barrier abstraction + retire TL outcome tracker, lands in the C/D band).
 - **9.9** = parameterize the session-name set.
@@ -432,6 +432,88 @@ fixtures are untouched. TL/QL untouched — the TL pin bump is deliberately DEFE
   (`StrategyLevelState` under the `touch_reversal` plugin); the runtime seeds it through
   its lifecycle methods and reads levels/zones back via the plugin accessors.
 
+### Phase C — C1+C2 deviations / clarifications (cross-repo) + decision 9.6 implementation
+
+C1 and C2 landed as ONE TL commit (`0e1c7ce`): the C2 deletion is safe only with C1's
+repoint in place, and the C1 tree was never meant to exist with the local copy still
+importable. SC CODE is untouched this window (record-only commit). Engine gate semantics
+were the load-bearing recon fact: SC's loader performs NO engine check on a bare call
+(opt-in `expected_engine_version` hook, checked after `contract_version`, BEFORE
+`model_validate`), whereas TL's deleted local loader bound inline whenever the field was
+present and loaded legacy no-field contracts "unbound" with a warning.
+
+- **D-C1a (hook at BOTH loader entries — refines the prompt's call-shape).** The task named
+  `model_registry._load_contract` (activation) as the hook site; recon found `model_registry`
+  has TWO loader entries into contracts — `_describe_bundle` (DISCOVERY, :135) and
+  `_load_contract` (activation, :286) — and the real-store v2-class bundle
+  (`NQ_20260602_232808`, `engine_version='strategy_core_engine_v2'`) is SCHEMA-VALID under SC,
+  so a hookless discovery would have LISTED it (the old local loader engine-bound inside
+  discovery too). The hook is wired at BOTH entries:
+  `load_strategy_contract(..., expected_engine_version=ENGINE_VERSION)` with `ENGINE_VERSION`
+  imported from `strategy_core` (single-sourced, no literal). Adversarial bypass hunt: zero
+  other paths in `backend/src` turn strategy.json bytes into a `StrategyContract`.
+- **D-C1b (legacy loads-unbound RETIRED — owner-ratified).** A contract with ABSENT
+  engine_version now fails closed twice over: the hook rejects it
+  (`unsupported engine_version None; expected 'strategy_core_engine_v3'`) and SC's schema
+  requires the field anyway. Real-store effect (proven through the registry): the legacy
+  `NQ_20260405_…iterations800_depth4` bundle — the ONLY previously-activatable one — is now
+  rejected; discovery yields EXACTLY the 3 v3 bundles (`NQ_20260603_233847`,
+  `NQ_20260604_012623`, `NQ_20260604_015413`), all 3 activate end-to-end (CatBoost load +
+  feature-name validation + hot-swap; checksum step no-op — no sidecars exist in the store),
+  and v1/v2/legacy fail with `ModelValidationError` wrapping the engine-hook `ContractError`.
+- **D-C1c (import surface).** Package-root imports everywhere: `from strategy_core import
+  CONTRACT_VERSION / ENGINE_VERSION / ContractError / StrategyContract /
+  load_strategy_contract` (all root-exported; SC `CONTRACT_VERSION` is the SAME string
+  `"trade_lab_contract_v1"` TL's local copy used, so no fixture version change). No submodule
+  fallback was needed: TL imports neither `LabelPolicy` nor `DECISION_OFFSET_MINUTES` (the
+  only names not root-exported). `feature_functions.py`'s TYPE_CHECKING deep import
+  (`trade_lab.domain.contracts.strategy_contract`) likewise → package root.
+- **D-C1d (test/assertion edits — the complete list).** (1)
+  `tests/test_engine_version_binding.py` REWRITTEN to the hook call shape (the registry's
+  exact production shape): `test_matching_engine_version_loads` passes
+  `expected_engine_version=strategy_core.ENGINE_VERSION` (assertions unchanged);
+  `test_mismatched_engine_version_fails_closed` uses the v2-style literal
+  `"strategy_core_engine_v2"` (was `"strategy_core_engine_v0_does_not_match"`) + the hook
+  (assertion unchanged: `ContractError` match `"engine_version"`);
+  `test_legacy_bundle_without_engine_version_still_loads` (asserted loads + `engine_version is
+  None`) → `test_absent_engine_version_fails_closed` (asserts `ContractError` match
+  `"engine_version"` via the hook) — the loads-unbound regression is retired WITH the behavior.
+  Module docstring rewritten. (2) `tests/test_strategy_contract.py`: import repoint ONLY —
+  ZERO assertion changes; all error-string matches (`unsupported contract_version`,
+  `invalid strategy contract`, `not valid JSON`) hold verbatim because SC's loader was ported
+  from TL's (run-verified, not assumed). (3) `test_inference_engine.py` /
+  `test_outcome_tracker.py` / `test_feature_functions.py`: import repoints only; nothing else
+  forced. Suite count integrity: 435 passed + 1 skip BEFORE and AFTER (the skip =
+  `test_benchmark_smoke.py:35`, requires `--run-benchmark`, pre-existing).
+- **D-C1e (fixture regeneration — minimal).** `backend/tests/fixtures/strategy.json` gained
+  EXACTLY two keys (git diff: +2/−0): top-level `"engine_version": "strategy_core_engine_v3"`
+  and `label_policy.decision_offset_minutes: 5` (= SC `constants.DECISION_OFFSET_MINUTES`,
+  itself `DEFAULT_INTERACTION_WINDOW_MINUTES`). Validation forced nothing else
+  (`research_session_experiment` is Optional; `contract_version` unchanged per D-C1c).
+- **D-C2a (deletion).** `git rm` of `domain/contracts/strategy_contract.py` + `__init__.py`;
+  emptied directory (+ gitignored `__pycache__`) removed from disk. Full-repo grep
+  (`domain.contracts` / `domain/contracts` / `strategy_contract`, all import/path forms):
+  ZERO live hits — remaining mentions are historical docs/plans prose
+  (`docs/inference-integration-plan.md`, `docs/SESSION-HANDOFF-2026-05-30.md`, `plans/*.md`)
+  + the untracked `BASELINE_REPORT.md`/`test.md`, left as record.
+- **D-9.6a (QL pin implementation detail).** QL `pyproject.toml` `[project].dependencies` +=
+  the pin line byte-identical to TL's form (HTTPS git URL + full 40-char SHA `c615e40e…`);
+  setuptools accepts direct references without extra config (TL needed
+  `hatch.metadata.allow-direct-references`; QL does not). The editable/`PYTHONPATH=src`
+  resolution STAYS for dev — the pin is the cold-install declaration. RIDER:
+  `requires-python` `">=3.14"` → `">=3.13"` (the working interpreter is 3.13.1; `py --list`
+  shows NO 3.14 on the machine). QL-side debt recorded, deliberately NOT touched (outside the
+  enumerated scope): the two script `sys.path` hacks (`scripts/phase8_1_golden.py:32-36`,
+  `scripts/run_databento_acceptance.py:147-149`), and — surfaced by the adversarial verify —
+  `[tool.ruff] target-version = "py314"` + `[tool.mypy] python_version = "3.14"` now lag the
+  relaxed `requires-python`, and QL's `.python-version` file still says `3.14.5`.
+- **Surfaced by the adversarial verify (recorded, deliberately NOT touched):** (i)
+  `test_inference_engine.py:451` bare-loads a real bundle's strategy.json — safe ONLY because
+  the same test activates that bundle through the gated registry first; if the activation step
+  were removed, the bare load would accept an engine-drifted bundle. (ii) TL
+  `backend/pyproject.toml:14` declares `httpx2>=2.3` (pre-existing, unusual package name —
+  flagged for the owner, possibly intended `httpx`).
+
 ---
 
 ## Status table
@@ -446,8 +528,8 @@ fixtures are untouched. TL/QL untouched — the TL pin bump is deliberately DEFE
 | B | B3 | Make the plugin path the default for strategy_id="touch_reversal"; remove the dead hardwired duplicate only after a full green soak | DONE | 2026-06-09 | `85cb7b6` | pre-removal off-vs-on parity 7 (FINAL green, both paths present); digests frozen (off==on on 3,284,775 trades/path); full SC suite 144; real-data plugin regressions vs frozen digests (golive + multiday) 2; TL acceptance+replay 3; decision-fn gates 2; ruff clean | flip+delete: None path + `SC_PLUGIN_ROUTING`/`config.py` removed; plugin auto-attached (D-B3a, fail-loud non-default-scheme guard); off-vs-on real-data tests repurposed to frozen-digest regressions + seam/wiring converted (D-B3b); W2 guard retired (D-B3c); dead `_zones_for_detection`+`detect_touches` import removed, level_state fold/snapshot/dedup KEPT (D-B3d); fold-collapse + dedup-move SPLIT to S-B3a. 6-agent adversarial verify 5 PASS + 1 stale-comment fixed. |
 | (added) | S-B3a | Collapse the redundant runtime level fold (D-B2a) + move the once-per-day `_touched_zone_keys` dedup INTO the plugin + flow the raw `Touch` back onto `RuntimeUpdate.touches` | DONE | 2026-06-09 | `f6e9be8` | frozen-digest regressions `test_b3_golive_plugin_regression` + `test_b3_multiday_reset_plugin_regression` 2 (fixtures UNTOUCHED; 3,284,775 trades, 8 reset boundaries, byte-identical); full SC suite 144; TL acceptance+replay 3; decision-fn gates 2 (UNCHANGED); ruff clean | runtime `level_state`/`_zones_for_snapshot`/`_touched_zone_keys`/`_zone_key`/`_touch_zone_key_from_touch` DELETED; plugin = sole owner (on_event returns the level fold; new `current_levels`/`snapshot_zones` accessors; plugin-owned `_fired_keys`; `already_fired_keys` retired; key helper relocated verbatim); raw `Touch` flow-back verbatim; D-B2b RESOLVED plugin-owned (owner-ratified); D-B2i gate + D-B3a guard untouched. Deviations D-SB3a-a..g. 5-agent adversarial verify 5 PASS (high). the LAST Phase-B tidy, before C; split out of B3's flip+delete prompt (added step, not in plan §7 — per deviation rule) |
 | (added) | S-B3b | Tidy: declare the plugin seed path (`set_static_levels`/`load_prior_day_summary`) in the StrategyPlugin Protocol; rename the repurposed drift-net files off their `test_b2_*`/`parity` names; de-stale the V3 matrix PDH/PDL row | DONE | 2026-06-09 | `19c64da` | full SC suite 144 (same tests, new paths); digest regressions under the NEW filenames `test_b3_golive_plugin_regression` + `test_b3_multiday_reset_plugin_regression` 2 (fixtures untouched); ruff clean | closes S-B3a verify items (i)+(ii) and D-B3b's filename debt. §9.1 registry assertion now requires the seed hooks (deliberate strengthening). Living refs updated incl. the multiday file's live cross-import; historical PROGRESS mentions left as record. Deviations D-SB3b-a..c. TL pin bump DEFERRED to C1 (no TL-facing change). added step, not in plan §7 — per deviation rule |
-| C | C1 | Repoint TL model_registry import from the local contract copy to strategy_core.contract, keeping today's flat StrategyContract shape | NOT STARTED |  |  |  |  |
-| C | C2 | Delete TL's local strategy_contract.py once nothing imports it | NOT STARTED |  |  |  |  |
+| C | C1 | Repoint TL model_registry import from the local contract copy to strategy_core.contract, keeping today's flat StrategyContract shape | DONE | 2026-06-09 | TL `0e1c7ce` | TL full suite 435 passed + 1 skip (benchmark, flag-gated); real-bundle registry gate (exactly 3 v3 discoverable; all 3 activate end-to-end incl. hot-swap; legacy/v1/v2 rejected fail-closed); TL seam test_strategy_core_acceptance + test_strategy_core_replay_integration 3; QL suite 739 (incl. nodrift 9 + repoint 11); TL ruff clean; QL ruff unchanged (13 pre-existing, scratch files) | ALL 9 import sites (4 prod + 5 test) → strategy_core package root; engine hook at BOTH registry loader entries (D-C1a); legacy loads-unbound RETIRED, owner-ratified (D-C1b); fixture → minimal valid SC-v3, +2 keys only (D-C1e); binding tests → hook call shape (D-C1d); TL pin cbf9b99→c615e40 rode this commit (deferred S-B3b bump). 6-agent adversarial verify 6 PASS (high). Deviations D-C1a..e |
+| C | C2 | Delete TL's local strategy_contract.py once nothing imports it | DONE | 2026-06-09 | TL `0e1c7ce` (same commit as C1) | full-repo grep: zero live importers (D-C2a); TL full suite 435 + 1 skip post-deletion; ruff clean | `domain/contracts/strategy_contract.py` + `__init__.py` git rm'd; emptied dir removed; only historical docs/plans prose + untracked BASELINE_REPORT.md/test.md still mention it (left as record) |
 | D | D1 | Retire TL's local outcome tracker in favor of the engine's honest decision-time fill | NOT STARTED |  |  |  |  |
 | D | D2 | Confirm TL holds no local candle/session/level recompute, then assert it via test | NOT STARTED |  |  |  |  |
 | E | E1 | Introduce platform_version alongside ENGINE_VERSION, both stamped, loader fail-closes on either | NOT STARTED |  |  |  |  |
@@ -462,6 +544,34 @@ fixtures are untouched. TL/QL untouched — the TL pin bump is deliberately DEFE
 
 ## Change log (newest first)
 
+- **2026-06-09** — **Phase C (C1+C2) landed → Phase C COMPLETE; decision 9.6 IMPLEMENTED**
+  (TL `0e1c7ce` + QL `9b8e798`, both on `platform-refactor`; SC CODE untouched — this record
+  commit only). C1: all 9 TL import sites (4 production incl. the TYPE_CHECKING deep import +
+  5 tests) repointed onto the `strategy_core` package root; the fail-closed engine gate is
+  preserved single-sourced via SC's opt-in hook — `load_strategy_contract(...,
+  expected_engine_version=ENGINE_VERSION)` at BOTH `model_registry` loader entries (discovery
+  `_describe_bundle` AND activation `_load_contract` — the v2-class store bundle is SC-schema-
+  valid, so a hookless discovery would have listed it; D-C1a). Legacy loads-unbound RETIRED,
+  owner-ratified (D-C1b). Fixture regenerated as a minimal valid SC-v3 contract (+2 keys
+  exactly; D-C1e); `test_engine_version_binding` rewritten to the hook call shape
+  (matching loads / mismatched-v2 fails / absent fails; D-C1d). C2: local copy
+  `trade_lab/domain/contracts/` DELETED with zero live importers by full-repo grep (D-C2a).
+  9.6: QL declares + SHA-pins strategy-core byte-identically to TL's pin form at `c615e40`;
+  TL's pin bumped cbf9b99 → c615e40 in the same TL commit (the deferred S-B3b bump);
+  `requires-python` rider `>=3.14` → `>=3.13` (D-9.6a; editable stays for dev; QL `sys.path`
+  script hacks recorded as debt). PIN CONVENTION: the pin tracks the latest SC commit with
+  consumer-facing content; doc-only SC commits do not move it. Gates on the final trees:
+  real-bundle gate THROUGH the repointed registry (exactly the 3 v3 bundles discoverable —
+  `NQ_20260603_233847`/`NQ_20260604_012623`/`NQ_20260604_015413`; all 3 activated end-to-end
+  incl. hot-swap; legacy/v1/v2 rejected with the unsupported-engine_version `ContractError`);
+  TL full suite **435 passed + 1 skip** (benchmark, flag-gated, pre-existing); TL seam gates
+  **3**; QL suite **739** (= pre-change baseline; incl. `test_strategy_contract_nodrift` 9 +
+  `test_strategy_contract_repoint` 11); TL ruff clean; QL ruff unchanged vs baseline (13
+  pre-existing findings in root scratch files); pin reachability `ls-remote` +
+  `merge-base --is-ancestor` PIN-REACHABLE. Verified by a 6-agent read-only adversarial
+  workflow (repoint-completeness / call-shape / gate-preservation / fixture-validity / scope /
+  pin-correctness — **6 PASS, all high confidence**). Deviations **D-C1a..e, D-C2a, D-9.6a**.
+  PLAN unmodified.
 - **2026-06-09** — **S-B3b tidy landed → S-B3b DONE** (committed as SC `19c64da` on
   `platform-refactor`; post-Phase-B, pre-C1). Three recorded
   debts closed in one doc/declaration-only pass (no runtime/plugin behavior change; frozen
