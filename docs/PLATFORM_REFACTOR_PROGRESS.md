@@ -24,11 +24,11 @@ deviations.
 
 ## Current state
 
-- **Active phase:** B — **S-B3a DONE** (the plugin owns the SOLE level fold + the first-touch dedup; the runtime's redundant copies are deleted). **Uncommitted, surfaced for review.** Phase B is complete once S-B3a commits; then Phase C.
-- **Next step:** commit S-B3a after review, then C1 (repoint TL `model_registry` onto `strategy_core.contract`).
+- **Active phase:** **Phase B COMPLETE** — S-B3a DONE and committed (SC `f6e9be8` on `platform-refactor`): the plugin owns the SOLE level fold + the first-touch dedup; the runtime's redundant copies are deleted. Next phase: C.
+- **Next step:** C1 (repoint TL `model_registry` onto `strategy_core.contract`).
 - **Drift-net status:** **S-B3a DONE (fold-collapse + dedup-into-plugin), byte-identical.** The runtime's `level_state`, `_zones_for_snapshot`, `_touched_zone_keys`/`_zone_key`/`_touch_zone_key_from_touch` are DELETED; `RuntimeUpdate.levels` ← `plugin.on_event` return, snapshot/update `zones` ← `plugin.snapshot_zones`, snapshot `levels` ← `plugin.current_levels`, dedup = plugin-owned `_fired_keys`, touches flow back VERBATIM. Proven against the **FROZEN, UNTOUCHED** B3 digests: `test_b3_golive_plugin_regression` + `test_b3_multiday_reset_plugin_regression` **2 passed** (3,284,775 trades, 8 reset boundaries — every per-trade `to_dict()` + snapshot byte-identical). Full SC suite **144**; TL acceptance+replay **3**; decision-fn gates **2** (UNCHANGED); ruff clean. 5-agent adversarial verify: **5 PASS (all high confidence)**. Verified 2026-06-09 on the final tree.
 - **Last-verified date:** 2026-06-09
-- **Note (release, decision 9.6):** TL's SC SHA pin (`backend/pyproject.toml`, currently post-B3 `2fe99e5`) must be bumped again to a commit that includes S-B3a once it lands — TL constructs `StrategyRuntime` (collapsed internals) via `runtime/wiring.py`; the editable/working-tree install already resolves it.
+- **Note (release, decision 9.6):** TL's SC SHA pin (`backend/pyproject.toml`) is bumped to the post-S-B3a stamp commit as S-B3a's release step — TL constructs `StrategyRuntime` (collapsed internals) via `runtime/wiring.py`; the editable/working-tree install already resolves it.
 - **B3-prep (PRE-FLIP soak):** the multi-day reset-bracketed real-data coverage authored as a soak (2026-06-09) is now **repurposed into the plugin-path regression** `test_b3_multiday_reset_plugin_regression` (9 days, 8 reset boundaries) vs the frozen digests — see the "Phase B — B3 deviations (flip+delete)" subsection.
 
 ---
@@ -395,8 +395,9 @@ state — explicitly out of scope).
   never gets `configure()`, so its level state stays at `__init__` defaults — no such
   call site exists; production always supplies the section (D-B3a guard unchanged).
 
-**STOP point:** S-B3a is complete and green on the final tree but **NOT committed** —
-surfaced for review per the S-B3a prompt. The commit SHA will be stamped here on commit.
+**STOP point (resolved):** S-B3a was surfaced for review per the S-B3a prompt, greenlit
+against the exact reviewed bytes (byte-identical diff comparison at commit time), and
+committed as SC `f6e9be8` on `platform-refactor`.
 
 ---
 
@@ -410,7 +411,7 @@ surfaced for review per the S-B3a prompt. The commit SHA will be stamped here on
 | B | B1 | Add an optional plugin param to StrategyRuntime.__init__, defaulting to None; when None, run the exact current state.py:271-280 block | DONE | 2026-06-08 | `1491921` | full SC suite 140 passed (incl. test_runtime_state/touches/touch_zones/levels + A3 test_touch_reversal_plugin); TL test_strategy_core_acceptance + test_strategy_core_replay_integration (3 passed vs branch SC); GATE test_production_pair_parity + test_duckdb_streaming_parity + test_decision_diff (3 passed, store+alpha_lab present) | None-path byte-identical (inner lines unchanged, +4 indent only); else = no-op `pass` (B2 placeholder); `plugin` added last (no param reorder); StrategyPlugin TYPE_CHECKING-only → registry stays empty. Only runtime/state.py changed. |
 | B | B2 | Route _process_trade through plugin.on_bar_closed when a plugin is present, and construct StrategyRuntime with the registered TouchReversalPlugin in a feature-flagged path | DONE | 2026-06-08 | SC `7a5cc96`+`5061163`; TL `242c606` | full SC suite 145; test_b2_plugin_seam_parity (PART1); test_b2_wiring (resolver/W2/W4-lifecycle); GO-LIVE test_b2_golive_runtime_parity (real days 2025-07-15 339997 trades + 2025-07-07 306103 trades, OFF==ON per trade, 5 touches/6 zones); TL test_strategy_core_acceptance + test_strategy_core_replay_integration (3 OFF + 3 ON); decision-fn gates test_production_pair_parity + test_decision_diff (2 passed); ruff clean | flag SC_PLUGIN_ROUTING default OFF via wiring.touch_reversal_kwargs(); TL StrategyCoreService wired; lifecycle propagation + plugin load_prior_day_summary hook; plugin internal decision-tf gate REMOVED (runtime gates). Deviations D-B2f..k. |
 | B | B3 | Make the plugin path the default for strategy_id="touch_reversal"; remove the dead hardwired duplicate only after a full green soak | DONE | 2026-06-09 | `85cb7b6` | pre-removal off-vs-on parity 7 (FINAL green, both paths present); digests frozen (off==on on 3,284,775 trades/path); full SC suite 144; real-data plugin regressions vs frozen digests (golive + multiday) 2; TL acceptance+replay 3; decision-fn gates 2; ruff clean | flip+delete: None path + `SC_PLUGIN_ROUTING`/`config.py` removed; plugin auto-attached (D-B3a, fail-loud non-default-scheme guard); off-vs-on real-data tests repurposed to frozen-digest regressions + seam/wiring converted (D-B3b); W2 guard retired (D-B3c); dead `_zones_for_detection`+`detect_touches` import removed, level_state fold/snapshot/dedup KEPT (D-B3d); fold-collapse + dedup-move SPLIT to S-B3a. 6-agent adversarial verify 5 PASS + 1 stale-comment fixed. |
-| (added) | S-B3a | Collapse the redundant runtime level fold (D-B2a) + move the once-per-day `_touched_zone_keys` dedup INTO the plugin + flow the raw `Touch` back onto `RuntimeUpdate.touches` | DONE | 2026-06-09 | pending (uncommitted; surfaced for review) | frozen-digest regressions `test_b3_golive_plugin_regression` + `test_b3_multiday_reset_plugin_regression` 2 (fixtures UNTOUCHED; 3,284,775 trades, 8 reset boundaries, byte-identical); full SC suite 144; TL acceptance+replay 3; decision-fn gates 2 (UNCHANGED); ruff clean | runtime `level_state`/`_zones_for_snapshot`/`_touched_zone_keys`/`_zone_key`/`_touch_zone_key_from_touch` DELETED; plugin = sole owner (on_event returns the level fold; new `current_levels`/`snapshot_zones` accessors; plugin-owned `_fired_keys`; `already_fired_keys` retired; key helper relocated verbatim); raw `Touch` flow-back verbatim; D-B2b RESOLVED plugin-owned (owner-ratified); D-B2i gate + D-B3a guard untouched. Deviations D-SB3a-a..g. 5-agent adversarial verify 5 PASS (high). the LAST Phase-B tidy, before C; split out of B3's flip+delete prompt (added step, not in plan §7 — per deviation rule) |
+| (added) | S-B3a | Collapse the redundant runtime level fold (D-B2a) + move the once-per-day `_touched_zone_keys` dedup INTO the plugin + flow the raw `Touch` back onto `RuntimeUpdate.touches` | DONE | 2026-06-09 | `f6e9be8` | frozen-digest regressions `test_b3_golive_plugin_regression` + `test_b3_multiday_reset_plugin_regression` 2 (fixtures UNTOUCHED; 3,284,775 trades, 8 reset boundaries, byte-identical); full SC suite 144; TL acceptance+replay 3; decision-fn gates 2 (UNCHANGED); ruff clean | runtime `level_state`/`_zones_for_snapshot`/`_touched_zone_keys`/`_zone_key`/`_touch_zone_key_from_touch` DELETED; plugin = sole owner (on_event returns the level fold; new `current_levels`/`snapshot_zones` accessors; plugin-owned `_fired_keys`; `already_fired_keys` retired; key helper relocated verbatim); raw `Touch` flow-back verbatim; D-B2b RESOLVED plugin-owned (owner-ratified); D-B2i gate + D-B3a guard untouched. Deviations D-SB3a-a..g. 5-agent adversarial verify 5 PASS (high). the LAST Phase-B tidy, before C; split out of B3's flip+delete prompt (added step, not in plan §7 — per deviation rule) |
 | C | C1 | Repoint TL model_registry import from the local contract copy to strategy_core.contract, keeping today's flat StrategyContract shape | NOT STARTED |  |  |  |  |
 | C | C2 | Delete TL's local strategy_contract.py once nothing imports it | NOT STARTED |  |  |  |  |
 | D | D1 | Retire TL's local outcome tracker in favor of the engine's honest decision-time fill | NOT STARTED |  |  |  |  |
@@ -427,8 +428,9 @@ surfaced for review per the S-B3a prompt. The commit SHA will be stamped here on
 
 ## Change log (newest first)
 
-- **2026-06-09** — Phase B Step **S-B3a landed → S-B3a DONE** (uncommitted, surfaced for review;
-  the LAST Phase-B step). One behavior-preserving collapse: the plugin's level state is now the
+- **2026-06-09** — Phase B Step **S-B3a landed → S-B3a DONE, Phase B COMPLETE** (committed as SC
+  `f6e9be8` on `platform-refactor` after review + a byte-identical diff comparison against the
+  reviewed export; the LAST Phase-B step). One behavior-preserving collapse: the plugin's level state is now the
   SOLE source of levels, zones, and the first-touch dedup — the runtime's redundant copies
   (`self.level_state` + its fold, the snapshot reads + `_zones_for_snapshot` premark,
   `_touched_zone_keys`/`_zone_key`/`_touch_zone_key_from_touch` — exactly D-B3d's KEPT list) are
