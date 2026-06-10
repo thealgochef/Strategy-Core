@@ -24,8 +24,8 @@ deviations.
 
 ## Current state
 
-- **Active phase:** **Phase C COMPLETE** — C1+C2 DONE in ONE TL commit (`0e1c7ce` on TL `platform-refactor`): every TL contract import repointed onto the `strategy_core` package-root surface with the fail-closed engine hook (`expected_engine_version=ENGINE_VERSION`) at BOTH `model_registry` loader entries, and the local copy `trade_lab/domain/contracts/` DELETED. Decision **9.6: pin DECLARED (c615e40; QL `9b8e798`); enforcement DEFERRED** — dev resolves SC via the editable install; nothing currently exercises the pin (see the 9.6 note + D-9.6a debt). Next phase: D.
-- **Next step:** D1 (retire TL's local outcome tracker in favor of the engine's honest decision-time fill — decision 9.8 Option A / Barrier abstraction).
+- **Active phase:** **Phase D IN PROGRESS** — **D1a (streaming honest resolver, DARK) landed LOCALLY** (SC `c7564fd` + TL `c7f2a84`, both on `platform-refactor`, **NOT pushed**): SC gained `decisions/streaming.py` (`StreamingHonestResolver` — the incremental `resolve_honest_outcome`), the runtime trade ring + `trade_price_at` accessor, and the fail-loud forward-timeframe activation validation; TL runs the resolver DARK alongside the tracker (parallel ring, no WS/DTO/frontend change). GATE A: **EXACT streaming==batch per-touch parity** on the 9 real days. GATE B characterization emitted (29 predictions; mean |entry Δ| 55.6 ticks; 6 label changes). **D2 DONE locally** (TL `73aa7df`): dormant `CandleEngine`/`SessionLevelEngine` shadow engines DELETED (live DTO types kept), acceptance guard strengthened to an src-wide reintroduction ban, httpx2 → dev extra rider. Decision 9.6 unchanged (pin DECLARED c615e40; enforcement DEFERRED; QL cold-install debt open).
+- **Next step:** D1b (flip + delete: serve the honest resolver, retire the tracker + SESSION_END classification + WS/DTO surface change) — **pending owner review of the gate-B characterization + greenlight of the D-window diffs**. PIN NOTE: the SC D1a commit is CONSUMER-FACING — per the pin convention TL's pin bump to the final pushed SC sha happens AT GREENLIGHT (amend the TL commit before push); QL's bump is deferred to its next window.
 - **Drift-net status:** **S-B3a DONE (fold-collapse + dedup-into-plugin), byte-identical.** The runtime's `level_state`, `_zones_for_snapshot`, `_touched_zone_keys`/`_zone_key`/`_touch_zone_key_from_touch` are DELETED; `RuntimeUpdate.levels` ← `plugin.on_event` return, snapshot/update `zones` ← `plugin.snapshot_zones`, snapshot `levels` ← `plugin.current_levels`, dedup = plugin-owned `_fired_keys`, touches flow back VERBATIM. Proven against the **FROZEN, UNTOUCHED** B3 digests: `test_b3_golive_plugin_regression` + `test_b3_multiday_reset_plugin_regression` **2 passed** (3,284,775 trades, 8 reset boundaries — every per-trade `to_dict()` + snapshot byte-identical). Full SC suite **144**; TL acceptance+replay **3**; decision-fn gates **2** (UNCHANGED); ruff clean. 5-agent adversarial verify: **5 PASS (all high confidence)**. Verified 2026-06-09 on the final tree.
 - **Last-verified date:** 2026-06-09
 - **Note (release, decision 9.6):** BOTH consumers now pin SC at `c615e40` (the post-S-B3b stamp commit): TL `backend/pyproject.toml:19` (bumped cbf9b99 → c615e40 in `0e1c7ce`, the deferred S-B3b bump) and QL `pyproject.toml` (declared in `9b8e798`). PIN CONVENTION (clarification): the pin tracks the latest SC commit with CONSUMER-FACING content; doc-only SC commits (like this C-window record commit) do NOT move it. **STATUS (amended 2026-06-09): pin DECLARED (c615e40); enforcement DEFERRED** — dev resolves SC via the editable install; nothing currently exercises the pin. **NAMED DEBT: QL cold-install resolution check (the analog of TL's cold-install CI) — required to make 9.6 enforced rather than declared.**
@@ -530,7 +530,119 @@ present and loaded legacy no-field contracts "unbound" with a warning.
   the same test activates that bundle through the gated registry first; if the activation step
   were removed, the bare load would accept an engine-drifted bundle. (ii) TL
   `backend/pyproject.toml:14` declares `httpx2>=2.3` (pre-existing, unusual package name —
-  flagged for the owner, possibly intended `httpx`).
+  flagged for the owner, possibly intended `httpx`). **AMENDED (D-window probe): RESOLVED —
+  correct AND load-bearing.** Cold CI resolves starlette 1.x whose testclient imports
+  `httpx2 as httpx` (verified against the starlette 1.2.1 wheel + the passing cold-CI run);
+  zero direct imports anywhere in TL; sole consumers are the 5 TestClient test files; the
+  local env is stale (starlette 0.52.1 + plain httpx), so local probes mislead. Moved to the
+  dev extra in the D2 commit (CI installs `.[dev]`, backend-ci.yml:37).
+
+### Phase D — D1a deviations / clarifications (streaming honest resolver, DARK)
+
+Ratified design implemented exactly: live scoring adopts batch honest semantics (entry =
+realistic trade print at the decision instant; registration drops {flatten, cutoff}; {no_fill,
+no_forward}; unresolved-at-cutoff → no_resolution drop). SESSION_END classification dies at
+D1b, NOT this window — zero WS/DTO/frontend changes. bars_to_resolution: the new path is SC
+batch 0-based; gate A compares raw, gate B normalizes the tracker's 1-based count.
+
+- **D-D1a-a (output shapes).** `StreamDrop.reason ∈ {flatten, cutoff, no_fill, no_forward,
+  no_resolution}` — the four `HonestEntryDrop` arms PLUS the streaming terminal arm; the
+  no_resolution drop carries the 4dp extremes + `bars_to_resolution=-1`, mirroring the batch
+  `OutcomeResult` no_resolution arm byte-for-byte. Resolutions are emitted as
+  `StreamResolution` envelopes (key + decision_ts + ENTRY price + the intact kernel
+  `OutcomeResult`) — the serving consumer and both gates need the fill the excursions were
+  anchored on. Root-exported: `StreamingHonestResolver`, `StreamResolution`, `StreamDrop`.
+- **D-D1a-b (caller contract).** `register()` MUST be invoked at-or-after the setup's decision
+  instant (the ring only holds what has printed). Production satisfies this STRUCTURALLY:
+  predictions register at observation expiry (= touch + the same 5-minute window); the gate-A
+  harness registers a pending touch on the first trade at/after its decision instant, with
+  post-loop registration for decisions landing in the 17:00–18:00 print-less halt (those drop
+  flatten/cutoff identically to batch — no entry query reached).
+- **D-D1a-c (bar-inclusion rule — gate-A arbitrated).** Every closed bar of the forward
+  timeframe the caller feeds is a candidate — INCLUDING END_OF_DAY partials — exactly as the
+  batch path consumes its `day_bars` list; membership is decided ONLY by the strict
+  `(decision_ts, trading-day 17:00 ET)` close-instant bounds. On the real store partials are
+  unreachable in practice (they freeze at the 18:00 ET roll, after the cutoff that
+  strictly upper-bounds every window). Documented in the module docstring.
+- **D-D1a-d (cutoff signal).** Prints halt AT the 17:00 ET cutoff, so the finalizing signal
+  can never arrive as a same-trading-day forward bar close: a bar closing at/after a setup's
+  cutoff finalizes it WITHOUT contributing its range (batch bound is strictly
+  `close < cutoff`), and the explicit `flush(now_ts)` finalizes by absolute cutoff instant —
+  TL live relies on the next session's bars crossing the ABSOLUTE cutoff datetime; the gate-A
+  harness flushes at each day's 18:00 ET window end (asserts `open_count == 0` after).
+- **D-D1a-e (ring/accessor).** `StrategyRuntime` keeps a bounded `(ts, price>0)` deque fed in
+  `_process_trade` — retention 2× the 30-min lookback, the EXACT 30-min bound enforced at
+  query time (never by eviction); cleared on `reset()`. `price>0` is the ratified live
+  analogue of the reference query's `bid/ask>0` parquet row-validity predicate
+  (`decision_diff_harness.py:594-616`). `RuntimePlatformContext.trade_price_at` is now backed
+  by the ring via a live getter; **`quotes_in_window` STAYS a stub** (§9.10 retention window
+  open — named debt). The b3 frozen digests reproduce byte-identically on the
+  ring-instrumented runtime (the ring touches no emitted value).
+- **D-D1a-f (TL forced test adaptation — enumerated).** 5 pre-existing tests
+  (`test_inference_api.py` ×2 via `_runtime_app_with_active_model`,
+  `test_inference_engine.py` ×3 via `_runtime_with_engine`) activated the REAL 147t contract
+  on `tick_timeframes=(2,)` — exactly the silent-never-resolve hole the new fail-loud
+  activation validation closes, so they now fail loud by design. Helpers changed to
+  `(2, 147)`; the 2t decision bar still drives their touch flow (decision timeframe pins to
+  `min()`); ZERO assertion changes.
+- **D-D1a-g (gate-A reference).** The batch `trade_price_at` reference is implemented over the
+  SAME front-month print set `_read_trades` feeds the runtime (most recent `ts <= as_of`
+  within 30 min, binary-searched) — isolating the mechanism comparison (incremental ring vs
+  whole-day random access); the bid/ask>0 ≙ price>0 mapping is documented in the gate file.
+  Params both sides = the engine constants (tp 15 / sl 30 / trap 5 / offset 5).
+- **D-D1a-h (gate-B scope).** Trades-only, live-like CONTINUOUS replay (no per-day reset) with
+  the real bundle `NQ_20260604_015413` (label_policy tp15/sl15/trap5/147t/17:00) activated
+  through the registry: quote-dependent approach features are NaN (model_native policy), and
+  the no-reset level evolution yields 29 predictions vs the reset-bracketed gate-A roll's 42
+  touches — both counts honest, different configurations. HEADLINES: 29/29 resolved on both
+  paths (zero SESSION_END this window); entry Δ (trade print − level price) mean −20.5 ticks,
+  mean |Δ| **55.6 ticks**, max |Δ| 226; **6 label changes** (5× old sl_hit → new
+  tradeable_reversal; 1× tp_hit → blowthrough; 1× tp_hit→trap; net old 15 tp/14 sl → new 18
+  tradeable/8 blowthrough/3 trap); **5/29 correctness flips**; bars_to_resolution deltas
+  spread −72..+12 (entry anchor changes when barriers trip).
+- **D-D1a-i (rider).** The gate-B harness file's lint debt (unused noqa / int cast / long
+  lines) was fixed in the D2 commit — TL's ruff project scope includes `validation/`, missed
+  at the D1a commit.
+
+### Phase D — D2 deviations / clarifications (shadow-engine deletion + guard)
+
+- **D-D2-a (deleted inventory).** `domain/candles.py`: `CandleEngine` (:103-192),
+  `_MutableCandle` (:35-94, incl. the already-dead `from_trade`), `CandleUpdate` (:97-100)
+  DELETED; KEPT `Candle`, `CandleCloseReason`, `make_bar_id` (live importers:
+  runtime/service/seed/dto/outcome_tracker). `domain/levels.py`: `SessionLevelEngine`
+  (:118-311), `_SessionRange`, `_DaySummary`, `LevelUpdate`, `SESSION_LEVELS`, `LEVEL_ORIGIN`
+  DELETED; KEPT `LevelKind`, `LevelDirection`, `DisplayLevel`, `TouchEvent` (live importers:
+  observations/service/runtime/dto). `domain/sessions.py` NOT deleted — production-reached
+  via `seed.py` (named debt below). Deleted TESTS (24 collected): `test_benchmark_smoke.py`
+  whole file (2 — orphans the `--run-benchmark` conftest hook, harmless; removes the suite's
+  standing 1-skip); `test_prices_sessions_candles.py` 6 CandleEngine tests (14 engine-free
+  survive); `test_levels_observations.py` 14 SessionLevelEngine tests (the
+  ObservationEngine-guard test survives); `test_seed.py` 2 (bar-id collision +
+  vectorized-builder-vs-engine parity).
+- **D-D2-b (guard strengthening).** New
+  `test_deleted_shadow_engines_stay_deleted_across_backend_src`: bans the six deleted names
+  across ALL of `backend/src` (any reintroduction fails), confines `SessionClassifier` to
+  `sessions.py` + the `seed.py` carve-out, and pins `domain/candles` + `domain/levels` to
+  their DTO-only public surface. Carve-outs documented IN the test docstring: `seed.py`
+  warm-up builder (display-only; Chicago-clock divergence = named debt), the tracker's
+  cutoff math (dies at D1b), `strategy_core_service.py:316-325` display-flag re-derivation.
+  The stale `SessionLevelEngine` comment in `adapters/synthetic_replay.py:58` was reworded
+  (it would have tripped the token scan); the kept modules' docstrings deliberately avoid
+  the literal engine names for the same reason.
+- **D-D2-c (oracle losses — recorded).** Deleting the engines removed (1) the ONLY parity
+  cross-check of the production seed builder `build_tick_bars_from_frame` (the engine WAS
+  its oracle — `test_vectorized_builder_matches_candle_engine`) and (2) the live-side
+  generator of the seed bar-id non-collision check. The builder keeps its 6 functional
+  tests; re-anchoring it against SC's batch builder (engine-locked by
+  `test_candle_parity`) is a candidate follow-up, NOT done this window (scope).
+- **NAMED DEBTS (Phase D):** (1) `seed.py` Chicago-clock session math diverges from SC's ET
+  scheme (18:00 CT vs 18:00 ET trading-day boundary) — display-only warm-up, guard
+  carve-out; (2) the `Barrier` Protocol cannot reach `trap_mfe_min` (kind + 2 price methods
+  only) — fix at E3; (3) §9.10 `quotes_in_window` retention window open (stub stays); (4)
+  the orphaned `--run-benchmark` conftest hook; (5) QL cold-install resolution check
+  (carried from the C-window, unchanged). INFORMATIONAL: the repo test fixture keeps the
+  synthetic policy (tp15/**sl30**/16:15) while the deployed bundle carries
+  tp15/**sl15**/17:00 — tests deliberately keep the synthetic policy; recorded, not changed.
 
 ---
 
@@ -548,8 +660,8 @@ present and loaded legacy no-field contracts "unbound" with a warning.
 | (added) | S-B3b | Tidy: declare the plugin seed path (`set_static_levels`/`load_prior_day_summary`) in the StrategyPlugin Protocol; rename the repurposed drift-net files off their `test_b2_*`/`parity` names; de-stale the V3 matrix PDH/PDL row | DONE | 2026-06-09 | `19c64da` | full SC suite 144 (same tests, new paths); digest regressions under the NEW filenames `test_b3_golive_plugin_regression` + `test_b3_multiday_reset_plugin_regression` 2 (fixtures untouched); ruff clean | closes S-B3a verify items (i)+(ii) and D-B3b's filename debt. §9.1 registry assertion now requires the seed hooks (deliberate strengthening). Living refs updated incl. the multiday file's live cross-import; historical PROGRESS mentions left as record. Deviations D-SB3b-a..c. TL pin bump DEFERRED to C1 (no TL-facing change). added step, not in plan §7 — per deviation rule |
 | C | C1 | Repoint TL model_registry import from the local contract copy to strategy_core.contract, keeping today's flat StrategyContract shape | DONE | 2026-06-09 | TL `0e1c7ce` | TL full suite 435 passed + 1 skip (benchmark, flag-gated); real-bundle registry gate (exactly 3 v3 discoverable; all 3 activate end-to-end incl. hot-swap; legacy/v1/v2 rejected fail-closed); TL seam test_strategy_core_acceptance + test_strategy_core_replay_integration 3; QL suite 739 (incl. nodrift 9 + repoint 11); TL ruff clean; QL ruff unchanged (13 pre-existing, scratch files) | ALL 9 import sites (4 prod + 5 test) → strategy_core package root; engine hook at BOTH registry loader entries (D-C1a); legacy loads-unbound RETIRED, owner-ratified (D-C1b); fixture → minimal valid SC-v3, +2 keys only (D-C1e); binding tests → hook call shape (D-C1d); TL pin cbf9b99→c615e40 rode this commit (deferred S-B3b bump). 6-agent adversarial verify 6 PASS (high). Deviations D-C1a..e |
 | C | C2 | Delete TL's local strategy_contract.py once nothing imports it | DONE | 2026-06-09 | TL `0e1c7ce` (same commit as C1) | full-repo grep: zero live importers (D-C2a); TL full suite 435 + 1 skip post-deletion; ruff clean | `domain/contracts/strategy_contract.py` + `__init__.py` git rm'd; emptied dir removed; only historical docs/plans prose + untracked BASELINE_REPORT.md/test.md still mention it (left as record) |
-| D | D1 | Retire TL's local outcome tracker in favor of the engine's honest decision-time fill | NOT STARTED |  |  |  |  |
-| D | D2 | Confirm TL holds no local candle/session/level recompute, then assert it via test | NOT STARTED |  |  |  |  |
+| D | D1 | Retire TL's local outcome tracker in favor of the engine's honest decision-time fill | IN PROGRESS (D1a DARK landed locally; D1b flip+delete pending owner review of gate B) | 2026-06-10 | SC `c7564fd` + TL `c7f2a84` (LOCAL, not pushed) | GATE A `test_d1_streaming_vs_batch_parity` EXACT per-touch parity (9 days, 42 touches/35 resolved, drops {flatten: 7}); SC suite 144 + ruff; b3 frozen-digest regressions 2 (fixtures untouched); decision-fn gates 2; TL suite 442+1 skip at D1a (420/0 after D2); seam 3; 7 new dark-seat unit tests; GATE B characterization emitted (29 preds; mean abs entry delta 55.6 ticks; 6 label changes; 5/29 correctness flips) | SC: streaming.py resolver + runtime trade ring/accessor + fail-loud forward-tf activation validation; TL: DARK parallel seat, touch-anchored registration, dark ring only — zero WS/DTO/frontend change. Deviations D-D1a-a..i |
+| D | D2 | Confirm TL holds no local candle/session/level recompute, then assert it via test | DONE (LOCAL, not pushed) | 2026-06-10 | TL `73aa7df` | TL suite 420 passed 0 skipped (443 collected − 24 deleted engine tests + 1 new guard); strengthened guard + seam green; src-wide grep zero engine names; ruff clean | CandleEngine/_MutableCandle/CandleUpdate + SessionLevelEngine/_SessionRange/_DaySummary/LevelUpdate/SESSION_LEVELS/LEVEL_ORIGIN deleted, DTO types kept; guard = src-wide reintroduction ban + SessionClassifier confinement + DTO-surface pin with documented carve-outs; sessions.py NOT deleted (seed.py debt); httpx2→dev rider. Deviations D-D2-a..c + named debts |
 | E | E1 | Introduce platform_version alongside ENGINE_VERSION, both stamped, loader fail-closes on either | NOT STARTED |  |  |  |  |
 | E | E2 | Add per-plugin strategy_version/strategy_id, fail-closed via registry-lookup equality; turn strategy_id into a router | NOT STARTED |  |  |  |  |
 | E | E3 | Decompose the flat StrategyContract into StrategyEnvelope + typed SectionModel; emit from the plugin | NOT STARTED |  |  |  |  |
@@ -562,6 +674,38 @@ present and loaded legacy no-field contracts "unbound" with a warning.
 
 ## Change log (newest first)
 
+- **2026-06-10** — **D-WINDOW: D1a (streaming honest resolver, DARK) + D2 (shadow-engine
+  deletion + guard) landed as LOCAL commits — FULL STOP before push** (SC `c7564fd`, TL
+  `c7f2a84` + `73aa7df`; QL untouched; pushes + the TL pin amend await explicit owner
+  greenlight after diff review — the SC D1a commit is consumer-facing, so per the pin
+  convention TL's pin bumps to the final pushed SC sha AT GREENLIGHT). D1a: SC
+  `decisions/streaming.py` `StreamingHonestResolver` (incremental `resolve_honest_outcome`
+  over the outcomes kernel: register-at-decision with the exact flatten→cutoff→no_fill
+  firing order; strict-window per-bar excursions; cutoff → no_forward/no_resolution drops),
+  runtime trade ring + `trade_price_at` (price>0 ≙ the reference's row-validity; 30-min
+  query bound; ctx stub backed; quotes_in_window stays a §9.10 stub), fail-loud
+  forward-timeframe activation validation; TL runs the resolver DARK alongside the tracker
+  (touch-anchored registration off the observation chain, same closed-bars hook, parallel
+  500-cap dark ring, zero WS/DTO/frontend change; offset-mismatch warning once at
+  activation). **GATE A: EXACT streaming==batch per-touch parity** over the 9 real store
+  days (42 touches: 35 resolved {tradeable 25, blowthrough 7, trap 3} + drops {flatten 7};
+  every drop-vs-outcome/reason/label/mfe/mae/bars/entry equal). **GATE B characterization**
+  (real bundle through the registry, trades-only, live-like): 29 predictions, 29/29
+  resolved both paths, mean |entry Δ| 55.6 ticks (max 226), 6 label changes, 5/29
+  correctness flips, zero SESSION_END — `D1_CHARACTERIZATION.md` exported. Forced test
+  adaptation (D-D1a-f): 5 pre-existing TL tests activated the 147t contract on
+  (2,)-timeframes (the very hole the validation closes) → helpers now (2, 147). D2: the
+  dormant `CandleEngine`/`SessionLevelEngine` shadow engines + 24 engine tests deleted (DTO
+  types kept; oracle losses recorded D-D2-c), acceptance guard strengthened to an src-wide
+  reintroduction ban + SessionClassifier confinement + DTO-surface pins (carve-outs
+  documented in-test), httpx2 → dev extra (probe verdict: correct + load-bearing via the
+  starlette-1.x cold-CI testclient; C-window verify item (ii) RESOLVED). Gates on the final
+  trees: SC suite **144** + ruff; b3 frozen-digest regressions **2** (fixtures untouched);
+  decision-fn gates **2**; gate A **1**; TL suite **442+1skip** at D1a and **420/0** after
+  D2 (collection fully accounted); seam **3** (+ the new guard); TL ruff clean. Deviations
+  **D-D1a-a..i, D-D2-a..c** + Phase-D named debts. PLAN unmodified. D1b = the flip+delete
+  (serve the resolver, retire the tracker + SESSION_END + the WS surface), NEXT, pending
+  greenlight.
 - **2026-06-09** — **POST-C AMENDMENT (doc-only):** (1) **9.6 re-statused: pin DECLARED
   (c615e40), enforcement DEFERRED** — dev resolves SC via the editable install; nothing
   currently exercises the pin; NAMED DEBT added: **QL cold-install resolution check** (the
