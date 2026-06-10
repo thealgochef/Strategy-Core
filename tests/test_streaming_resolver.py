@@ -6,6 +6,11 @@ drops. These synthetic tests pin the unexercised arms: registration cutoff (incl
 the non-strict boundary), the exact flatten boundary, no_fill, no_forward via
 flush, no_resolution via flush AND via an at/after-cutoff bar close (whose range
 must NOT contribute), and the StrategyRuntime trade-ring lookback/eviction edges.
+
+The resolution-path test additionally pins ``StreamResolution.resolved_ts_utc``
+(the resolving bar's close instant) — the one envelope field gate A can NEVER
+check against batch, because the kernel ``OutcomeResult`` deliberately carries no
+timestamp (see the ``StreamResolution`` docstring).
 """
 
 from datetime import UTC, date, datetime, time, timedelta
@@ -126,6 +131,27 @@ def test_no_resolution_via_flush_carries_4dp_extremes_and_bars_sentinel() -> Non
     assert (drop.max_mfe, drop.max_mae) == (3.0, 2.0)
     assert drop.bars_to_resolution == -1
     assert drop.entry_price == 23000.0
+
+
+def test_resolution_carries_the_resolving_bars_close_instant() -> None:
+    # The resolution path: one in-window bar trips TP (long: MFE 16 >= 15, MAE 1 < 30).
+    resolver = _resolver(trade_price_at=lambda ts: 23000.0)
+    resolver.register("k", touch_bar_ts_utc=_et(10, 0), trading_day=_DAY, direction="long")
+    assert resolver.on_bar(_bar(_et(10, 10), 23003.0, 22999.0)) == ()  # no barrier yet
+    resolving_close = _et(10, 20)
+    emitted = resolver.on_bar(_bar(resolving_close, 23016.0, 22999.0))
+    assert len(emitted) == 1
+    resolution = emitted[0]
+    assert isinstance(resolution, StreamResolution)
+    assert resolution.result.label == "tradeable_reversal"
+    assert resolution.entry_price == 23000.0
+    assert resolution.decision_ts_utc == _et(10, 5)
+    # PIN: resolved_ts_utc is the RESOLVING bar's close_ts_utc — the timestamp the
+    # batch OutcomeResult deliberately omits, so gate A cannot arbitrate it.
+    assert resolution.resolved_ts_utc == resolving_close
+    # ZERO-BASED: the second in-window bar resolves at index 1.
+    assert resolution.result.bars_to_resolution == 1
+    assert resolver.open_count == 0
 
 
 def test_no_resolution_via_on_bar_excludes_the_cutoff_straddling_bars_range() -> None:

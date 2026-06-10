@@ -99,11 +99,22 @@ class StreamDrop:
 
 @dataclass(frozen=True, slots=True)
 class StreamResolution:
-    """A resolved setup: the kernel ``OutcomeResult`` + the fill it was anchored on."""
+    """A resolved setup: the kernel ``OutcomeResult`` + the fill it was anchored on.
+
+    ``resolved_ts_utc`` is the RESOLVING bar's ``close_ts_utc`` — the instant the
+    barrier classification fired (stamped by ``on_bar``). DELIBERATE ASYMMETRY with
+    the batch path: the kernel ``OutcomeResult`` carries no timestamp because a
+    batch caller indexes ``bars_to_resolution`` into the ``day_bars`` list it
+    already holds; a streaming consumer sees each bar once, so the envelope must
+    carry the close instant or it is lost. Gate A therefore cannot check this field
+    against batch — it is pinned by the resolution-path unit test in
+    ``tests/test_streaming_resolver.py`` instead.
+    """
 
     key: object
     decision_ts_utc: datetime
     entry_price: float
+    resolved_ts_utc: datetime
     result: OutcomeResult
 
 
@@ -273,6 +284,7 @@ class StreamingHonestResolver:
                     key=setup.key,
                     decision_ts_utc=setup.decision_ts_utc,
                     entry_price=setup.entry_points,
+                    resolved_ts_utc=bar.close_ts_utc,
                     result=OutcomeResult(
                         label=decided,
                         label_encoded=LABEL_ENCODING.get(decided),
