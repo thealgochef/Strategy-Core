@@ -13,10 +13,11 @@ Surface (exactly PLAN §2.2 + the §9.10 quote accessor):
   (recent closed bars filtered to the label's timeframe; the in-progress bar from the
   candle engine snapshot).
 * `session_at(ts)` — `classify_session` under the live scheme.
-* `trade_price_at(ts)` / `quotes_in_window(start, end)` — MINIMAL here: the touch
-  strategy calls NEITHER, so they return `None` / `()` respectively. Full fidelity
-  (the §9.10 bounded quote buffer and the honest-entry trade-price query) lands when a
-  quote/price-consuming plugin is wired (a later phase) — see the TODOs.
+* `trade_price_at(ts)` — D1a: backed by the runtime's bounded trade ring (the honest
+  decision-time fill query; `StrategyRuntime.trade_price_at`). The touch strategy still
+  does not call it.
+* `quotes_in_window(start, end)` — STILL a stub returning `()`: the §9.10 bounded quote
+  buffer (retention window decision) is open — see the TODO.
 """
 
 from __future__ import annotations
@@ -62,12 +63,14 @@ class RuntimePlatformContext:
         get_candles: Callable[[], object],
         get_closed_bars: Callable[[], Sequence[Bar]],
         get_scheme: Callable[[], SessionScheme],
+        get_trade_price: Callable[[datetime], float | None] | None = None,
     ) -> None:
         self.tick_size = tick_size
         self.point_value = point_value
         self._get_candles = get_candles
         self._get_closed_bars = get_closed_bars
         self._get_scheme = get_scheme
+        self._get_trade_price = get_trade_price
 
     def closed_bars(self, label: str) -> Sequence[Bar]:
         tf = _label_to_timeframe(label)
@@ -86,9 +89,13 @@ class RuntimePlatformContext:
         return None
 
     def trade_price_at(self, ts_utc: datetime) -> float | None:
-        # TODO(honest-entry wiring): return the realistic front-month trade-print price
-        # at ts_utc. The touch strategy does not call this in the streaming runtime.
-        return None
+        # D1a: backed by the runtime's trade ring (StrategyRuntime.trade_price_at — the
+        # most recent price>0 print at/before ts_utc within the 30-min bounded lookback).
+        # The touch strategy does not call this; the streaming honest resolver's wiring
+        # reads the same ring through the runtime accessor.
+        if self._get_trade_price is None:
+            return None
+        return self._get_trade_price(ts_utc)
 
     def session_at(self, ts_utc: datetime) -> str | None:
         return classify_session(ts_utc, self._get_scheme()).session

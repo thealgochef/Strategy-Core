@@ -88,6 +88,11 @@ from strategy_core.decisions.sessions import (
     is_in_closed_window,
     trading_day_for,
 )
+from strategy_core.decisions.streaming import (
+    StreamDrop,
+    StreamingHonestResolver,
+    StreamResolution,
+)
 from strategy_core.decisions.touch import detect_touches, is_touch
 from strategy_core.decisions.zones import build_zones
 from strategy_core.types import (
@@ -150,6 +155,10 @@ __all__ = [
     # decisions: honest-entry orchestration
     "resolve_honest_outcome",
     "HonestEntryDrop",
+    # decisions: streaming honest resolution (D1a)
+    "StreamingHonestResolver",
+    "StreamResolution",
+    "StreamDrop",
     # contract
     "StrategyContract",
     "load_strategy_contract",

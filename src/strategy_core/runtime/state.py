@@ -2,9 +2,10 @@
 
 from __future__ import annotations
 
+from collections import deque
 from collections.abc import Mapping
 from dataclasses import dataclass, field
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any
 
@@ -12,6 +13,7 @@ from strategy_core.candles.streaming import CandleEngine
 from strategy_core.constants import DEFAULT_TICK_SIZE, RESEARCH_SESSION_SCHEME
 from strategy_core.data.events import DataQualityWarning, safe_text
 from strategy_core.decisions.sessions import classify_session
+from strategy_core.decisions.streaming import TRADE_PRICE_LOOKBACK_MINUTES
 from strategy_core.runtime.context import RuntimePlatformContext, point_value_for_symbol
 from strategy_core.types import Bar, Quote, SessionScheme, Touch, Trade, Zone, Level
 
@@ -226,6 +228,12 @@ class StrategyRuntime:
         self._last_event_ts_utc: datetime | None = None
         self._touches: list[Touch] = []
         self._metadata: dict[str, Any] = {}
+        # D1a trade ring: (ts_utc, price_points) prints backing trade_price_at — the honest
+        # decision-time fill query. Retention is 2x the query lookback so a query slightly
+        # behind the feed clock still sees its FULL 30-minute window; the exact 30-minute
+        # bound is enforced at query time, never by eviction.
+        self._trade_ring: deque[tuple[datetime, float]] = deque()
+        self._trade_ring_retention = timedelta(minutes=2 * TRADE_PRICE_LOOKBACK_MINUTES)
         self._feed_status = FeedStatus(state="disconnected", mode="idle", requested_symbol=requested_symbol, last_message="Market-data feed is not started.")
         # The platform context the plugin reads. Backed by live accessors so
         # closed_bars/current_bar/session_at reflect current runtime state across reset().
@@ -235,6 +243,7 @@ class StrategyRuntime:
             get_candles=lambda: self.candles,
             get_closed_bars=lambda: self._recent_closed_bars,
             get_scheme=lambda: self.scheme,
+            get_trade_price=self.trade_price_at,
         )
         # The plugin is mandatory now (auto-attached above when not supplied); configure it
         # from the default or supplied section.
@@ -251,6 +260,7 @@ class StrategyRuntime:
         self._recent_closed_bars.clear()
         self._warnings.clear()
         self._touches.clear()
+        self._trade_ring.clear()
         self._last_quote = None
         self._last_event_ts_utc = None
         self._metadata.clear()
@@ -306,8 +316,30 @@ class StrategyRuntime:
         self._feed_status = FeedStatus(state="replaying", mode="runtime", requested_symbol=self.requested_symbol, last_event_ts_utc=quote.event_ts_utc, last_message="quote processed")
         return RuntimeUpdate(feed_status=self._feed_status, last_quote=quote)
 
+    def trade_price_at(self, ts_utc: datetime) -> float | None:
+        """The realistic front-month trade-print price at (or just before) ``ts_utc``.
+
+        The live analogue of the research reference query
+        (``validation/decision_diff_harness.py:594-616``): the MOST RECENT print with
+        ``ts <= ts_utc`` within a 30-minute bounded lookback, else ``None``. The
+        reference's ``bid/ask > 0`` predicate is parquet row-validity; the live
+        analogue is the ``price > 0`` feed gate applied at ring insertion.
+        """
+        floor = ts_utc - timedelta(minutes=TRADE_PRICE_LOOKBACK_MINUTES)
+        for ts, price in reversed(self._trade_ring):
+            if ts <= ts_utc:
+                return price if ts >= floor else None
+        return None
+
     def _process_trade(self, trade: Trade) -> RuntimeUpdate:
         self._last_event_ts_utc = trade.event_ts_utc
+        # D1a: feed the trade ring backing trade_price_at (price > 0 = the live analogue
+        # of the reference query's row-validity filter), evicting beyond retention.
+        if trade.price_ticks > 0:
+            self._trade_ring.append((trade.event_ts_utc, trade.price_ticks * self.tick_size))
+            ring_floor = trade.event_ts_utc - self._trade_ring_retention
+            while self._trade_ring and self._trade_ring[0][0] < ring_floor:
+                self._trade_ring.popleft()
         candle_update = self.candles.process_trade(trade)
         if candle_update.completed:
             self._recent_closed_bars.extend(candle_update.completed)
