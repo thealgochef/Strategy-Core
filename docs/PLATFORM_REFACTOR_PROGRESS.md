@@ -24,8 +24,9 @@ deviations.
 
 ## Current state
 
-- **Active phase:** **Phase D — D1 DONE locally (D1a + D1b), D2 DONE locally; ALL LOCAL, NOT pushed.** **D1b (flip + delete) landed LOCALLY** (SC `945f381` + TL `94610ff`, both on `platform-refactor`): the dashboard now SERVES the streaming honest resolver — resolutions adapt to served `Outcome`s (entry = the real trade print, NEW `entry_price` field; TL-side correctness; SC ZERO-BASED `bars_to_resolution`; `resolved_ts` from the new SC `StreamResolution.resolved_ts_utc`), drops surface explicitly (`prediction.dropped` WS frame + snapshot `dropped` ring + `RuntimeUpdate.dropped` + IntelligencePanel badge w/ reason, NO chart marker), and the legacy `OutcomeTracker` + its 16 tests + the gate-B characterization harness are DELETED; `ResolutionType.SESSION_END`/`NO_RESOLUTION` REMOVED (grep-proven zero refs). Gates: TL suite **419** (= 420 − 16 tracker + 13 adapter + 1 dropped-frame + 1 swallow pin); seam-by-name **4** (acceptance 3 incl. the D2 guard + replay 1); TL ruff clean; frontend typecheck + vitest **142** + build green; SC suite **152** + ruff + frozen b3 regressions **2** (fixtures untouched). 6-agent adversarial verify on the exact commits: **5 PASS (high) + 1 finding REPAIRED in-window** (the `_track_outcomes` per-item swallow guard). Prior D-window state (D1a DARK SC `c7564fd` + TL `c7f2a84`; D2 TL `73aa7df`) unchanged beneath. Decision 9.6 unchanged (pin DECLARED c615e40; enforcement DEFERRED; QL cold-install debt open).
-- **Next step:** **FULL STOP — owner review of the D1b diffs (`D1B_SC_DIFF.txt` / `D1B_TL_DIFF.txt`), then push at greenlight.** PIN NOTE: SC `945f381` (D1b PART 1) is CONSUMER-FACING — TL's adapter reads the new `StreamResolution.resolved_ts_utc`, so a COLD install from TL's current pin (`c7564fd`, D1a) would AttributeError on the first resolution (dev resolves SC editable, masking it) — per the pin convention TL's pin bump to the final pushed SC sha rides the greenlight as a NEW chore commit (same flow as the D-window pin chore `4bb9290`); QL's bump stays deferred to its next window.
+- **Active phase:** **Phase E — E1+E2 DONE locally (see the E-WINDOW bullet below); Phase D COMPLETE and PUSHED** (D1b greenlit 2026-06-10: SC pushed to `2cb27dc`, TL pin chore `5ede158` pushed; decision 9.6 pin convention honored). D-window record: **D1b (flip + delete)** (SC `945f381` + TL `94610ff`): the dashboard now SERVES the streaming honest resolver — resolutions adapt to served `Outcome`s (entry = the real trade print, NEW `entry_price` field; TL-side correctness; SC ZERO-BASED `bars_to_resolution`; `resolved_ts` from the new SC `StreamResolution.resolved_ts_utc`), drops surface explicitly (`prediction.dropped` WS frame + snapshot `dropped` ring + `RuntimeUpdate.dropped` + IntelligencePanel badge w/ reason, NO chart marker), and the legacy `OutcomeTracker` + its 16 tests + the gate-B characterization harness are DELETED; `ResolutionType.SESSION_END`/`NO_RESOLUTION` REMOVED (grep-proven zero refs). Gates: TL suite **419** (= 420 − 16 tracker + 13 adapter + 1 dropped-frame + 1 swallow pin); seam-by-name **4** (acceptance 3 incl. the D2 guard + replay 1); TL ruff clean; frontend typecheck + vitest **142** + build green; SC suite **152** + ruff + frozen b3 regressions **2** (fixtures untouched). 6-agent adversarial verify on the exact commits: **5 PASS (high) + 1 finding REPAIRED in-window** (the `_track_outcomes` per-item swallow guard). Prior D-window state (D1a DARK SC `c7564fd` + TL `c7f2a84`; D2 TL `73aa7df`) unchanged beneath. Decision 9.6 unchanged (pin DECLARED c615e40; enforcement DEFERRED; QL cold-install debt open).
+- **E-WINDOW (E1+E2) DONE locally — ALL LOCAL, NOT pushed** (SC `8e5c017` + QL `baecf66` + TL `9b00eb5` on `platform-refactor`): two-axis versioning live end-to-end. `ENGINE_VERSION` → `PLATFORM_VERSION` (`"strategy_core_platform_v1"`, clean rename, no alias); `CONTRACT_VERSION` → `"trade_lab_contract_v2"` (shape break); contract field `engine_version` → `platform_version` + NEW required `strategy_version`; `strategy_id` re-pointed to the REGISTRY ROUTER KEY. QL emits via `get_strategy` (unknown id fail-closes EMISSION), flips `supported_by_runtime=True` (full contract), and MIGRATED the deployed store in place (3 v3 bundles → v2 w/ backups; the 3 legacy/v1/v2-engine bundles deliberately NOT migrated — see D-E-c); TL gates BOTH registry entries on the platform hook + the 4-check strategy gate (resolve / version-equality / servable-flag / serving-id guard), and `Prediction.contract_id` re-sources to the active bundle id (values byte-compatible). QL CI rider pays the 9.6 debt (cold-install workflow authored; **ENFORCED pending its first green run post-push**); QL tooling aligned py313. REAL-BUNDLE GATE: exactly the 3 migrated bundles discoverable; all 3 activate incl. hot-swap; un-migrated .bak copy rejected on contract_version. Gates: SC **154** + ruff + b3 regressions **2** (fixtures untouched) + decision-fn **2** UNCHANGED; QL **740** (739+1) + ruff (src/tests clean; 13 pre-existing scratch findings stand); TL **424** (419+5) + seam-by-name **4** + ruff + frontend untouched.
+- **Next step:** **FULL STOP — owner review of the E-window diffs (`E_SC_DIFF.txt` / `E_QL_DIFF.txt` / `E_TL_DIFF.txt`), then push at greenlight.** PIN NOTE: SC `8e5c017` (E1) is CONSUMER-FACING for BOTH consumers — TL and QL import `PLATFORM_VERSION`/the v2 loader — so BOTH pins bump to the final pushed SC sha at greenlight as chore commits (TL from `945f381`; QL's LONG-DEFERRED bump from `c615e40` finally rides this one). QL CI's first green run requires that bump + push. (D1b pushed at its greenlight: SC `2cb27dc` / TL `5ede158` on origin.)
 - **Drift-net status:** **S-B3a DONE (fold-collapse + dedup-into-plugin), byte-identical.** The runtime's `level_state`, `_zones_for_snapshot`, `_touched_zone_keys`/`_zone_key`/`_touch_zone_key_from_touch` are DELETED; `RuntimeUpdate.levels` ← `plugin.on_event` return, snapshot/update `zones` ← `plugin.snapshot_zones`, snapshot `levels` ← `plugin.current_levels`, dedup = plugin-owned `_fired_keys`, touches flow back VERBATIM. Proven against the **FROZEN, UNTOUCHED** B3 digests: `test_b3_golive_plugin_regression` + `test_b3_multiday_reset_plugin_regression` **2 passed** (3,284,775 trades, 8 reset boundaries — every per-trade `to_dict()` + snapshot byte-identical). Full SC suite **144**; TL acceptance+replay **3**; decision-fn gates **2** (UNCHANGED); ruff clean. 5-agent adversarial verify: **5 PASS (all high confidence)**. Verified 2026-06-09 on the final tree.
 - **Last-verified date:** 2026-06-09
 - **Note (release, decision 9.6):** BOTH consumers now pin SC at `c615e40` (the post-S-B3b stamp commit): TL `backend/pyproject.toml:19` (bumped cbf9b99 → c615e40 in `0e1c7ce`, the deferred S-B3b bump) and QL `pyproject.toml` (declared in `9b8e798`). PIN CONVENTION (clarification): the pin tracks the latest SC commit with CONSUMER-FACING content; doc-only SC commits (like this C-window record commit) do NOT move it. **STATUS (amended 2026-06-09): pin DECLARED (c615e40); enforcement DEFERRED** — dev resolves SC via the editable install; nothing currently exercises the pin. **NAMED DEBT: QL cold-install resolution check (the analog of TL's cold-install CI) — required to make 9.6 enforced rather than declared.**
@@ -787,6 +788,115 @@ the flip.
   drops via `?? []` — verified by reading). (iii) The cold-install pin reachability is
   the PIN NOTE above.
 
+### Phase E — E1/E2 deviations / clarifications (two-axis versioning + registry router gate; cross-repo, 3 commits)
+
+Ratified design implemented: CONTRACT v2 shape break; `ENGINE_VERSION` →
+`PLATFORM_VERSION` (clean rename, no alias); contract `engine_version` →
+`platform_version` + NEW required `strategy_version`; `strategy_id` = the registry
+ROUTER KEY; `supported_by_runtime` becomes meaningful (QL writes True, TL refuses
+False); deployed-bundle migration in scope; `contract_id` stamping re-sourced.
+
+- **D-E-a (the axis rename, SC `8e5c017`).** `PLATFORM_VERSION = "strategy_core_platform_v1"`
+  (the engine v1/v2/v3 lineage recorded as superseded history in the doc-comment);
+  `CONTRACT_VERSION = "trade_lab_contract_v2"`; schema field renamed (same constraints) +
+  `strategy_version: str` (1..64) required; loader hook `expected_engine_version` →
+  `expected_platform_version` (same position/None-skip; error strings name the platform
+  axis); plugin `strategy_version = "1"` UNCHANGED in value, its placeholder comment
+  rewritten to load-bearing (stamped by QL, equality-checked by TL). Every recon-enumerated
+  reference updated (tests, validation banners, doc-comments). +2 SC negatives (v1
+  contract_version rejected at the FIRST check; missing strategy_version rejected).
+- **D-E-b (QL emitter routes through the registry).** `build_strategy_contract` resolves
+  `strategy_version = get_strategy(strategy_id).strategy_version` — an unknown id
+  fail-closes EMISSION (an unroutable contract is never written); the explicit
+  `strategy_core.strategies.touch_reversal` registration import precedes it (the registry
+  is deliberately empty on a bare `import strategy_core`, D-B3c). The caller
+  (`ml_training_tab.py`) passes `"touch_reversal"`, NOT `output_dir.name`; the dir name
+  stays the bundle identity everywhere else. `dataset_config_hash` input renames
+  `engine_version=` → `platform_version=` — cache tags ROLL by design (the axis is a hash
+  input). FLAG SCOPE CLARIFICATION: `supported_by_runtime=True` applies to the FULL
+  contract; the minimal non-`dashboard_utility` record stays `False` (schema-incomplete by
+  design — it cannot load, so it must not advertise servability).
+- **D-E-c (deployed-store migration — DELIBERATE NARROWING, the window's one design
+  correction).** `scripts/migrate_contracts_v2.py` (idempotent, in-place,
+  `strategy.json.pre_v2.bak` backups, sidecar regeneration branch — no-op, no sidecars
+  exist) EXECUTED against the real store. The store held **6** bundles, not 3: legacy
+  (no engine_version), engine-v1, engine-v2, and the 3 engine-v3. The prompt's rewrite
+  spec (stamp `platform_v1` on every bundle) would have FORGED the structural binding for
+  the v1/v2-engine bundles — the v2-engine bundle is SC-schema-valid (D-C1a) and would
+  have ACTIVATED under semantics it was not built with, and discovery would have listed
+  >3 (breaking the real-bundle gate's own acceptance). The first run did exactly that;
+  it was caught, all 6 restored from backups, and the script corrected: ONLY
+  `engine_version == "strategy_core_engine_v3"` bundles migrate (the platform axis
+  RENAMES engine v3); non-v3 bundles stay at contract v1, fail-closed at the loader's
+  first check — the same rejection class they had pre-E. Final run: 3 MIGRATED
+  {v2, platform_v1, touch_reversal, strategy_version "1"} + 3 SKIP(not-migratable);
+  re-run: 6 SKIP (idempotent). Per-bundle before/after output in the window report.
+  NOTE: all 6 on-disk bundles carried `supported_by_runtime: true` pre-migration
+  (including the never-True-emitting era — the A3 recon's "patched outside QL code"
+  observation re-confirmed); migration left the flag as-is per spec.
+  `models/NQ_20260603_233847/strategy.json` is git-TRACKED in QL (pre-dates the
+  `models/` gitignore) — its migration is committed (`git add -f`); the other two live
+  untracked on disk.
+- **D-E-d (TL router gate, `9b00eb5`).** Both `model_registry` entries pass
+  `expected_platform_version=PLATFORM_VERSION` (the D-C1a both-entries precedent). NEW
+  shared `_strategy_binding_error`: (i) `get_strategy(contract.strategy_id)` — TL's first,
+  intended import of the SC strategy registry (explicit registration import alongside);
+  (ii) `plugin.strategy_version == contract.strategy_version`; (iii)
+  `supported_by_runtime is True`. Discovery skips with a precise warning; activation
+  raises `ModelValidationError` between contract load and model load. Check (iv): NEW
+  `ModelRegistry(serving_strategy_id=…)` ctor param — production `app.py` passes the
+  runtime service's wired plugin id (NEW `StrategyCoreService.plugin_strategy_id`/
+  `plugin_strategy_version` properties); a registry-valid contract routed to another
+  strategy is refused. The hardcoded wiring stays, now guarded.
+- **D-E-e (stamping source).** `Prediction.contract_id` = `active.model_id` (the bundle
+  dir name), not `contract.strategy_id` (now the shared router key). Byte-compatible with
+  pre-E observed values (the contract previously restated the bundle name); pinned by
+  test. UI-VISIBLE VALUE CHANGE (shape unchanged): `ModelStatus`/`ModelBundle`
+  `strategy_id` DTO values become `"touch_reversal"` for migrated bundles (previously the
+  dir name); per-bundle identity remains `model_id`. Report-key rename:
+  `strategy_core_engine_version` → `strategy_core_platform_version` (both
+  `strategy_core_service` sites: snapshot metadata + the feed-status mapper);
+  `StrategyCoreService.engine_version` property → `platform_version`.
+- **D-E-f (QL CI rider — 9.6 status change).** NEW `.github/workflows/ci.yml` mirroring
+  TL's `backend-ci.yml` (py3.13, cold `pip install -e ".[dev]"` resolving the SC pin
+  anonymously, `ruff check src tests`, `pytest -q`). 9.6: **DECLARED → ENFORCED pending
+  the first green run**, which structurally requires the greenlight pin bump + push (the
+  committed pin `c615e40` predates `PLATFORM_VERSION`; stated in the workflow file).
+  Tooling alignment riders: ruff `py314`→`py313`, mypy `3.14`→`3.13`, `.python-version`
+  → `3.13.1`. The two recorded `sys.path` debt items deliberately untouched.
+- **D-E-g (test churn, enumerated — the complete list).** SC: `test_contract.py` fixture
+  + assertions to the new axes, 2 renamed tests (matching/mismatch → platform), +2 new
+  negatives; `test_databento_live_source.py` asserts the platform prefix. QL:
+  `nodrift` — structural map gains `platform_version` (constant) + `strategy_version`
+  (registry-sourced), fixture id → `touch_reversal`, `test_engine_version_is_stamped` →
+  `test_platform_version_is_stamped`, `test_engine_version_is_v3` →
+  `test_platform_version_is_v1_and_strategy_axis_is_registry_sourced` (+ flag True), NEW
+  `test_unknown_strategy_id_fails_emission_closed`, loader round-trip + mismatch tests →
+  the platform hook, the axis-boundary test now uses the RETIRED engine literal as the
+  mismatch case; `repoint` — ids → `touch_reversal`,
+  `…advertises_runtime_activation_blocked` → `…advertises_runtime_servable` (False→True;
+  minimal record stays False with the rationale in-test), stamp/round-trip → platform;
+  `acceptance_cli` — fixture → v2 shape, summary keys
+  (`engine_version`→`platform_version` + new id/version keys), the flag-rejection test
+  INVERTS (False now rejected, match string `supported_by_runtime=true`). TL:
+  `test_engine_version_binding.py` → git mv `test_platform_version_binding.py`, 3 tests
+  re-axised + 5 NEW negatives (v1-rejected, unknown-id at discovery AND activation,
+  version-mismatch at both, unservable at both, serving-guard); `test_strategy_contract`
+  unsupported-version literal v2→v1 (v2 is now the supported shape);
+  `test_inference_engine` contract_id pin `startswith("NQ_")` → `== "good-model"`;
+  `test_strategy_core_dependency` → PLATFORM_VERSION; `tests/fixtures/strategy.json` →
+  v2 shape incl. the recon-flagged `mid_price_source` drift fix (`top_of_book` →
+  `trade_price`, the emitter's value). **Suite math: SC 152→154 (+2); QL 739→740 (+1);
+  TL 419→424 (+5).**
+- **D-E-h (RECORDED-NOT-CHANGED — assigned to the E3 ledger).** (i) activation never
+  consults discovery's `validation_ok` (covered near-equivalently by the model-binary
+  feature check); (ii) checksum verification is sidecar-optional (silently skipped when
+  absent — and the store has none); (iii) `ModelStatus.validation_ok` is hardcoded True
+  for any active model; (iv) the section-default `forward_bar_type="tick"`
+  (`section.py:131,153`) vs TL's `^(\d+)t$` `parse_bar_type` would REJECT a
+  section-defaulted contract — plus the `closed_window` contract↔runtime scheme
+  round-trip gap (`section.py:91-93`). All four are E3-band hardening items.
+
 ## Status table
 
 | Phase | Step | Goal (short) | Status | Date | Commit | Harnesses passed | Notes/deviations |
@@ -803,8 +913,8 @@ the flip.
 | C | C2 | Delete TL's local strategy_contract.py once nothing imports it | DONE | 2026-06-09 | TL `0e1c7ce` (same commit as C1) | full-repo grep: zero live importers (D-C2a); TL full suite 435 + 1 skip post-deletion; ruff clean | `domain/contracts/strategy_contract.py` + `__init__.py` git rm'd; emptied dir removed; only historical docs/plans prose + untracked BASELINE_REPORT.md/test.md still mention it (left as record) |
 | D | D1 | Retire TL's local outcome tracker in favor of the engine's honest decision-time fill | DONE (LOCAL, not pushed — D1a DARK + D1b flip+delete) | 2026-06-10 | D1a: SC `c7564fd` + TL `c7f2a84`; D1b: SC `945f381` + TL `94610ff` (all LOCAL) | D1a: GATE A `test_d1_streaming_vs_batch_parity` EXACT per-touch parity (9 days, 42 touches/35 resolved, drops {flatten: 7}); GATE B characterization (29 preds; mean abs entry delta 55.6 ticks; 6 label changes; 5/29 correctness flips). D1b: SC suite 152 + ruff + b3 frozen-digest regressions 2 (fixtures untouched); TL suite 419 (= 420 − 16 tracker + 13 adapter + 1 dropped-frame + 1 swallow pin; dark file 7→8) + ruff; seam-by-name 4 (acceptance 3 incl. D2 guard + replay 1); frontend typecheck + vitest 142 (+5) + build green; 6-agent adversarial verify 5 PASS + 1 repaired | D1a: SC streaming resolver + trade ring + fail-loud activation validation; TL DARK seat (D-D1a-a..i). D1b: resolver SERVES via the new resolution adapter (TP/SL mapping, TL-side correctness, 0-BASED bars, additive `entry_price`, `resolved_ts` from new SC `StreamResolution.resolved_ts_utc`); drops surfaced (`prediction.dropped` + snapshot ring + RuntimeUpdate + frontend badge w/ reason, no chart marker); tracker + 16 tests + gate-B harness DELETED; ResolutionType SESSION_END/NO_RESOLUTION REMOVED (grep-proven); `parse_bar_type` relocated public; D2-guard tracker carve-out retired (D-D1b-a..i) |
 | D | D2 | Confirm TL holds no local candle/session/level recompute, then assert it via test | DONE (LOCAL, not pushed) | 2026-06-10 | TL `73aa7df` | TL suite 420 passed 0 skipped (443 collected − 24 deleted engine tests + 1 new guard); strengthened guard + seam green; src-wide grep zero engine names; ruff clean | CandleEngine/_MutableCandle/CandleUpdate + SessionLevelEngine/_SessionRange/_DaySummary/LevelUpdate/SESSION_LEVELS/LEVEL_ORIGIN deleted, DTO types kept; guard = src-wide reintroduction ban + SessionClassifier confinement + DTO-surface pin with documented carve-outs; sessions.py NOT deleted (seed.py debt); httpx2→dev rider. Deviations D-D2-a..c + named debts |
-| E | E1 | Introduce platform_version alongside ENGINE_VERSION, both stamped, loader fail-closes on either | NOT STARTED |  |  |  |  |
-| E | E2 | Add per-plugin strategy_version/strategy_id, fail-closed via registry-lookup equality; turn strategy_id into a router | NOT STARTED |  |  |  |  |
+| E | E1 | Introduce platform_version alongside ENGINE_VERSION, both stamped, loader fail-closes on either | DONE (LOCAL, not pushed) | 2026-06-10 | SC `8e5c017` + QL `baecf66` + TL `9b00eb5` | SC suite 154 (+2 negatives) + ruff + frozen b3 regressions 2 (fixtures untouched) + decision-fn gates 2 UNCHANGED; QL suite 740 + ruff; TL suite 424 + seam 4 + ruff | RATIFIED DEVIATION from the step wording: not "alongside" — a CLEAN RENAME (ENGINE_VERSION → PLATFORM_VERSION "strategy_core_platform_v1", no alias) + contract v2 shape break (engine_version→platform_version field, + required strategy_version); deployed store migrated in place w/ backups (3 v3 bundles; non-v3 deliberately not migratable — D-E-c). D-E-a..c,f |
+| E | E2 | Add per-plugin strategy_version/strategy_id, fail-closed via registry-lookup equality; turn strategy_id into a router | DONE (LOCAL, not pushed) | 2026-06-10 | same window/commits as E1 | TL suite 424 (incl. 5 new gate negatives, both-entry coverage); REAL-BUNDLE GATE: exactly 3 migrated bundles discoverable, all 3 activate incl. hot-swap via the serving-guard registry, un-migrated .bak copy rejected on contract_version | strategy_id = registry ROUTER KEY end-to-end: QL emission resolves get_strategy (unknown id refuses to EMIT), TL gates both registry entries (resolve / version-equality / servable-flag / serving-id guard); contract_id stamping re-sourced to the active bundle id (byte-compatible); supported_by_runtime meaningful (QL True, TL refuses False, QL acceptance flipped). D-E-b,d,e,g,h |
 | E | E3 | Decompose the flat StrategyContract into StrategyEnvelope + typed SectionModel; emit from the plugin | NOT STARTED |  |  |  |  |
 | F | F1 | Extend the candle data shape with a BarSpec/kind and add CloseReason.INTERVAL, with TICK behavior unchanged | NOT STARTED |  |  |  |  |
 | F | F2 | Mirror the TIME close trigger into the vectorized batch path and pin it with a new parity test | NOT STARTED |  |  |  |  |
@@ -815,6 +925,47 @@ the flip.
 
 ## Change log (newest first)
 
+- **2026-06-10** — **E-WINDOW (E1 two-axis versioning + E2 registry router gate) landed
+  as LOCAL commits across all THREE repos → E1/E2 DONE locally — FULL STOP before push**
+  (SC `8e5c017` + QL `baecf66` + TL `9b00eb5` on `platform-refactor`; diffs exported as
+  `E_SC_DIFF.txt`/`E_QL_DIFF.txt`/`E_TL_DIFF.txt`). SC: `ENGINE_VERSION` →
+  `PLATFORM_VERSION` ("strategy_core_platform_v1", clean rename, no alias);
+  `CONTRACT_VERSION` → v2 (shape break); contract field `engine_version` →
+  `platform_version` + NEW required `strategy_version`; loader hook →
+  `expected_platform_version`; `strategy_id` re-documented as the REGISTRY ROUTER KEY;
+  the plugin's `strategy_version="1"` is now LOAD-BEARING. QL: the emitter resolves
+  `strategy_version` via `get_strategy` (unknown id fail-closes EMISSION), stamps the
+  router id (caller passes "touch_reversal", not the dir name), flips
+  `supported_by_runtime=True` (full contract; minimal stays False — schema-incomplete by
+  design); `dataset_config_hash` input renamed (cache tags roll);
+  `scripts/migrate_contracts_v2.py` EXECUTED against the real store — 3 v3-engine bundles
+  migrated in place w/ `.pre_v2.bak` backups, idempotent; the prompt's blanket
+  platform_v1 stamp was NARROWED to engine-v3-only after the first run exposed that it
+  would FORGE the binding for the store's legacy/v1/v2-engine bundles (caught, restored
+  from backups, corrected — D-E-c); acceptance gate flips to assert the flag True; NEW
+  `.github/workflows/ci.yml` cold-install CI (9.6: DECLARED → **ENFORCED pending the
+  first green run**, which requires the greenlight pin bump + push); tooling aligned
+  py313. TL: BOTH `model_registry` entries pass the platform hook + the NEW 4-check
+  strategy gate — get_strategy resolve / strategy_version equality / servable-flag /
+  serving-id guard (`ModelRegistry(serving_strategy_id=…)` fed by the new
+  `StrategyCoreService.plugin_strategy_id`); `Prediction.contract_id` re-sourced to the
+  active bundle id (byte-compatible; UI-visible: bundle `strategy_id` DTO values become
+  "touch_reversal"); report keys → `strategy_core_platform_version`; fixture → v2 (+ the
+  recon-flagged `mid_price_source` drift fix); `test_engine_version_binding` → git mv
+  `test_platform_version_binding` + 5 new negatives. REAL-BUNDLE GATE (post-migration):
+  exactly the 3 migrated bundles discoverable; all 3 activate end-to-end incl. hot-swap;
+  an un-migrated `.bak` copy rejected on contract_version. Gates on the final trees: SC
+  **154** + ruff + frozen b3 regressions **2** (fixtures untouched) + decision-fn gates
+  **2** UNCHANGED; QL **740** (739+1) + ruff src/tests clean (the 13 pre-existing
+  scratch findings stand); TL **424** (419+5) + seam-by-name **4** + ruff + frontend
+  UNTOUCHED. Deviations **D-E-a..h**. PLAN unmodified. PIN NOTE: SC `8e5c017` is
+  CONSUMER-FACING for BOTH consumers — both pins (TL from `945f381`; QL's long-deferred
+  from `c615e40`) bump to the final pushed SC sha at greenlight as chore commits.
+- **2026-06-10** — **D1b GREENLIGHT executed and PUSHED** (SC `77015de..2cb27dc`, TL
+  `4bb9290..5ede158` fast-forward to origin; QL untouched): the stale pre-amend sha in
+  the D-D1b header fixed (SC `2cb27dc`); TL pin bumped to the pushed D1b SC sha
+  `945f381` (TL `5ede158`, suite 419 + ruff green on the bumped tree); safety asserts
+  (commit existence + ancestry + clean trees) passed before push.
 - **2026-06-10** — **D1b (flip + delete: SERVE the honest resolver, RETIRE the tracker)
   landed as LOCAL commits → D1 DONE locally — FULL STOP before push** (SC `945f381` + TL
   `94610ff` on `platform-refactor`; QL untouched at `9b8e798`; diffs exported as
