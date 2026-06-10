@@ -11,11 +11,14 @@ they must be parsed strictly and rejected loudly on drift. Nothing in this modul
 loads the CatBoost binary or computes features; it only describes and validates
 the contract that later inference stages consume.
 
-One structural addition over the canonical Trade-Lab source: ``StrategyContract``
-gains a required ``engine_version`` field (spec §6) so each bundle explicitly binds
-to the engine version that produced its labels/features. ``CONTRACT_VERSION`` and
-``ENGINE_VERSION`` are imported from :mod:`strategy_core` (the package ``__init__``)
-rather than restated, so the version stamps live in one place.
+Structural additions over the canonical Trade-Lab source (contract v2, E1):
+``StrategyContract`` carries the two-axis binding (decision 9.3) — a required
+``platform_version`` field (ex ``engine_version``, spec §6) binding each bundle to
+the platform that produced its labels/features, plus required
+``strategy_id``/``strategy_version`` binding it to the registered plugin.
+``CONTRACT_VERSION`` and ``PLATFORM_VERSION`` are imported from
+:mod:`strategy_core` (the package ``__init__``) rather than restated, so the
+version stamps live in one place.
 
 Ported from:
 ``backend/src/trade_lab/domain/contracts/strategy_contract.py:1-218`` (Trade-Lab).
@@ -27,7 +30,7 @@ from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
-from strategy_core import CONTRACT_VERSION, ENGINE_VERSION
+from strategy_core import CONTRACT_VERSION, PLATFORM_VERSION
 
 __all__ = [
     "ContractError",
@@ -46,7 +49,7 @@ __all__ = [
     "ClassMap",
     "StrategyContract",
     "CONTRACT_VERSION",
-    "ENGINE_VERSION",
+    "PLATFORM_VERSION",
 ]
 
 
@@ -246,15 +249,20 @@ class ClassMap(_ContractModel):
 class StrategyContract(_ContractModel):
     """A fully parsed, validated ``strategy.json`` for one model bundle.
 
-    Ported from ``strategy_contract.py:156-180`` with one required field added:
-    ``engine_version`` (spec §6), placed right after ``contract_version``. It is the
-    structural binding between a bundle and the engine version that produced its
-    labels/features; Trade-Lab fail-closes on a mismatch via the loader hook.
+    Two-axis version binding (decision 9.3, contract v2): ``platform_version``
+    (ex ``engine_version``) binds the bundle to the shared platform that produced
+    its labels/features, and ``strategy_id``/``strategy_version`` bind it to the
+    registered plugin. ``strategy_id`` is the REGISTRY ROUTER KEY — it must
+    resolve via ``strategies.registry.get_strategy`` (it is no longer the bundle
+    name; bundle identity stays the directory name). Consumers fail-close on a
+    mismatch of either axis (loader hook for the platform; activation gate for
+    the strategy).
     """
 
     contract_version: str = Field(min_length=1, max_length=64)
-    engine_version: str = Field(min_length=1, max_length=64)
+    platform_version: str = Field(min_length=1, max_length=64)
     strategy_id: str = Field(min_length=1, max_length=256)
+    strategy_version: str = Field(min_length=1, max_length=64)
     training_mode: str = Field(min_length=1, max_length=64)
     supported_by_runtime: bool
     instrument: str = Field(min_length=1, max_length=32)

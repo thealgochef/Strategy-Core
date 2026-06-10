@@ -18,8 +18,8 @@ CONSEQUENCE (must be honored by the migration): a model is only valid under the
 engine that produced its features. Any model served under this engine MUST be
 (re)trained with the research path repointed onto this engine, so its interaction
 features are trade-price. The currently-deployed model encodes TOB-mid features and
-is NOT compatible — the contract's ``engine_version`` binding
-(``strategy_core_engine_v1``) is exactly what makes Trade-Lab fail-close on that
+is NOT compatible — the contract's ``platform_version`` binding (the engine axis,
+then ``strategy_core_engine_v1``) is exactly what makes Trade-Lab fail-close on that
 mismatch instead of silently serving a model under the wrong feature definition.
 
 What is preserved vs changed: the loop STRUCTURE (dwell tempo, within-band band,

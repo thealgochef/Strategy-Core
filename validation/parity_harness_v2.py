@@ -885,7 +885,7 @@ def write_report(available, missing, total_cal, days_run, total_touches):
     L_.append("# Strategy-Core Parity Report v2 (CORRECTED phase-4a gate)")
     L_.append("")
     L_.append(f"Generated: {datetime.now(timezone.utc).isoformat()}")
-    L_.append(f"Engine: strategy_core v{getattr(sc, 'ENGINE_VERSION', '?')} "
+    L_.append(f"Engine: strategy_core v{getattr(sc, 'PLATFORM_VERSION', '?')} "
               f"(contract v{getattr(sc, 'CONTRACT_VERSION', '?')})")
     L_.append("")
     L_.append("## Day range")

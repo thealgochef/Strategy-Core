@@ -90,8 +90,8 @@ MAX_DWELL_GAP_SECONDS = 600.0
 #: (dashboard_utility_builder.py:488) is a book mid, not a trade price — the spec's and
 #: the earlier audit's "trade price" reading was a misread of that `mid` variable.
 #: Because the deployed model encoded TOB-mid features, moving to trade_price REQUIRES
-#: RETRAINING the model under this engine. The engine_version binding
-#: (strategy_core_engine_v1) is what makes Trade-Lab fail-close on the old model.
+#: RETRAINING the model under this engine. The platform_version binding (the engine
+#: axis, then strategy_core_engine_v1) is what makes Trade-Lab fail-close on the old model.
 MID_PRICE_SOURCE = "trade_price"
 
 # ── Feature sets (ml/config.py LIVE_* lists) ────────────────────────────────

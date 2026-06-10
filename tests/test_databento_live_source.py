@@ -8,7 +8,7 @@ from strategy_core.types import Quote, Trade
 
 
 def test_importing_strategy_core_does_not_require_databento_sdk() -> None:
-    assert strategy_core.ENGINE_VERSION.startswith("strategy_core_engine_")
+    assert strategy_core.PLATFORM_VERSION.startswith("strategy_core_platform_")
 
 
 def test_fake_provider_messages_normalize_trade_and_quote() -> None:

@@ -5,16 +5,20 @@ This package is the single implementation that both Claude-Quant-Lab (research /
 training, batch over parquet) and Trade-Lab (live + replay inference, streaming)
 import, so a strategy configured in research executes identically in Trade-Lab.
 
-Two version stamps live here:
+Two version stamps live here (decision 9.3 — the two-axis split is PLATFORM +
+per-plugin ``strategy_version``, declared on each ``StrategyPlugin``):
 
-* ``ENGINE_VERSION`` -- the *structural* version of the engine. A model binds to
-  the engine version that produced its labels/features. Trade-Lab fail-closes on
-  a model whose ``engine_version`` it cannot match. Bump this only when a
-  genuinely new mechanism is added (a new touch rule, feature family, or label
-  scheme) -- never for a parameter change, which is config-only.
+* ``PLATFORM_VERSION`` -- the *structural* version of the shared platform (the
+  engine axis, renamed at E1). A model binds to the platform version that
+  produced its labels/features. A runtime MUST refuse to serve a model whose
+  ``platform_version`` it cannot match. Bump this only when a genuinely new
+  platform mechanism is added (a new bar kind, feature family, or label
+  scheme) -- never for a parameter change, which is config-only, and never for
+  a single strategy's semantics, which is that plugin's ``strategy_version``.
 * ``CONTRACT_VERSION`` -- the version of the ``strategy.json`` *format* (schema).
 
-The contract carries ``engine_version`` so the binding is explicit per bundle.
+The contract carries ``platform_version`` AND ``strategy_id``/``strategy_version``
+so both axes of the binding are explicit per bundle.
 
 Importing this package pulls only numpy + pydantic + stdlib; pandas is loaded
 lazily and only when the batch candle builder is actually called.
@@ -22,7 +26,10 @@ lazily and only when the batch candle builder is actually called.
 
 from __future__ import annotations
 
-#: Structural version of the decision/candle engine. See module docstring.
+#: Structural version of the shared platform (decision/candle engine). See the
+#: module docstring. RENAMED at E1 (ENGINE_VERSION -> PLATFORM_VERSION, value
+#: "strategy_core_engine_v3" -> "strategy_core_platform_v1"); the v1/v2/v3 history
+#: below is the ENGINE-axis lineage this platform axis supersedes.
 #: v1 -> v2 (trade-bar cutover + honest-entry re-anchor): the canonical OUTCOME is
 #: now anchored to the DECISION-TIME entry (touch + decision_offset = the realistic
 #: price when the prediction can actually fire, matching the Trade-Lab executor),
@@ -51,10 +58,13 @@ from __future__ import annotations
 #:      UNCHANGED. The 3 classes / tp / sl / trap_mfe_min / MAE-first ladder and the
 #:      trade-price bars + trade-print features are all UNCHANGED from v2. A model
 #:      built under v2 (e.g. NQ_20260602_232808) correctly fails the v3 loader.
-ENGINE_VERSION = "strategy_core_engine_v3"
+PLATFORM_VERSION = "strategy_core_platform_v1"
 
 #: Version of the strategy.json contract *format* (Pydantic schema in contract/).
-CONTRACT_VERSION = "trade_lab_contract_v1"
+#: v1 -> v2 (E1): engine_version field renamed platform_version + required
+#: strategy_version added — a SHAPE break; v1 bundles fail closed at the loader's
+#: first check and are migrated in place (QL scripts/migrate_contracts_v2.py).
+CONTRACT_VERSION = "trade_lab_contract_v2"
 
 # ── Public API re-exports ───────────────────────────────────────────────────
 from strategy_core.candles.batch import build_tick_bars_from_frame
@@ -111,7 +121,7 @@ from strategy_core.types import (
 )
 
 __all__ = [
-    "ENGINE_VERSION",
+    "PLATFORM_VERSION",
     "CONTRACT_VERSION",
     # types
     "Trade",

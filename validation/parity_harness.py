@@ -609,7 +609,7 @@ def write_report(days_processed, total_touches):
     lines.append("# Strategy-Core Parity Report")
     lines.append("")
     lines.append(f"Generated: {datetime.now(timezone.utc).isoformat()}")
-    lines.append(f"Engine: strategy_core v{getattr(sc, 'ENGINE_VERSION', '?')} "
+    lines.append(f"Engine: strategy_core v{getattr(sc, 'PLATFORM_VERSION', '?')} "
                  f"(contract v{getattr(sc, 'CONTRACT_VERSION', '?')})")
     lines.append("")
     lines.append("Proves strategy-core reproduces the canonical dashboard-utility "

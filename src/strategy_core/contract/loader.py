@@ -6,11 +6,12 @@ Ported from Trade-Lab's
 every parse/validation failure surfaces as :class:`ContractError` (never a bare
 ``ValidationError``) so callers have a single exception type to fail closed on.
 
-One addition over the canonical source: an optional ``expected_engine_version``
-hook. When supplied, a contract whose ``engine_version`` does not match is rejected
-*after* the contract-version check and *before* full model validation -- this is the
-fail-close-on-engine-mismatch binding Trade-Lab uses to refuse a bundle built by an
-engine version it cannot reproduce (spec §6).
+One addition over the canonical source: an optional ``expected_platform_version``
+hook. When supplied, a contract whose ``platform_version`` does not match is
+rejected *after* the contract-version check and *before* full model validation --
+this is the fail-close-on-platform-mismatch binding Trade-Lab uses to refuse a
+bundle built by a platform version it cannot reproduce (spec §6; the engine axis
+renamed at E1, decision 9.3).
 """
 
 from __future__ import annotations
@@ -28,17 +29,18 @@ __all__ = ["load_strategy_contract"]
 def load_strategy_contract(
     path: Path | str,
     *,
-    expected_engine_version: str | None = None,
+    expected_platform_version: str | None = None,
 ) -> StrategyContract:
     """Parse and validate a ``strategy.json`` from disk.
 
     Raises :class:`ContractError` (never a bare ``ValidationError``) on any parse
-    failure, an unexpected ``contract_version``, an ``engine_version`` that does not
-    match ``expected_engine_version`` (when supplied), or a feature/class mismatch,
-    so callers have a single exception type to fail closed on.
+    failure, an unexpected ``contract_version``, a ``platform_version`` that does
+    not match ``expected_platform_version`` (when supplied), or a feature/class
+    mismatch, so callers have a single exception type to fail closed on.
 
-    Ported from ``strategy_contract.py:183-217`` with the ``expected_engine_version``
-    fail-close hook added between the contract-version check and model validation.
+    Ported from ``strategy_contract.py:183-217`` with the
+    ``expected_platform_version`` fail-close hook added between the
+    contract-version check and model validation.
     """
 
     path = Path(path)
@@ -61,12 +63,12 @@ def load_strategy_contract(
             f"unsupported contract_version {declared_version!r}; expected {CONTRACT_VERSION!r}"
         )
 
-    if expected_engine_version is not None:
-        declared_engine = payload.get("engine_version")
-        if declared_engine != expected_engine_version:
+    if expected_platform_version is not None:
+        declared_platform = payload.get("platform_version")
+        if declared_platform != expected_platform_version:
             raise ContractError(
-                f"unsupported engine_version {declared_engine!r}; "
-                f"expected {expected_engine_version!r}"
+                f"unsupported platform_version {declared_platform!r}; "
+                f"expected {expected_platform_version!r}"
             )
 
     try:

@@ -388,7 +388,7 @@ def seam_audit(day: str, eng_bars: list[Bar]):
 
 if __name__ == "__main__":
     warnings.simplefilter("ignore")
-    print(f"Engine {sc.ENGINE_VERSION} | boundary={RESEARCH_SESSION_SCHEME.trading_day_boundary} "
+    print(f"Engine {sc.PLATFORM_VERSION} | boundary={RESEARCH_SESSION_SCHEME.trading_day_boundary} "
           f"tz={RESEARCH_SESSION_SCHEME.timezone} (18:00 ET locked)")
     check_a_and_d()
     check_b_c()

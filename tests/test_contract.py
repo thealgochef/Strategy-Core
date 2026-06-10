@@ -1,7 +1,8 @@
 """Tests for the promoted ``strategy.json`` contract schema + loader.
 
-Covers the canonical fail-closed flow ported from Trade-Lab plus the new
-``engine_version`` structural binding (spec §6). All inputs are built inline from a
+Covers the canonical fail-closed flow ported from Trade-Lab plus the two-axis
+version binding (spec §6 / decision 9.3): ``platform_version`` (ex
+``engine_version``) and the required ``strategy_version``. All inputs are built inline from a
 single complete valid contract dict so each negative case differs from the valid
 baseline by exactly one mutation; the dict is written to a ``tmp_path`` json file so
 the loader's real disk-read / JSON-parse path is exercised.
@@ -16,7 +17,7 @@ from typing import Any
 
 import pytest
 
-from strategy_core import CONTRACT_VERSION, ENGINE_VERSION
+from strategy_core import CONTRACT_VERSION, PLATFORM_VERSION
 from strategy_core.contract.loader import load_strategy_contract
 from strategy_core.contract.schema import (
     ClassMap,
@@ -30,7 +31,7 @@ def _valid_contract_dict() -> dict[str, Any]:
     """A complete, valid contract dict: every section present, all validators satisfied.
 
     The 6 feature names partition exactly into interaction + approach; the class_map
-    is contiguous-from-zero with unique labels; ``engine_version`` matches the package.
+    is contiguous-from-zero with unique labels; ``platform_version`` matches the package.
     """
 
     interaction_features = (
@@ -45,8 +46,9 @@ def _valid_contract_dict() -> dict[str, Any]:
     )
     return {
         "contract_version": CONTRACT_VERSION,
-        "engine_version": ENGINE_VERSION,
+        "platform_version": PLATFORM_VERSION,
         "strategy_id": "nq_reversal_v1",
+        "strategy_version": "1",
         "training_mode": "dashboard_utility",
         "supported_by_runtime": True,
         "instrument": "NQ",
@@ -141,7 +143,8 @@ def test_valid_contract_loads(tmp_path: Path) -> None:
 
     assert isinstance(contract, StrategyContract)
     assert contract.contract_version == CONTRACT_VERSION
-    assert contract.engine_version == ENGINE_VERSION
+    assert contract.platform_version == PLATFORM_VERSION
+    assert contract.strategy_version == "1"
     assert contract.feature_count == 6
     assert contract.class_map.labels == (
         "tradeable_reversal",
@@ -151,14 +154,14 @@ def test_valid_contract_loads(tmp_path: Path) -> None:
     assert len(contract.class_map) == 3
 
 
-def test_valid_contract_loads_with_matching_expected_engine_version(
+def test_valid_contract_loads_with_matching_expected_platform_version(
     tmp_path: Path,
 ) -> None:
     path = _write(tmp_path, _valid_contract_dict())
 
-    contract = load_strategy_contract(path, expected_engine_version=ENGINE_VERSION)
+    contract = load_strategy_contract(path, expected_platform_version=PLATFORM_VERSION)
 
-    assert contract.engine_version == ENGINE_VERSION
+    assert contract.platform_version == PLATFORM_VERSION
 
 
 def test_wrong_contract_version_raises(tmp_path: Path) -> None:
@@ -170,13 +173,33 @@ def test_wrong_contract_version_raises(tmp_path: Path) -> None:
         load_strategy_contract(path)
 
 
-def test_wrong_engine_version_with_expected_raises(tmp_path: Path) -> None:
+def test_wrong_platform_version_with_expected_raises(tmp_path: Path) -> None:
     payload = _valid_contract_dict()
-    payload["engine_version"] = "strategy_core_engine_v999"
+    payload["platform_version"] = "strategy_core_platform_v999"
     path = _write(tmp_path, payload)
 
     with pytest.raises(ContractError):
-        load_strategy_contract(path, expected_engine_version=ENGINE_VERSION)
+        load_strategy_contract(path, expected_platform_version=PLATFORM_VERSION)
+
+
+def test_v1_contract_version_fails_closed_at_the_first_check(tmp_path: Path) -> None:
+    # The E1 shape break: a pre-migration v1 bundle dies on contract_version BEFORE
+    # any field-shape complaint (platform hook + model_validate never reached).
+    payload = _valid_contract_dict()
+    payload["contract_version"] = "trade_lab_contract_v1"
+    path = _write(tmp_path, payload)
+
+    with pytest.raises(ContractError, match="unsupported contract_version"):
+        load_strategy_contract(path, expected_platform_version=PLATFORM_VERSION)
+
+
+def test_missing_strategy_version_rejected(tmp_path: Path) -> None:
+    payload = _valid_contract_dict()
+    del payload["strategy_version"]
+    path = _write(tmp_path, payload)
+
+    with pytest.raises(ContractError, match="strategy_version"):
+        load_strategy_contract(path)
 
 
 def test_unknown_extra_key_raises(tmp_path: Path) -> None:

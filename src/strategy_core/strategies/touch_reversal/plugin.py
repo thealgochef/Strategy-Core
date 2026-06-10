@@ -188,8 +188,11 @@ class TouchReversalPlugin:
     """Archetype 1 (touch / zone-reversal / 3-class MAE-first) behind the §2.2 protocol."""
 
     strategy_id = "touch_reversal"
-    #: Placeholder — NOT load-bearing until Phase E splits ENGINE_VERSION into
-    #: platform_version + per-plugin strategy_version (decision 9.3). Set to "1" for now.
+    #: LOAD-BEARING as of E1/E2 (decision 9.3): the QL emitter stamps this value
+    #: into every contract's ``strategy_version`` (resolved via the registry), and
+    #: Trade-Lab activation equality-checks it against the bundle. Bump it when
+    #: THIS strategy's semantics change (a touch-rule/label change that is not a
+    #: platform mechanism); platform-wide changes bump PLATFORM_VERSION instead.
     strategy_version = "1"
     SectionModel = TouchReversalSection
 
