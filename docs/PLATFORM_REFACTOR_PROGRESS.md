@@ -603,6 +603,19 @@ batch 0-based; gate A compares raw, gate B normalizes the tracker's 1-based coun
 - **D-D1a-i (rider).** The gate-B harness file's lint debt (unused noqa / int cast / long
   lines) was fixed in the D2 commit — TL's ruff project scope includes `validation/`, missed
   at the D1a commit.
+- **D-D1a-j (post-review terminal-path unit coverage — greenlight addendum).** New SC
+  `tests/test_streaming_resolver.py` (synthetic, 7 tests) pins exactly the arms the gate-A
+  window never exercised: registration cutoff drop at the NON-STRICT 17:00 ET boundary
+  (flatten pushed aside, mirroring `test_honest_entry`'s cutoff arm); flatten at the EXACT
+  16:40:00 ET boundary (non-strict); no_fill; no_forward via `flush` (entry carried);
+  no_resolution via `flush` (4dp extremes + `bars_to_resolution=-1`); no_resolution via
+  `on_bar` where the finalizing bar closes at the cutoff with a both-barriers range —
+  asserting that bar contributed NOTHING to the extremes (the strict `close < cutoff`
+  window); and the StrategyRuntime trade-ring edges (30-min lookback bound exact; a print
+  beyond the 60-min retention is EVICTED — a query that would have matched it inside its
+  own lookback returns None). NOTE for D1b: TL's dark wiring imports the private
+  `_parse_bar_type` from `outcome_tracker` — that helper needs a new home when D1b deletes
+  the tracker.
 
 ### Phase D — D2 deviations / clarifications (shadow-engine deletion + guard)
 
