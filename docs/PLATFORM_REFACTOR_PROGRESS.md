@@ -24,11 +24,11 @@ deviations.
 
 ## Current state
 
-- **Active phase:** **Phase C COMPLETE** — C1+C2 DONE in ONE TL commit (`0e1c7ce` on TL `platform-refactor`): every TL contract import repointed onto the `strategy_core` package-root surface with the fail-closed engine hook (`expected_engine_version=ENGINE_VERSION`) at BOTH `model_registry` loader entries, and the local copy `trade_lab/domain/contracts/` DELETED. Decision **9.6 IMPLEMENTED** (QL `9b8e798`): QL declares + SHA-pins strategy-core identically to TL. Next phase: D.
+- **Active phase:** **Phase C COMPLETE** — C1+C2 DONE in ONE TL commit (`0e1c7ce` on TL `platform-refactor`): every TL contract import repointed onto the `strategy_core` package-root surface with the fail-closed engine hook (`expected_engine_version=ENGINE_VERSION`) at BOTH `model_registry` loader entries, and the local copy `trade_lab/domain/contracts/` DELETED. Decision **9.6: pin DECLARED (c615e40; QL `9b8e798`); enforcement DEFERRED** — dev resolves SC via the editable install; nothing currently exercises the pin (see the 9.6 note + D-9.6a debt). Next phase: D.
 - **Next step:** D1 (retire TL's local outcome tracker in favor of the engine's honest decision-time fill — decision 9.8 Option A / Barrier abstraction).
 - **Drift-net status:** **S-B3a DONE (fold-collapse + dedup-into-plugin), byte-identical.** The runtime's `level_state`, `_zones_for_snapshot`, `_touched_zone_keys`/`_zone_key`/`_touch_zone_key_from_touch` are DELETED; `RuntimeUpdate.levels` ← `plugin.on_event` return, snapshot/update `zones` ← `plugin.snapshot_zones`, snapshot `levels` ← `plugin.current_levels`, dedup = plugin-owned `_fired_keys`, touches flow back VERBATIM. Proven against the **FROZEN, UNTOUCHED** B3 digests: `test_b3_golive_plugin_regression` + `test_b3_multiday_reset_plugin_regression` **2 passed** (3,284,775 trades, 8 reset boundaries — every per-trade `to_dict()` + snapshot byte-identical). Full SC suite **144**; TL acceptance+replay **3**; decision-fn gates **2** (UNCHANGED); ruff clean. 5-agent adversarial verify: **5 PASS (all high confidence)**. Verified 2026-06-09 on the final tree.
 - **Last-verified date:** 2026-06-09
-- **Note (release, decision 9.6):** BOTH consumers now pin SC at `c615e40` (the post-S-B3b stamp commit): TL `backend/pyproject.toml:19` (bumped cbf9b99 → c615e40 in `0e1c7ce`, the deferred S-B3b bump) and QL `pyproject.toml` (declared in `9b8e798`). PIN CONVENTION (clarification): the pin tracks the latest SC commit with CONSUMER-FACING content; doc-only SC commits (like this C-window record commit) do NOT move it. The machine-local editable/`PYTHONPATH=src` installs stay for dev; the pin is the cold-install declaration.
+- **Note (release, decision 9.6):** BOTH consumers now pin SC at `c615e40` (the post-S-B3b stamp commit): TL `backend/pyproject.toml:19` (bumped cbf9b99 → c615e40 in `0e1c7ce`, the deferred S-B3b bump) and QL `pyproject.toml` (declared in `9b8e798`). PIN CONVENTION (clarification): the pin tracks the latest SC commit with CONSUMER-FACING content; doc-only SC commits (like this C-window record commit) do NOT move it. **STATUS (amended 2026-06-09): pin DECLARED (c615e40); enforcement DEFERRED** — dev resolves SC via the editable install; nothing currently exercises the pin. **NAMED DEBT: QL cold-install resolution check (the analog of TL's cold-install CI) — required to make 9.6 enforced rather than declared.**
 - **B3-prep (PRE-FLIP soak):** the multi-day reset-bracketed real-data coverage authored as a soak (2026-06-09) is now **repurposed into the plugin-path regression** `test_b3_multiday_reset_plugin_regression` (9 days, 8 reset boundaries) vs the frozen digests — see the "Phase B — B3 deviations (flip+delete)" subsection.
 
 ---
@@ -40,7 +40,7 @@ deviations.
 - **9.3** = two-axis version (platform_version + per-plugin strategy_version).
 - **9.4** = time-bars land in Phase F.
 - **9.5** = keep `strategy_core` name, layout `strategy_core/strategies/<id>/`.
-- **9.6** = declare+SHA-pin strategy-core in Quant-Lab. **IMPLEMENTED 2026-06-09 (QL `9b8e798`):** pin `strategy-core @ git+https://github.com/thealgochef/Strategy-Core.git@c615e40ec13ef5a34d69910a78d144c677b138a8` added to QL `[project].dependencies`, byte-identical to TL's pin form; `requires-python` rider `>=3.14` → `>=3.13` (see D-9.6a).
+- **9.6** = declare+SHA-pin strategy-core in Quant-Lab. **Pin DECLARED 2026-06-09 (QL `9b8e798`); enforcement DEFERRED:** pin `strategy-core @ git+https://github.com/thealgochef/Strategy-Core.git@c615e40ec13ef5a34d69910a78d144c677b138a8` added to QL `[project].dependencies`, byte-identical to TL's pin form; `requires-python` rider `>=3.14` → `>=3.13` (see D-9.6a). Dev resolves SC via the editable install; nothing currently exercises the pin. NAMED DEBT: QL cold-install resolution check (the analog of TL's cold-install CI) — required to make 9.6 enforced rather than declared.
 - **9.7** = delete TL's local contract copy.
 - **9.8** = Option A (Barrier abstraction + retire TL outcome tracker, lands in the C/D band).
 - **9.9** = parameterize the session-name set.
@@ -490,6 +490,21 @@ present and loaded legacy no-field contracts "unbound" with a warning.
   and `label_policy.decision_offset_minutes: 5` (= SC `constants.DECISION_OFFSET_MINUTES`,
   itself `DEFAULT_INTERACTION_WINDOW_MINUTES`). Validation forced nothing else
   (`research_session_experiment` is Optional; `contract_version` unchanged per D-C1c).
+- **D-C1f (before-state CORRECTION — probe-verified, amended 2026-06-09).** The C-window
+  recon's framing of "3 activatable v3 bundles (pre-C1)" was WRONG. Probe (temporary TL
+  worktree at `be90af3`, the pre-C1 LOCAL loader
+  `trade_lab.domain.contracts.strategy_contract.load_strategy_contract`, real store, run
+  2026-06-09): all 3 v3 bundles FAIL with `ContractError` → pydantic `extra_forbidden` on
+  `label_policy.decision_offset_minutes` (the old schema lacks the field, `extra="forbid"`);
+  legacy `NQ_20260405_…iterations800_depth4` loads UNBOUND ("strategy contract has no
+  engine_version; loading unbound against strategy_core_engine_v3" warning); v1
+  `NQ_20260602_184719` rejected on the engine binding (`unsupported engine_version
+  'strategy_core_engine_v1'`); v2 `NQ_20260602_232808` rejected on SCHEMA
+  (`decision_offset_minutes` extra_forbidden — the old loader ran `model_validate` BEFORE its
+  engine bind, so v2 never reached the engine check). The exact set TL could serve at
+  `be90af3` = **{legacy, UNBOUND}** only. TRUE C1 behavior change: the served set **FLIPPED**
+  {legacy-unbound} → {3× v3} — it was NOT trimmed from a v3-capable superset. (D-C1b's "the
+  ONLY previously-activatable one" phrasing is consistent and now probe-proven.)
 - **D-C2a (deletion).** `git rm` of `domain/contracts/strategy_contract.py` + `__init__.py`;
   emptied directory (+ gitignored `__pycache__`) removed from disk. Full-repo grep
   (`domain.contracts` / `domain/contracts` / `strategy_contract`, all import/path forms):
@@ -506,7 +521,10 @@ present and loaded legacy no-field contracts "unbound" with a warning.
   enumerated scope): the two script `sys.path` hacks (`scripts/phase8_1_golden.py:32-36`,
   `scripts/run_databento_acceptance.py:147-149`), and — surfaced by the adversarial verify —
   `[tool.ruff] target-version = "py314"` + `[tool.mypy] python_version = "3.14"` now lag the
-  relaxed `requires-python`, and QL's `.python-version` file still says `3.14.5`.
+  relaxed `requires-python`, and QL's `.python-version` file still says `3.14.5`. AMENDED
+  2026-06-09: the pin is DECLARED, not ENFORCED — nothing currently exercises it; NAMED DEBT:
+  QL cold-install resolution check (the analog of TL's cold-install CI) — required to make
+  9.6 enforced rather than declared.
 - **Surfaced by the adversarial verify (recorded, deliberately NOT touched):** (i)
   `test_inference_engine.py:451` bare-loads a real bundle's strategy.json — safe ONLY because
   the same test activates that bundle through the gated registry first; if the activation step
@@ -544,7 +562,21 @@ present and loaded legacy no-field contracts "unbound" with a warning.
 
 ## Change log (newest first)
 
-- **2026-06-09** — **Phase C (C1+C2) landed → Phase C COMPLETE; decision 9.6 IMPLEMENTED**
+- **2026-06-09** — **POST-C AMENDMENT (doc-only):** (1) **9.6 re-statused: pin DECLARED
+  (c615e40), enforcement DEFERRED** — dev resolves SC via the editable install; nothing
+  currently exercises the pin; NAMED DEBT added: **QL cold-install resolution check** (the
+  analog of TL's cold-install CI), required to make 9.6 enforced rather than declared. The
+  C-window record's "9.6 IMPLEMENTED" headlines are amended accordingly (Current state, the
+  9.6 decision line, D-9.6a, the C-window entry below). (2) **Before-state CORRECTION
+  (D-C1f), probe-verified:** through a temporary TL worktree at `be90af3` running the pre-C1
+  LOCAL loader against the real store, the pre-C1 servable set was **{legacy
+  `NQ_20260405_…iterations800_depth4`, UNBOUND}** only — all 3 v3 bundles failed
+  `extra_forbidden` on `label_policy.decision_offset_minutes`, v1 failed the engine bind, v2
+  failed SCHEMA (never reached the old loader's engine check). C1 therefore **FLIPPED** the
+  served set {legacy-unbound} → {3× v3}; the recon's "3 activatable v3 bundles (pre-C1)"
+  framing was wrong. Worktree removed after the probe; TL/QL untouched; PLAN unmodified.
+- **2026-06-09** — **Phase C (C1+C2) landed → Phase C COMPLETE; 9.6 pin DECLARED
+  (headline amended 2026-06-09: enforcement DEFERRED — see the POST-C AMENDMENT entry above)**
   (TL `0e1c7ce` + QL `9b8e798`, both on `platform-refactor`; SC CODE untouched — this record
   commit only). C1: all 9 TL import sites (4 production incl. the TYPE_CHECKING deep import +
   5 tests) repointed onto the `strategy_core` package root; the fail-closed engine gate is
