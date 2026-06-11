@@ -64,7 +64,15 @@ PLATFORM_VERSION = "strategy_core_platform_v1"
 #: v1 -> v2 (E1): engine_version field renamed platform_version + required
 #: strategy_version added — a SHAPE break; v1 bundles fail closed at the loader's
 #: first check and are migrated in place (QL scripts/migrate_contracts_v2.py).
-CONTRACT_VERSION = "trade_lab_contract_v2"
+#: v2 -> v3 (E3): the flat contract DECOMPOSES into the platform-consumed ENVELOPE
+#: (flat keys) + ONE strategy-owned "section" subtree typed by the plugin's
+#: SectionModel — session_scheme/level_scheme/touch_rule/feature_windows/
+#: research_session_experiment move INTO the section, the interaction/approach
+#: feature partition moves out of feature_set INTO the section, label_policy gains
+#: barrier_mode, and the contract SessionScheme gains the optional closed_window
+#: pair. A SHAPE break (#2): v2 bundles fail closed at the loader's first check and
+#: are migrated in place (QL scripts/migrate_contracts_v3.py, same proven pattern).
+CONTRACT_VERSION = "trade_lab_contract_v3"
 
 # ── Public API re-exports ───────────────────────────────────────────────────
 from strategy_core.candles.batch import build_tick_bars_from_frame

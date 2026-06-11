@@ -1,11 +1,15 @@
 """Tests for the promoted ``strategy.json`` contract schema + loader.
 
-Covers the canonical fail-closed flow ported from Trade-Lab plus the two-axis
+Covers the canonical fail-closed flow ported from Trade-Lab, the two-axis
 version binding (spec §6 / decision 9.3): ``platform_version`` (ex
-``engine_version``) and the required ``strategy_version``. All inputs are built inline from a
-single complete valid contract dict so each negative case differs from the valid
-baseline by exactly one mutation; the dict is written to a ``tmp_path`` json file so
-the loader's real disk-read / JSON-parse path is exercised.
+``engine_version``) and the required ``strategy_version``, and the contract-v3
+envelope/section split (E3): the plugin-consumed groups live in the ``section``
+subtree, validated against the registered plugin's ``SectionModel`` via the
+loader's opt-in ``validate_section_via_registry`` hook. All inputs are built
+inline from a single complete valid contract dict so each negative case differs
+from the valid baseline by exactly one mutation; the dict is written to a
+``tmp_path`` json file so the loader's real disk-read / JSON-parse path is
+exercised.
 """
 
 from __future__ import annotations
@@ -17,37 +21,47 @@ from typing import Any
 
 import pytest
 
+# The explicit registration import: the section hook resolves strategy_id via the
+# registry, which is deliberately empty on a bare `import strategy_core` (D-B3c).
+import strategy_core.strategies.touch_reversal  # noqa: F401
 from strategy_core import CONTRACT_VERSION, PLATFORM_VERSION
 from strategy_core.contract.loader import load_strategy_contract
 from strategy_core.contract.schema import (
     ClassMap,
     ContractError,
-    FeatureSet,
     StrategyContract,
+)
+from strategy_core.strategies.touch_reversal.section import (
+    TouchReversalSection,
+    validate_feature_partition,
+)
+
+INTERACTION_FEATURES = (
+    "int_time_beyond_level",
+    "int_time_within_2pts",
+    "int_absorption_ratio",
+)
+APPROACH_FEATURES = (
+    "app_large_trade_vol_pct",
+    "app_avg_trade_size",
+    "app_max_spread",
 )
 
 
 def _valid_contract_dict() -> dict[str, Any]:
-    """A complete, valid contract dict: every section present, all validators satisfied.
+    """A complete, valid v3 contract dict: the platform ENVELOPE (flat keys) + the
+    strategy-owned ``section`` subtree, all validators satisfied.
 
-    The 6 feature names partition exactly into interaction + approach; the class_map
-    is contiguous-from-zero with unique labels; ``platform_version`` matches the package.
+    ``strategy_id`` is the real router key (``touch_reversal``) so the section hook
+    can resolve it; the section subtree validates under ``TouchReversalSection``;
+    the class_map is contiguous-from-zero with unique labels; ``platform_version``
+    matches the package.
     """
 
-    interaction_features = (
-        "int_time_beyond_level",
-        "int_time_within_2pts",
-        "int_absorption_ratio",
-    )
-    approach_features = (
-        "app_large_trade_vol_pct",
-        "app_avg_trade_size",
-        "app_max_spread",
-    )
     return {
         "contract_version": CONTRACT_VERSION,
         "platform_version": PLATFORM_VERSION,
-        "strategy_id": "nq_reversal_v1",
+        "strategy_id": "touch_reversal",
         "strategy_version": "1",
         "training_mode": "dashboard_utility",
         "supported_by_runtime": True,
@@ -59,62 +73,31 @@ def _valid_contract_dict() -> dict[str, Any]:
             "loss_function": "MultiClass",
             "file": "model.cbm",
         },
-        "feature_set": {
-            "names": list(interaction_features) + list(approach_features),
-            "order_is_contractual": True,
-            "interaction_features": list(interaction_features),
-            "approach_features": list(approach_features),
-            "nan_policy": "zero_fill",
-        },
         "class_map": {
             "0": "tradeable_reversal",
             "1": "trap_reversal",
             "2": "aggressive_blowthrough",
         },
-        "session_scheme": {
-            "timezone": "US/Eastern",
-            "trading_day_boundary": "18:00",
-            "sessions": {
-                "asia": {"start": "18:00", "end": "01:00", "crosses_midnight": True},
-                "london": {"start": "01:00", "end": "08:00"},
-                "ny_rth": {"start": "09:30", "end": "16:15"},
-            },
-        },
-        "level_scheme": {
-            "pdh_pdl_source": "prior_rth",
-            "session_levels": ["asia_high", "asia_low"],
-            "available_from_guard": True,
-        },
-        "touch_rule": {
-            "type": "first_touch",
-            "bar_type": "tick",
-            "zone_proximity_pts": 3.0,
-            "zone_representative_price": "mean",
-            "scope": "trading_day",
-            "direction_from_side": {"LOW": "LONG", "HIGH": "SHORT"},
-        },
-        "feature_windows": {
-            "interaction_window_minutes": 5,
-            "approach_window_minutes": 90,
-            "within_band_pts": 2.0,
-            "level_proximity_pts": 0.5,
-            "large_trade_threshold": 10,
-            "mid_price_source": "trade_price",
+        "feature_set": {
+            "names": list(INTERACTION_FEATURES) + list(APPROACH_FEATURES),
+            "order_is_contractual": True,
+            "nan_policy": "zero_fill",
         },
         "label_policy": {
             "resolution": "forward_window",
+            "barrier_mode": "fixed_points",
             "entry_reference": "touch_price",
             "decision_offset_minutes": 5,
             "tp_points": 15.0,
             "sl_points": 30.0,
             "trap_mfe_min": 5.0,
-            "forward_bar_type": "tick",
+            "forward_bar_type": "147t",
             "forward_cutoff": "rth_end",
             "no_resolution_dropped": True,
         },
         "inference": {
             "eligible_class": "tradeable_reversal",
-            "eligible_session": "ny_rth",
+            "eligible_session": "ny",
             "confidence_gate": 0.6,
         },
         "data_requirements": {
@@ -126,6 +109,40 @@ def _valid_contract_dict() -> dict[str, Any]:
         "provenance": {
             "dataset_config_hash": "abc123",
             "catboost": {"iterations": 500, "depth": 6},
+        },
+        "section": {
+            "session_scheme": {
+                "timezone": "US/Eastern",
+                "trading_day_boundary": "18:00",
+                "sessions": {
+                    "asia": {"start": "19:00", "end": "02:45", "crosses_midnight": True},
+                    "london": {"start": "03:00", "end": "08:00"},
+                    "ny": {"start": "09:00", "end": "17:00"},
+                },
+            },
+            "level_scheme": {
+                "pdh_pdl_source": "prior_day_full",
+                "session_levels": ["asia_high", "asia_low"],
+                "available_from_guard": True,
+            },
+            "touch_rule": {
+                "type": "first_touch",
+                "bar_type": "147t",
+                "zone_proximity_pts": 3.0,
+                "zone_representative_price": "mean",
+                "scope": "trading_day",
+                "direction_from_side": {"LOW": "LONG", "HIGH": "SHORT"},
+            },
+            "feature_windows": {
+                "interaction_window_minutes": 5,
+                "approach_window_minutes": 90,
+                "within_band_pts": 2.0,
+                "level_proximity_pts": 0.5,
+                "large_trade_threshold": 10,
+                "mid_price_source": "trade_price",
+            },
+            "interaction_features": list(INTERACTION_FEATURES),
+            "approach_features": list(APPROACH_FEATURES),
         },
     }
 
@@ -182,11 +199,12 @@ def test_wrong_platform_version_with_expected_raises(tmp_path: Path) -> None:
         load_strategy_contract(path, expected_platform_version=PLATFORM_VERSION)
 
 
-def test_v1_contract_version_fails_closed_at_the_first_check(tmp_path: Path) -> None:
-    # The E1 shape break: a pre-migration v1 bundle dies on contract_version BEFORE
-    # any field-shape complaint (platform hook + model_validate never reached).
+def test_v2_contract_version_fails_closed_at_the_first_check(tmp_path: Path) -> None:
+    # The E3 shape break (#2): a pre-migration v2 bundle dies on contract_version
+    # BEFORE any field-shape complaint (platform hook + model_validate never
+    # reached) — the same fail-closed-at-first-check pattern as the E1 v1 break.
     payload = _valid_contract_dict()
-    payload["contract_version"] = "trade_lab_contract_v1"
+    payload["contract_version"] = "trade_lab_contract_v2"
     path = _write(tmp_path, payload)
 
     with pytest.raises(ContractError, match="unsupported contract_version"):
@@ -224,14 +242,99 @@ def test_non_contiguous_class_map_raises(tmp_path: Path) -> None:
         load_strategy_contract(path)
 
 
-def test_feature_set_names_not_union_raises(tmp_path: Path) -> None:
+def test_missing_section_rejected(tmp_path: Path) -> None:
+    # v3: the section subtree is a REQUIRED envelope field even for hookless loads.
     payload = _valid_contract_dict()
-    # Drop one approach feature from names so names != interaction + approach.
-    payload["feature_set"]["names"] = payload["feature_set"]["names"][:-1]
+    del payload["section"]
     path = _write(tmp_path, payload)
 
-    with pytest.raises(ContractError):
+    with pytest.raises(ContractError, match="section"):
         load_strategy_contract(path)
+
+
+def test_section_hook_returns_typed_instance(tmp_path: Path) -> None:
+    # The E3 carrier: with the hook on, the typed section rides the returned
+    # contract via .section_model; the loader's single-return shape is unchanged.
+    path = _write(tmp_path, _valid_contract_dict())
+
+    contract = load_strategy_contract(path, validate_section_via_registry=True)
+
+    assert isinstance(contract, StrategyContract)
+    section = contract.section_model
+    assert isinstance(section, TouchReversalSection)
+    assert section.touch_rule.bar_type == "147t"
+    assert section.interaction_features == INTERACTION_FEATURES
+
+
+def test_section_model_unavailable_without_hook(tmp_path: Path) -> None:
+    # Fail closed: a hookless load never hands back an unvalidated section as typed.
+    contract = load_strategy_contract(_write(tmp_path, _valid_contract_dict()))
+
+    with pytest.raises(ContractError, match="validate_section_via_registry"):
+        _ = contract.section_model
+
+
+def test_section_failing_section_model_rejected_with_hook(tmp_path: Path) -> None:
+    # A section subtree the plugin's SectionModel rejects (unknown key -> the
+    # _ContractModel extra="forbid" fail-close) dies at the hook.
+    payload = _valid_contract_dict()
+    payload["section"]["bogus_key"] = 1
+    path = _write(tmp_path, payload)
+
+    with pytest.raises(ContractError, match="invalid strategy section"):
+        load_strategy_contract(path, validate_section_via_registry=True)
+
+    # Hookless, the same contract loads: the envelope never interprets the section.
+    contract = load_strategy_contract(path)
+    assert contract.section["bogus_key"] == 1
+
+
+def test_section_missing_group_rejected_with_hook(tmp_path: Path) -> None:
+    payload = _valid_contract_dict()
+    del payload["section"]["touch_rule"]
+    path = _write(tmp_path, payload)
+
+    with pytest.raises(ContractError, match="invalid strategy section"):
+        load_strategy_contract(path, validate_section_via_registry=True)
+
+
+def test_unknown_strategy_id_fails_closed_with_hook(tmp_path: Path) -> None:
+    payload = _valid_contract_dict()
+    payload["strategy_id"] = "does_not_exist"
+    path = _write(tmp_path, payload)
+
+    with pytest.raises(ContractError, match="unknown strategy_id"):
+        load_strategy_contract(path, validate_section_via_registry=True)
+
+
+def test_feature_partition_cross_check(tmp_path: Path) -> None:
+    # The envelope<->section cross-check (run at the two validation sites): the
+    # section partition must be exactly feature_set.names.
+    contract = load_strategy_contract(
+        _write(tmp_path, _valid_contract_dict()), validate_section_via_registry=True
+    )
+    validate_feature_partition(contract.feature_set.names, contract.section_model)
+
+    with pytest.raises(ContractError, match="exactly the union"):
+        validate_feature_partition(
+            contract.feature_set.names[:-1], contract.section_model
+        )
+
+
+def test_barrier_mode_enum_constrained(tmp_path: Path) -> None:
+    # barrier_mode admits exactly the two ratified values and defaults fixed_points.
+    payload = _valid_contract_dict()
+    del payload["label_policy"]["barrier_mode"]
+    contract = load_strategy_contract(_write(tmp_path, payload))
+    assert contract.label_policy.barrier_mode == "fixed_points"
+
+    payload["label_policy"]["barrier_mode"] = "r_relative"
+    contract = load_strategy_contract(_write(tmp_path, payload))
+    assert contract.label_policy.barrier_mode == "r_relative"
+
+    payload["label_policy"]["barrier_mode"] = "percent"
+    with pytest.raises(ContractError):
+        load_strategy_contract(_write(tmp_path, payload))
 
 
 def test_unreadable_path_raises(tmp_path: Path) -> None:
@@ -269,17 +372,13 @@ def test_class_map_duplicate_labels_raise() -> None:
         ClassMap.model_validate({"0": "dup", "1": "dup"})
 
 
-def test_feature_set_validator_independently() -> None:
-    with pytest.raises(ValueError):
-        FeatureSet.model_validate(
-            {
-                "names": ["a", "b", "c"],
-                "order_is_contractual": True,
-                "interaction_features": ["a"],
-                "approach_features": ["b"],  # missing "c" -> not a partition
-                "nan_policy": "zero_fill",
-            }
-        )
+def test_section_partition_duplicates_rejected() -> None:
+    # The MOVED partition validator (ex FeatureSet): the section alone rejects a
+    # non-disjoint/duplicated partition; the names cross-check is the helper above.
+    payload = _valid_contract_dict()["section"]
+    payload["approach_features"] = ["int_time_beyond_level", "app_max_spread"]
+    with pytest.raises(ValueError, match="disjoint"):
+        TouchReversalSection.model_validate(payload)
 
 
 def test_models_are_frozen(tmp_path: Path) -> None:

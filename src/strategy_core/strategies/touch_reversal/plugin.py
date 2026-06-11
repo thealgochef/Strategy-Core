@@ -95,8 +95,10 @@ def _runtime_scheme_from_section(scheme: Any) -> SessionScheme:
     ``section.session_scheme`` is the ``contract.schema.SessionScheme`` (string clock
     times); ``StrategyLevelState`` needs the ``strategy_core.types.SessionScheme``
     (``datetime.time`` objects). The scheme still ORIGINATES from the section (R2) — only
-    its representation is converted. ``closed_window`` is ``None`` (the contract form
-    carries no closed window; the canonical research scheme drops nothing).
+    its representation is converted. Drop-nothing BOTH directions as of E3: the contract
+    form's optional ``closed_window`` start/end pair (new at contract v3) parses back to
+    the runtime's ``tuple[time, time]``, so a scheme WITH a closed window (e.g.
+    ``TRADE_LAB_CT_SESSION_SCHEME``) round-trips exactly.
     """
     return SessionScheme(
         timezone=scheme.timezone,
@@ -109,7 +111,14 @@ def _runtime_scheme_from_section(scheme: Any) -> SessionScheme:
             )
             for name, window in scheme.sessions.items()
         },
-        closed_window=None,
+        closed_window=(
+            (
+                time.fromisoformat(scheme.closed_window.start),
+                time.fromisoformat(scheme.closed_window.end),
+            )
+            if getattr(scheme, "closed_window", None) is not None
+            else None
+        ),
     )
 
 

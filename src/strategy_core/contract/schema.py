@@ -20,15 +20,26 @@ the platform that produced its labels/features, plus required
 :mod:`strategy_core` (the package ``__init__``) rather than restated, so the
 version stamps live in one place.
 
+Contract v3 (E3 — the envelope/section split, PLAN §2.4): ``StrategyContract`` is
+now the platform-consumed ENVELOPE only. The plugin-consumed groups
+(``session_scheme``/``level_scheme``/``touch_rule``/``feature_windows``/
+``research_session_experiment`` + the interaction/approach feature partition)
+moved into ONE ``section`` subtree, carried here as a RAW mapping and typed by
+the owning plugin's ``SectionModel`` (validated via the loader's opt-in
+``validate_section_via_registry`` hook). Classification rule: a field lives in
+the envelope iff the PLATFORM consumes it; a field the plugin consumes lives in
+its section.
+
 Ported from:
 ``backend/src/trade_lab/domain/contracts/strategy_contract.py:1-218`` (Trade-Lab).
 """
 
 from __future__ import annotations
 
-from typing import Any
+from collections.abc import Mapping
+from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, PrivateAttr, model_validator
 
 from strategy_core import CONTRACT_VERSION, PLATFORM_VERSION
 
@@ -78,23 +89,19 @@ class Model(_ContractModel):
 
 
 class FeatureSet(_ContractModel):
-    """Contractual feature vector. Ported from ``strategy_contract.py:37-52``."""
+    """Contractual feature vector SHELL. Ported from ``strategy_contract.py:37-52``.
+
+    Contract v3 (E3): the interaction/approach partition is PLUGIN semantics, so it
+    moved into the strategy-owned section (``TouchReversalSection`` for archetype 1)
+    together with its partition validator. The cross-check that the section's
+    partition is exactly ``names`` runs at the two validation sites (QL emission,
+    TL activation) via the section's ``validate_feature_partition`` helper — the
+    envelope alone cannot check it because the partition no longer lives here.
+    """
 
     names: tuple[str, ...] = Field(min_length=1, max_length=256)
     order_is_contractual: bool
-    interaction_features: tuple[str, ...] = Field(max_length=256)
-    approach_features: tuple[str, ...] = Field(max_length=256)
     nan_policy: str = Field(min_length=1, max_length=32)
-
-    @model_validator(mode="after")
-    def _names_partition_into_interaction_and_approach(self) -> FeatureSet:
-        split = (*self.interaction_features, *self.approach_features)
-        if set(split) != set(self.names) or len(split) != len(self.names):
-            raise ValueError(
-                "feature_set.names must be exactly the union of interaction_features "
-                "and approach_features"
-            )
-        return self
 
 
 class SessionWindow(_ContractModel):
@@ -106,11 +113,20 @@ class SessionWindow(_ContractModel):
 
 
 class SessionScheme(_ContractModel):
-    """Session/trading-day scheme (contract form). Ported from ``strategy_contract.py:61-64``."""
+    """Session/trading-day scheme (contract form). Ported from ``strategy_contract.py:61-64``.
+
+    Contract v3 (E3): gains the OPTIONAL ``closed_window`` — a start/end pair
+    (carried as a :class:`SessionWindow`; its ``crosses_midnight`` flag is not
+    meaningful for a closed window and stays at its ``False`` default) — so the
+    runtime ``types.SessionScheme.closed_window`` (e.g. the Chicago-clock
+    ``TRADE_LAB_CT_SESSION_SCHEME``'s 16:00-18:00 halt) round-trips drop-nothing
+    through ``_contract_scheme_from_runtime`` / ``_runtime_scheme_from_section``.
+    """
 
     timezone: str = Field(min_length=1, max_length=64)
     trading_day_boundary: str = Field(min_length=1, max_length=8)
     sessions: dict[str, SessionWindow]
+    closed_window: SessionWindow | None = None
 
 
 class LevelScheme(_ContractModel):
@@ -160,6 +176,13 @@ class LabelPolicy(_ContractModel):
     """
 
     resolution: str = Field(min_length=1, max_length=32)
+    #: Contract v3 (E3): how the tp/sl/trap thresholds are interpreted —
+    #: "fixed_points" (absolute points off the entry, today's only implemented
+    #: barrier, ``FixedPointsBarrier``) or "r_relative" (thresholds expressed in
+    #: R-multiples; declared for forward compatibility, no producer emits it yet).
+    #: Closes the Phase-D named debt that the Barrier abstraction had no contract
+    #: field to bind to.
+    barrier_mode: Literal["fixed_points", "r_relative"] = "fixed_points"
     entry_reference: str = Field(min_length=1, max_length=64)
     decision_offset_minutes: int = Field(gt=0, le=1440)
     tp_points: float = Field(gt=0.0)
@@ -247,7 +270,7 @@ class ClassMap(_ContractModel):
 
 
 class StrategyContract(_ContractModel):
-    """A fully parsed, validated ``strategy.json`` for one model bundle.
+    """The platform-consumed ENVELOPE of a ``strategy.json`` (contract v3, E3).
 
     Two-axis version binding (decision 9.3, contract v2): ``platform_version``
     (ex ``engine_version``) binds the bundle to the shared platform that produced
@@ -257,6 +280,15 @@ class StrategyContract(_ContractModel):
     name; bundle identity stays the directory name). Consumers fail-close on a
     mismatch of either axis (loader hook for the platform; activation gate for
     the strategy).
+
+    Envelope/section split (contract v3, E3): every field declared here is
+    PLATFORM-consumed. The plugin-consumed groups live in the ONE ``section``
+    subtree — a RAW mapping at this layer (the envelope stays strategy-agnostic),
+    typed by ``get_strategy(strategy_id).SectionModel`` when the loader is called
+    with ``validate_section_via_registry=True``. The typed instance then rides
+    this object as the private ``_section_model`` attribute, exposed read-only via
+    :attr:`section_model` (a deliberate NON-FIELD carrier: the loader keeps its
+    plain single-return call shape and hookless callers never see it).
     """
 
     contract_version: str = Field(min_length=1, max_length=64)
@@ -269,17 +301,33 @@ class StrategyContract(_ContractModel):
     tick_size: float = Field(gt=0.0)
     point_value: float = Field(gt=0.0)
     model: Model
-    feature_set: FeatureSet
     class_map: ClassMap
-    session_scheme: SessionScheme
-    level_scheme: LevelScheme
-    touch_rule: TouchRule
-    feature_windows: FeatureWindows
+    feature_set: FeatureSet
     label_policy: LabelPolicy
     inference: InferencePolicy
     data_requirements: DataRequirements
     provenance: Provenance
-    research_session_experiment: ResearchSessionExperiment | None = None
+    #: The strategy-owned subtree, raw. The envelope never interprets it; the
+    #: loader's registry hook (or the owning plugin) validates it as SectionModel.
+    section: Mapping[str, Any]
+
+    _section_model: Any = PrivateAttr(default=None)
+
+    @property
+    def section_model(self) -> BaseModel:
+        """The typed, plugin-validated section instance (loader-hook carrier).
+
+        Populated ONLY by ``load_strategy_contract(...,
+        validate_section_via_registry=True)``. Accessing it on a hooklessly loaded
+        contract raises :class:`ContractError` (fail closed — never hand back an
+        unvalidated section as if it were typed).
+        """
+        if self._section_model is None:
+            raise ContractError(
+                "contract section has not been registry-validated; load with "
+                "validate_section_via_registry=True to populate section_model"
+            )
+        return self._section_model
 
     @property
     def feature_count(self) -> int:

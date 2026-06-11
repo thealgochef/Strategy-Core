@@ -16,12 +16,15 @@ from datetime import UTC, date, datetime
 import pytest
 from pydantic import ValidationError
 
-from strategy_core.constants import DEFAULT_TICK_SIZE, ZONE_PROXIMITY_PTS
+from strategy_core.constants import (
+    DEFAULT_TICK_SIZE,
+    RESEARCH_SESSION_SCHEME,
+    TRADE_LAB_CT_SESSION_SCHEME,
+    ZONE_PROXIMITY_PTS,
+)
 from strategy_core.contract.schema import (
     ContractError,
     FeatureWindows,
-    InferencePolicy,
-    LabelPolicy,
     LevelScheme,
     SessionScheme,
     SessionWindow,
@@ -32,8 +35,12 @@ from strategy_core.decisions.zones import build_zones
 from strategy_core.strategies.registry import get_strategy
 from strategy_core.strategies.touch_reversal.plugin import (  # noqa: F401 -- import registers the plugin
     TouchReversalPlugin,
+    _runtime_scheme_from_section,
 )
-from strategy_core.strategies.touch_reversal.section import TouchReversalSection
+from strategy_core.strategies.touch_reversal.section import (
+    TouchReversalSection,
+    _contract_scheme_from_runtime,
+)
 from strategy_core.types import Bar, CloseReason, Direction, Level, Side
 
 
@@ -92,21 +99,15 @@ def _section() -> TouchReversalSection:
             large_trade_threshold=10,
             mid_price_source="trade_price",
         ),
-        label_policy=LabelPolicy(
-            resolution="mae_first",
-            entry_reference="realistic_at_decision",
-            decision_offset_minutes=5,
-            tp_points=15.0,
-            sl_points=30.0,
-            trap_mfe_min=5.0,
-            forward_bar_type="tick",
-            forward_cutoff="17:00_US/Eastern_ny_close",
-            no_resolution_dropped=True,
+        interaction_features=(
+            "int_time_beyond_level",
+            "int_time_within_2pts",
+            "int_absorption_ratio",
         ),
-        inference=InferencePolicy(
-            eligible_class="tradeable_reversal",
-            eligible_session="ny",
-            confidence_gate=0.70,
+        approach_features=(
+            "app_large_trade_vol_pct",
+            "app_avg_trade_size",
+            "app_max_spread",
         ),
     )
 
@@ -220,3 +221,23 @@ def test_plugin_declarations_match_engine_constants() -> None:
     # The barrier projects fixed points off the entry, direction-aware.
     assert policy.barrier.stop_price(100.0, Direction.LONG) == 70.0
     assert policy.barrier.target_price(100.0, Direction.LONG) == 115.0
+
+
+def test_session_scheme_round_trips_drop_nothing() -> None:
+    """E3: contract<->runtime scheme adaptation drops nothing in either direction.
+
+    The research scheme (closed_window=None) round-trips identically as before, and
+    the CT scheme's 16:00-18:00 closed window — the recorded pre-E3 round-trip gap —
+    now survives ``_contract_scheme_from_runtime`` -> ``_runtime_scheme_from_section``.
+    """
+    for runtime_scheme in (RESEARCH_SESSION_SCHEME, TRADE_LAB_CT_SESSION_SCHEME):
+        contract_form = _contract_scheme_from_runtime(runtime_scheme)
+        assert _runtime_scheme_from_section(contract_form) == runtime_scheme
+
+    ct_contract = _contract_scheme_from_runtime(TRADE_LAB_CT_SESSION_SCHEME)
+    assert ct_contract.closed_window is not None
+    assert (ct_contract.closed_window.start, ct_contract.closed_window.end) == (
+        "16:00",
+        "18:00",
+    )
+    assert _contract_scheme_from_runtime(RESEARCH_SESSION_SCHEME).closed_window is None

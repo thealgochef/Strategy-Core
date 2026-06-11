@@ -1,56 +1,60 @@
 """The ``touch_reversal`` plugin's typed contract SECTION (PLAN §2.4 / §4.3).
 
-The contract split (PLAN §2.4) lifts the strategy-specific groups out of the flat
-``StrategyContract`` (``contract/schema.py:246-278``) into a per-plugin ``SectionModel``
-the strategy OWNS. For archetype 1 that section is ``TouchReversalSection``: it RE-PARENTS
-the existing canonical sub-models (each already an ``extra="forbid"`` ``_ContractModel``)
-into one section, so this is a re-parent, not a rewrite — and the platform never owns a
-second copy of these fields to drift.
+The contract split (PLAN §2.4, executed at E3 / contract v3) lifts the
+strategy-specific groups out of the flat ``StrategyContract`` into a per-plugin
+``SectionModel`` the strategy OWNS. For archetype 1 that section is
+``TouchReversalSection``: it RE-PARENTS the existing canonical sub-models (each
+already an ``extra="forbid"`` ``_ContractModel``) into one section, so this is a
+re-parent, not a rewrite — and the platform never owns a second copy of these
+fields to drift.
 
-Phase A note (PLAN §7 / Step A3): this is declaration-only and unwired. The platform
-loader is NOT yet split into envelope + section (that is Phase E / Step E3); nothing
-calls ``model_validate`` on this section in production yet. It exists so the plugin can
-declare ``SectionModel = TouchReversalSection`` and the §9.1 registry-time assertion has
-a real pydantic ``BaseModel`` subclass to check.
+Classification by CONSUMER (the E3 ratified rule): the section holds exactly what
+the PLUGIN consumes — ``session_scheme``, ``level_scheme``, ``touch_rule``,
+``feature_windows``, the optional ``research_session_experiment``, and the
+interaction/approach feature PARTITION (moved out of the envelope's
+``feature_set``, which keeps only the platform-consumed shell). ``label_policy``
+and ``inference`` are PLATFORM-consumed (TL builds the honest resolver and the
+inference gate from them) and therefore live in the ENVELOPE, not here.
+
+As of E3 this section is LOAD-BEARING: the loader's
+``validate_section_via_registry`` hook validates every bundle's ``section``
+subtree against this model (resolved via ``get_strategy(strategy_id).SectionModel``
+— the §9.1 registry-time assertion made that resolvable), and the QL emitter
+emits the subtree FROM a configured instance of this model.
 """
 
 from __future__ import annotations
+
+from collections.abc import Sequence
+
+from pydantic import Field, model_validator
 
 # Re-parent the CURRENT canonical contract sub-models (no rewrite). ``_ContractModel``
 # is the shared ``extra="forbid", frozen=True`` base; importing it keeps the section's
 # unknown-key fail-close identical to every other contract section.
 from strategy_core.constants import (
-    DECISION_OFFSET_MINUTES,
     DEFAULT_APPROACH_WINDOW_MINUTES,
-    DEFAULT_CONFIDENCE_GATE,
     DEFAULT_INTERACTION_WINDOW_MINUTES,
-    DEFAULT_SL_POINTS,
-    DEFAULT_TP_POINTS,
-    DEFAULT_TRAP_MFE_MIN,
+    DEFAULT_TICK_COUNT,
     DIRECTION_FROM_SIDE,
-    INFERENCE_ELIGIBLE_SESSION,
+    INTERACTION_FEATURES,
     LEVEL_AVAILABLE_FROM_GUARD,
-    LABEL_ENTRY_REFERENCE,
-    LABEL_FORWARD_CUTOFF,
-    LABEL_NO_RESOLUTION_DROPPED,
-    LABEL_RESOLUTION,
     LARGE_TRADE_THRESHOLD,
     LEVEL_PROXIMITY_PTS,
     MID_PRICE_SOURCE,
     PDH_PDL_SOURCE,
     RESEARCH_SESSION_SCHEME,
+    RUNTIME_APPROACH_FEATURES,
     SESSION_LEVELS,
     TOUCH_SCOPE,
     TOUCH_TYPE,
-    TRADEABLE_REVERSAL,
     WITHIN_BAND_PTS,
     ZONE_PROXIMITY_PTS,
     ZONE_REPRESENTATIVE_PRICE,
 )
 from strategy_core.contract.schema import (
+    ContractError,
     FeatureWindows,
-    InferencePolicy,
-    LabelPolicy,
     LevelScheme,
     ResearchSessionExperiment,
     SessionScheme,
@@ -60,26 +64,64 @@ from strategy_core.contract.schema import (
 )
 from strategy_core.types import SessionScheme as RuntimeSessionScheme
 
-__all__ = ["TouchReversalSection", "default_touch_reversal_section"]
+__all__ = [
+    "TouchReversalSection",
+    "default_touch_reversal_section",
+    "validate_feature_partition",
+]
 
 
 class TouchReversalSection(_ContractModel):
     """The archetype-1 (touch / zone-reversal) strategy-owned contract section (PLAN §2.4).
 
-    Holds exactly the strategy-specific groups that move out of the flat contract:
-    ``session_scheme``, ``level_scheme``, ``touch_rule``, ``feature_windows``,
-    ``label_policy`` (barrier mode is ``fixed_points`` for this strategy), ``inference``,
-    and the optional ``research_session_experiment``. ``extra="forbid"`` (via
+    Holds exactly the strategy-specific groups that moved out of the flat contract
+    at E3: ``session_scheme``, ``level_scheme``, ``touch_rule``, ``feature_windows``,
+    the interaction/approach feature partition (ex ``feature_set``), and the
+    optional ``research_session_experiment``. ``extra="forbid"`` (via
     ``_ContractModel``) so any unknown key still fails closed.
+
+    The partition validator here checks what the section can check ALONE (the two
+    tuples are disjoint and duplicate-free); the cross-check against the ENVELOPE's
+    ``feature_set.names`` is :func:`validate_feature_partition`, run at the two
+    validation sites (QL emission, TL activation).
     """
 
     session_scheme: SessionScheme
     level_scheme: LevelScheme
     touch_rule: TouchRule
     feature_windows: FeatureWindows
-    label_policy: LabelPolicy
-    inference: InferencePolicy
+    interaction_features: tuple[str, ...] = Field(max_length=256)
+    approach_features: tuple[str, ...] = Field(max_length=256)
     research_session_experiment: ResearchSessionExperiment | None = None
+
+    @model_validator(mode="after")
+    def _partition_is_disjoint_and_duplicate_free(self) -> TouchReversalSection:
+        split = (*self.interaction_features, *self.approach_features)
+        if len(set(split)) != len(split):
+            raise ValueError(
+                "interaction_features and approach_features must be disjoint and "
+                "duplicate-free"
+            )
+        return self
+
+
+def validate_feature_partition(
+    feature_names: Sequence[str], section: TouchReversalSection
+) -> None:
+    """The envelope<->section feature-partition cross-check (contract v3, E3).
+
+    The section's ``interaction_features + approach_features`` must be EXACTLY the
+    envelope's ``feature_set.names`` (same elements, same count — the moved
+    semantics of the pre-v3 ``FeatureSet`` partition validator). Single-sourced
+    here so the TWO validation sites (QL emission, TL activation) cannot drift.
+    Raises :class:`ContractError` on a mismatch.
+    """
+    split = (*section.interaction_features, *section.approach_features)
+    if set(split) != set(feature_names) or len(split) != len(feature_names):
+        raise ContractError(
+            "feature_set.names must be exactly the union of the section's "
+            "interaction_features and approach_features"
+        )
 
 
 def _contract_scheme_from_runtime(scheme: RuntimeSessionScheme) -> SessionScheme:
@@ -87,9 +129,9 @@ def _contract_scheme_from_runtime(scheme: RuntimeSessionScheme) -> SessionScheme
     (``"HH:MM"`` strings). The inverse of ``plugin._runtime_scheme_from_section``, so a
     section built from the runtime's scheme round-trips back to exactly that scheme (W5).
 
-    The contract form carries no ``closed_window``; the canonical research scheme has none,
-    so the round-trip is identity for it. (A scheme with a non-``None`` ``closed_window``
-    would not round-trip — not a production case; the touch strategy uses the research scheme.)
+    Drop-nothing BOTH directions as of E3: a non-``None`` runtime ``closed_window``
+    is carried as the contract scheme's optional ``closed_window`` start/end pair
+    (closing the recorded round-trip gap for ``TRADE_LAB_CT_SESSION_SCHEME``).
     """
     return SessionScheme(
         timezone=scheme.timezone,
@@ -102,6 +144,14 @@ def _contract_scheme_from_runtime(scheme: RuntimeSessionScheme) -> SessionScheme
             )
             for name, window in scheme.sessions.items()
         },
+        closed_window=(
+            SessionWindow(
+                start=scheme.closed_window[0].strftime("%H:%M"),
+                end=scheme.closed_window[1].strftime("%H:%M"),
+            )
+            if scheme.closed_window is not None
+            else None
+        ),
     )
 
 
@@ -114,9 +164,17 @@ def default_touch_reversal_section() -> TouchReversalSection:
     ``touch_rule.zone_proximity_pts == ZONE_PROXIMITY_PTS`` (the ``build_zones`` default,
     so the section-driven DETECTION zones match the default-proximity zones
     ``StrategyLevelState.zones()`` builds for the snapshot). Every value is
-    single-sourced from ``strategy_core.constants`` — no restated literals — so this is the
-    same section the QL emitter will generate from the plugin (a later phase). The non-detection
-    fields are descriptive and do not affect the plugin's touch output.
+    single-sourced from ``strategy_core.constants`` — no restated literals — and the QL
+    emitter generates its emitted section from THIS default (overriding only the
+    per-run config values). The non-detection fields are descriptive and do not affect
+    the plugin's touch output.
+
+    E3 ledger fix: ``touch_rule.bar_type`` defaults to the canonical production bar
+    literal (``f"{DEFAULT_TICK_COUNT}t"`` = ``"147t"``, the same form Trade-Lab's
+    ``parse_bar_type`` accepts), not the pre-E3 ``"tick"`` placeholder. The old
+    ``label_policy.forward_bar_type="tick"`` landmine died with ``label_policy``'s
+    move to the ENVELOPE (the section carries no label policy; the emitter sources
+    ``forward_bar_type`` per-run).
     """
     return TouchReversalSection(
         session_scheme=_contract_scheme_from_runtime(RESEARCH_SESSION_SCHEME),
@@ -127,7 +185,7 @@ def default_touch_reversal_section() -> TouchReversalSection:
         ),
         touch_rule=TouchRule(
             type=TOUCH_TYPE,
-            bar_type="tick",
+            bar_type=f"{DEFAULT_TICK_COUNT}t",
             zone_proximity_pts=ZONE_PROXIMITY_PTS,
             zone_representative_price=ZONE_REPRESENTATIVE_PRICE,
             scope=TOUCH_SCOPE,
@@ -143,20 +201,6 @@ def default_touch_reversal_section() -> TouchReversalSection:
             large_trade_threshold=LARGE_TRADE_THRESHOLD,
             mid_price_source=MID_PRICE_SOURCE,
         ),
-        label_policy=LabelPolicy(
-            resolution=LABEL_RESOLUTION,
-            entry_reference=LABEL_ENTRY_REFERENCE,
-            decision_offset_minutes=DECISION_OFFSET_MINUTES,
-            tp_points=DEFAULT_TP_POINTS,
-            sl_points=DEFAULT_SL_POINTS,
-            trap_mfe_min=DEFAULT_TRAP_MFE_MIN,
-            forward_bar_type="tick",
-            forward_cutoff=LABEL_FORWARD_CUTOFF,
-            no_resolution_dropped=LABEL_NO_RESOLUTION_DROPPED,
-        ),
-        inference=InferencePolicy(
-            eligible_class=TRADEABLE_REVERSAL,
-            eligible_session=INFERENCE_ELIGIBLE_SESSION,
-            confidence_gate=DEFAULT_CONFIDENCE_GATE,
-        ),
+        interaction_features=INTERACTION_FEATURES,
+        approach_features=RUNTIME_APPROACH_FEATURES,
     )
