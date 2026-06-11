@@ -8,10 +8,10 @@ Updated: 2026-06-08. This is the current migration state, replacing the older v1
 
 | Workstream | Current status | Evidence / notes |
 |---|---|---|
-| Strategy-Core package scaffold, types, constants, contract schema | ✅ | `src/strategy_core/` is importable; `ENGINE_VERSION=strategy_core_engine_v3`; `CONTRACT_VERSION=trade_lab_contract_v1`. |
+| Strategy-Core package scaffold, types, constants, contract schema | ✅ | `src/strategy_core/` is importable; `PLATFORM_VERSION=strategy_core_platform_v1` (the engine axis renamed at E1); `CONTRACT_VERSION=trade_lab_contract_v2`. |
 | Candle layer | ✅ | Streaming + batch trade tick bars exist; tests cover parity and session behavior. |
 | Decision layer | ✅ | Zones, touches, sessions, features, outcomes, and honest-entry orchestration live in `strategy_core.decisions`. |
-| Contract loader fail-close | ✅ | `load_strategy_contract(..., expected_engine_version=...)` rejects engine mismatches. |
+| Contract loader fail-close | ✅ | `load_strategy_contract(..., expected_platform_version=...)` rejects platform mismatches. |
 | Quant-Lab dashboard-utility training repoint | ✅ | Production builder calls `engine_decision.process_single_date_engine()`; contract emitter pulls constants/version stamps from Strategy-Core. |
 | Strategy-Core v3 semantics | ✅ | Sessions re-clocked, full-prior-day PDH/PDL, availability guard enforced, 16:40/17:00 cutoffs, `eligible_session=ny`. |
 | Strategy-Core Databento/replay/runtime package | ✅ | `strategy_core.data` owns deterministic ordering plus parquet/live normalization boundaries; `strategy_core.runtime` owns neutral replay/runtime snapshots/updates. |
@@ -26,7 +26,7 @@ Updated: 2026-06-08. This is the current migration state, replacing the older v1
 
 The canonical strategy state is documented in [`README.md`](README.md) and summarized in [`V3_COMPATIBILITY_MATRIX.md`](V3_COMPATIBILITY_MATRIX.md). The most important v3 differences from old docs are:
 
-1. **Engine stamp:** `strategy_core_engine_v3`, not v1/v2.
+1. **Platform stamp:** `strategy_core_platform_v1` (ex engine v3), not engine v1/v2.
 2. **Sessions:** ET-native `asia` 19:00→02:45, `london` 03:00→08:00, `ny` 09:00→17:00; 18:00 ET trading-day boundary.
 3. **Level source:** PDH/PDL = full prior trading-day high/low, not prior NY/RTH high/low.
 4. **Availability guard:** session levels cannot be touched before their defining session closes.
@@ -41,7 +41,7 @@ The canonical strategy state is documented in [`README.md`](README.md) and summa
 The Trade-Lab market-data runtime repoint is complete enough for backend replay/live market-data tests. The remaining work is model-serving parity and bundle activation. Each item needs tests before paper/live use.
 
 1. **Fail-close bundle activation.**
-   - In model registry activation/discovery, load `strategy.json` through `strategy_core.load_strategy_contract(path, expected_engine_version=strategy_core.ENGINE_VERSION)`.
+   - In model registry activation/discovery, load `strategy.json` through `strategy_core.load_strategy_contract(path, expected_platform_version=strategy_core.PLATFORM_VERSION)`.
    - Reject stale v1/v2/unversioned bundles with a path-free error.
 
 2. **Retire or quarantine stale local strategy semantics.**
@@ -72,6 +72,6 @@ When the local data zip is available:
 3. Import into the Quant-Lab/Trade-Lab expected local data layout.
 4. Identify the canonical v3 model-bundle location.
 5. Verify each bundle has `model.cbm`, `metadata.json`, `evaluation.json`, `strategy.json`, and `model.cbm.sha256` if expected.
-6. Validate `strategy.json` against `strategy_core_engine_v3` and compute/check file hashes.
+6. Validate `strategy.json` against `strategy_core_platform_v1` and compute/check file hashes.
 
 Do **not** infer bundle validity from names or old reports.

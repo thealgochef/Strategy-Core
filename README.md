@@ -26,10 +26,10 @@ Runtime import intent: stdlib + `numpy` + `pydantic`; pandas is loaded lazily by
 
 | Stamp | Current value | Meaning |
 |---|---:|---|
-| `ENGINE_VERSION` | `strategy_core_engine_v3` | Structural decision/candle semantics that a model bundle binds to. A mismatch must fail closed. |
-| `CONTRACT_VERSION` | `trade_lab_contract_v1` | Shape/version of `strategy.json`. The v3 engine still uses the v1 contract format plus required `engine_version`, `label_policy.decision_offset_minutes`, and optional research audit metadata. |
+| `PLATFORM_VERSION` | `strategy_core_platform_v1` | Structural platform (decision/candle) semantics that a model bundle binds to (the engine axis renamed at E1; per-plugin `strategy_version` is the second axis). A mismatch must fail closed. |
+| `CONTRACT_VERSION` | `trade_lab_contract_v2` | Shape/version of `strategy.json`. v2 carries the two-axis binding: required `platform_version` + `strategy_version`, `label_policy.decision_offset_minutes`, and optional research audit metadata. |
 
-`load_strategy_contract(path, expected_engine_version=ENGINE_VERSION)` rejects stale bundles before they can be served.
+`load_strategy_contract(path, expected_platform_version=PLATFORM_VERSION)` rejects stale bundles before they can be served.
 
 ---
 
@@ -57,7 +57,7 @@ These are the current engine constants and code paths, not historical validation
 
 ```text
 src/strategy_core/
-  __init__.py        ENGINE_VERSION, CONTRACT_VERSION, public API re-exports
+  __init__.py        PLATFORM_VERSION, CONTRACT_VERSION, public API re-exports
   constants.py       single source of strategy semantics and contract descriptors
   types.py           neutral Trade/Quote/Bar/Level/Zone/Touch/SessionScheme types
   candles/
@@ -80,7 +80,7 @@ src/strategy_core/
     levels.py        streaming v3 level state with availability timestamps
     replay.py        neutral replay controller over StrategyRuntime/source events
   contract/
-    schema.py        Pydantic StrategyContract with engine_version and research_session_experiment
+    schema.py        Pydantic StrategyContract with platform_version/strategy_version and research_session_experiment
     loader.py        strict fail-closed loader
 validation/          retained validation notes and legacy real-data harnesses
 ```
@@ -90,7 +90,7 @@ validation/          retained validation notes and legacy real-data harnesses
 ## What is still not done
 
 1. **Trade-Lab model serving is still gated.** The backend market-data runtime now uses Strategy-Core for bars/sessions/levels/touches, but contract activation, feature-vector parity, and outcome tracking still need a verified v3 bundle path before paper/live model serving.
-2. **A v3 model bundle still needs to be verified/promoted.** Quant-Lab can emit `engine_version=strategy_core_engine_v3` and `research_session_experiment`, but canonical bundle location, file presence, and checksums are intentionally deferred until a candidate bundle is selected.
+2. **A v3 model bundle still needs to be verified/promoted.** Quant-Lab can emit `platform_version=strategy_core_platform_v1` and `research_session_experiment`, but canonical bundle location, file presence, and checksums are intentionally deferred until a candidate bundle is selected.
 3. **Historical validation reports are not current-state docs.** Retained validation notes must still be checked against current source/tests before citation.
 
 ---
