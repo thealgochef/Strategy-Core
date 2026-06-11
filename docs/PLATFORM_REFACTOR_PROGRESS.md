@@ -26,7 +26,8 @@ deviations.
 
 - **Active phase:** **Phase E — E1+E2 DONE locally (see the E-WINDOW bullet below); Phase D COMPLETE and PUSHED** (D1b greenlit 2026-06-10: SC pushed to `2cb27dc`, TL pin chore `5ede158` pushed; decision 9.6 pin convention honored). D-window record: **D1b (flip + delete)** (SC `945f381` + TL `94610ff`): the dashboard now SERVES the streaming honest resolver — resolutions adapt to served `Outcome`s (entry = the real trade print, NEW `entry_price` field; TL-side correctness; SC ZERO-BASED `bars_to_resolution`; `resolved_ts` from the new SC `StreamResolution.resolved_ts_utc`), drops surface explicitly (`prediction.dropped` WS frame + snapshot `dropped` ring + `RuntimeUpdate.dropped` + IntelligencePanel badge w/ reason, NO chart marker), and the legacy `OutcomeTracker` + its 16 tests + the gate-B characterization harness are DELETED; `ResolutionType.SESSION_END`/`NO_RESOLUTION` REMOVED (grep-proven zero refs). Gates: TL suite **419** (= 420 − 16 tracker + 13 adapter + 1 dropped-frame + 1 swallow pin); seam-by-name **4** (acceptance 3 incl. the D2 guard + replay 1); TL ruff clean; frontend typecheck + vitest **142** + build green; SC suite **152** + ruff + frozen b3 regressions **2** (fixtures untouched). 6-agent adversarial verify on the exact commits: **5 PASS (high) + 1 finding REPAIRED in-window** (the `_track_outcomes` per-item swallow guard). Prior D-window state (D1a DARK SC `c7564fd` + TL `c7f2a84`; D2 TL `73aa7df`) unchanged beneath. Decision 9.6 unchanged (pin DECLARED c615e40; enforcement DEFERRED; QL cold-install debt open).
 - **E-WINDOW (E1+E2) DONE and PUSHED at the E greenlight 2026-06-10** (SC `8e5c017` + QL `baecf66` + TL `9b00eb5` on `platform-refactor`, followed by the greenlight chore commits QL `e10d226` + TL `ef8a189` — pin bumps to SC `8e5c017` + CI branch filters — and the SC greenlight doc commit): two-axis versioning live end-to-end. `ENGINE_VERSION` → `PLATFORM_VERSION` (`"strategy_core_platform_v1"`, clean rename, no alias); `CONTRACT_VERSION` → `"trade_lab_contract_v2"` (shape break); contract field `engine_version` → `platform_version` + NEW required `strategy_version`; `strategy_id` re-pointed to the REGISTRY ROUTER KEY. QL emits via `get_strategy` (unknown id fail-closes EMISSION), flips `supported_by_runtime=True` (full contract), and MIGRATED the deployed store in place (3 v3 bundles → v2 w/ backups; the 3 legacy/v1/v2-engine bundles deliberately NOT migrated — see D-E-c); TL gates BOTH registry entries on the platform hook + the 4-check strategy gate (resolve / version-equality / servable-flag / serving-id guard), and `Prediction.contract_id` re-sources to the active bundle id (values byte-compatible). QL CI rider pays the 9.6 debt (cold-install workflow authored; **ENFORCED pending its first green run post-push**); QL tooling aligned py313. REAL-BUNDLE GATE: exactly the 3 migrated bundles discoverable; all 3 activate incl. hot-swap; un-migrated .bak copy rejected on contract_version. Gates: SC **154** + ruff + b3 regressions **2** (fixtures untouched) + decision-fn **2** UNCHANGED; QL **740** (739+1) + ruff (src/tests clean; 13 pre-existing scratch findings stand); TL **424** (419+5) + seam-by-name **4** + ruff + frontend untouched.
-- **Next step:** E3 (contract envelope split — the E3 ledger carries D-E-h's four hardening items + the C1/C2/C3 recon scout) or F1 per the owner's call. The owner watches the FIRST 9.6-enforcing QL CI run on GitHub (the workflow now triggers on platform-refactor pushes; green = 9.6 ENFORCED).
+- **E3 DONE LOCALLY (full stop before push), 2026-06-10** — SC `dc14652` + QL `523ff98` + TL `3d79bc4` on `platform-refactor`; diffs exported as `E3_SC_DIFF.txt`/`E3_QL_DIFF.txt`/`E3_TL_DIFF.txt`. Contract v3 envelope/section split per the ratified consumer classification; loader section hook; QL emits the section from the plugin's SectionModel + migration #2 executed on the real store (3 MIGRATED + 3 SKIP); TL validates the section at both registry entries, threads the typed section to its two section reads, and closes ALL FOUR D-E-h ledger items. See the E3 deviations (D-E3-a..j) and the status row.
+- **Next step:** owner review of the E3 diffs → E3 greenlight (push + the pin bumps) — then F1 per the owner's call. The owner watches the FIRST 9.6-enforcing QL CI run on GitHub (the workflow now triggers on platform-refactor pushes; green = 9.6 ENFORCED).
 - **Drift-net status:** **S-B3a DONE (fold-collapse + dedup-into-plugin), byte-identical.** The runtime's `level_state`, `_zones_for_snapshot`, `_touched_zone_keys`/`_zone_key`/`_touch_zone_key_from_touch` are DELETED; `RuntimeUpdate.levels` ← `plugin.on_event` return, snapshot/update `zones` ← `plugin.snapshot_zones`, snapshot `levels` ← `plugin.current_levels`, dedup = plugin-owned `_fired_keys`, touches flow back VERBATIM. Proven against the **FROZEN, UNTOUCHED** B3 digests: `test_b3_golive_plugin_regression` + `test_b3_multiday_reset_plugin_regression` **2 passed** (3,284,775 trades, 8 reset boundaries — every per-trade `to_dict()` + snapshot byte-identical). Full SC suite **144**; TL acceptance+replay **3**; decision-fn gates **2** (UNCHANGED); ruff clean. 5-agent adversarial verify: **5 PASS (all high confidence)**. Verified 2026-06-09 on the final tree.
 - **Last-verified date:** 2026-06-10
 - **Note (release, decision 9.6) — AMENDED 2026-06-10 (E greenlight):** BOTH consumers pin SC at `8e5c017` (the E1 commit). Pin history: TL `cbf9b99 → c615e40` (`0e1c7ce`, C-window) `→ c7564fd` (`4bb9290`, D-window) `→ 945f381` (`5ede158`, D1b greenlight) `→ 8e5c017` (`ef8a189`, E greenlight); QL `c615e40` (`9b8e798`, declared) `→ 8e5c017` (`e10d226`, the long-deferred bump, E greenlight). PIN CONVENTION unchanged: the pin tracks the latest SC commit with CONSUMER-FACING content; doc-only SC commits do not move it. **STATUS: ENFORCED pending the first green CI run** — QL now has the cold-install workflow (`.github/workflows/ci.yml`, the E-window rider) AND it is reachable: both CI workflows trigger on `platform-refactor` pushes as of the greenlight chore commits (QL `e10d226`, TL `ef8a189`), so the first 9.6-enforcing run fires on this push rather than waiting for merge day. The former NAMED DEBT (QL cold-install resolution check) is PAID by that workflow; green run = ENFORCED.
@@ -896,6 +897,145 @@ False); deployed-bundle migration in scope; `contract_id` stamping re-sourced.
   (`section.py:131,153`) vs TL's `^(\d+)t$` `parse_bar_type` would REJECT a
   section-defaulted contract — plus the `closed_window` contract↔runtime scheme
   round-trip gap (`section.py:91-93`). All four are E3-band hardening items.
+  **AMENDED at E3: ALL FOUR CLOSED** — see D-E3-g below.
+
+### Phase E — E3 deviations / clarifications (envelope/section split, contract v3; cross-repo, 3 commits)
+
+Ratified design implemented: classification by CONSUMER — platform-consumed fields
+stay flat on the ENVELOPE (`contract_version`/`platform_version`/`strategy_id`/
+`strategy_version`/`training_mode`/`supported_by_runtime`/`instrument`/`tick_size`/
+`point_value`/`model`/`class_map`/`feature_set` SHELL (names/order_is_contractual/
+nan_policy)/`label_policy` (+ NEW `barrier_mode`)/`inference`/`data_requirements`/
+`provenance`); plugin-consumed fields move into ONE `section` subtree typed by the
+plugin's `SectionModel` (`session_scheme`/`level_scheme`/`touch_rule`/
+`feature_windows`/`research_session_experiment` + the interaction/approach feature
+partition MOVED out of `feature_set`). `CONTRACT_VERSION` → `"trade_lab_contract_v3"`
+(shape break #2, same fail-closed-at-first-check + in-place-migration pattern as v2).
+E3 is BEHAVIOR-PRESERVING: the runtime still configures from wiring constants
+(`default_touch_reversal_section()`); bundle sections are consumed only where their
+fields were consumed before; the E2 serving guard (check iv) stays.
+
+- **D-E3-a (the classification table as applied).** Envelope/section assignment is
+  exactly the ratified list above. `label_policy` and `inference` are ENVELOPE
+  (TL's resolver build `runtime.py:_build_honest_resolver` and the inference gate
+  consume them — platform reads), so `TouchReversalSection` LOST its Phase-A
+  `label_policy`/`inference` fields and GAINED `interaction_features`/
+  `approach_features`. The partition validator moved with the partition: the
+  section-LOCAL check (disjoint + duplicate-free) is a `model_validator` on
+  `TouchReversalSection`; the envelope cross-check (partition == `feature_set.names`)
+  is the new single-sourced `validate_feature_partition` helper, run at the TWO
+  validation sites — QL emission and TL activation.
+- **D-E3-b (the loader carrier, defined precisely).** New opt-in loader kwarg
+  `validate_section_via_registry: bool = False`. When True, after envelope
+  validation: `get_strategy(contract.strategy_id)` (fail-closed; the §9.1
+  registry-time SectionModel assertion is now LOAD-BEARING) →
+  `SectionModel.model_validate(section)` → the typed instance is attached to the
+  returned contract as the private NON-FIELD attribute `_section_model`
+  (`PrivateAttr`, settable on the frozen model) and read via the
+  `StrategyContract.section_model` property. A `(contract, typed_section)` tuple
+  return was ratified OUT; the loader keeps its plain single-return call shape, and
+  reading `section_model` on a hooklessly loaded contract raises `ContractError`
+  (fail closed — an unvalidated section is never handed back as typed). The
+  registry import is LAZY inside the hook branch (the loader stays import-light;
+  callers own the plugin-registration import, D-B3c).
+- **D-E3-c (closed_window placement — interpretation recorded).** The prompt's
+  "contract SessionWindow gains OPTIONAL closed_window" is implemented as the
+  contract **SessionScheme** gaining `closed_window: SessionWindow | None = None`
+  (the start/end PAIR is carried AS a SessionWindow; `crosses_midnight` is not
+  meaningful for it and stays False) — the runtime `types.SessionScheme.closed_window`
+  is scheme-level, so a per-window field could not express the CT scheme.
+  `_contract_scheme_from_runtime` / `_runtime_scheme_from_section` are now
+  drop-nothing BOTH directions; the `TRADE_LAB_CT_SESSION_SCHEME` round-trip
+  (16:00–18:00 closed window) is pinned by `test_session_scheme_round_trips_drop_nothing`.
+- **D-E3-d (the forward_bar_type landmine death — refines the prompt's wording).**
+  `label_policy` left the section, so the section default no longer carries ANY
+  `forward_bar_type` — the D-E-h(iv) landmine died by the MOVE, not by an edit. The
+  surviving `"tick"` literal in the section default (`touch_rule.bar_type`) was
+  fixed to the canonical production bar literal `f"{DEFAULT_TICK_COUNT}t"` ("147t",
+  constant-sourced). The envelope's `forward_bar_type` has no SC-side default at
+  all: the QL emitter sources it per-run (`du.bar_type`, production "147t").
+- **D-E3-e (emission re-sourcing + recorded wire-shape facts).** QL's emitter
+  builds a configured `TouchReversalSection` INSTANCE (`_build_touch_reversal_section`):
+  the plugin's `default_touch_reversal_section()` supplies every structural value;
+  ONLY per-run config is overridden (`du.bar_type`, the two windows,
+  `level_proximity_pts`, the selected feature partition, the session-experiment
+  scope); `section_instance.model_dump(mode="json", exclude_none=True)` IS the
+  emitted subtree, and `barrier_mode` is sourced from the PLUGIN's `label_policy()`
+  declaration. Two recorded projections: (1) `direction_from_side` keeps the shipped
+  lowercase `low->long/high->short` form (still sourced from `DIRECTION_FROM_SIDE`;
+  the plugin default's uppercase enum-value form is a cosmetic divergence,
+  unconsumed by the plugin); (2) newly-emitted session blocks carry
+  `crosses_midnight` ALWAYS (model_dump), while pre-E3 emission omitted it when
+  False and MIGRATED bundles keep their old block shape verbatim — all three forms
+  are SectionModel-identical after validation.
+- **D-E3-f (migration #2).** `scripts/migrate_contracts_v3.py`, same proven
+  pattern, with D-E-c's narrowing applied UP FRONT: ONLY
+  `contract_version == "trade_lab_contract_v2"` bundles migrate; the store's
+  legacy/v1 bundles SKIP with precise reasons and stay fail-closed at the loader's
+  first check. Backups `strategy.json.pre_v3.bak` (never overwritten); restructure
+  preserves kept fields byte-for-byte (five section fields + the feature_set
+  partition moved verbatim; `barrier_mode: "fixed_points"` injected after
+  `resolution`; `section` appended last); idempotent. EXECUTED against the real
+  store: **3 MIGRATED** (`NQ_20260603_233847`/`NQ_20260604_012623`/`NQ_20260604_015413`)
+  **+ 3 SKIP** (not migratable); re-run **6 SKIP**. All 3 migrated bundles re-load
+  through the SC loader WITH the section hook + partition cross-check. The
+  git-tracked `NQ_20260603_233847/strategy.json` migration is committed.
+- **D-E3-g (the four D-E-h ledger items CLOSED).** (a) TL activation now runs the
+  metadata cross-check FAIL-CLOSED (`_validate_against_metadata` → raise
+  `ModelValidationError` on mismatch); (b) checksum sidecar ABSENT →
+  `logger.warning` (was silent; fired visibly on all 3 real-store activations —
+  the store still has no sidecars); (c) `ModelStatus.validation_ok`/`_detail` =
+  the active bundle's REAL activation-time result carried on `ActiveModel` (no
+  longer hardcoded True); (iv) closed by D-E3-c + D-E3-d. NOTE on the Phase-D
+  Barrier debt: `barrier_mode` gives the CONTRACT a binding for the barrier
+  interpretation ("fixed_points"|"r_relative", enum-constrained, default
+  fixed_points; sourced from the plugin's declaration at emission) — the
+  PROTOCOL-level gap (the `Barrier` Protocol cannot reach `trap_mfe_min`) is NOT
+  in E3 scope and stays a named debt.
+- **D-E3-h (KNOWN TL COUPLING — recorded, deliberately accepted).** Generic TL
+  code duck-types touch-section attributes: `model_registry` imports the touch
+  section's `validate_feature_partition`; `inference_engine._direction_from_section`
+  reads `section.touch_rule.direction_from_side`; `feature_functions` reads
+  `section.feature_windows`. Acceptable single-strategy behavior; the F-era cleanup
+  moves these reads into the plugin.
+- **D-E3-i (test churn, enumerated — the complete list).** SC: `test_contract.py`
+  fixture → v3 envelope+section (strategy_id = the real router key); v1-rejection
+  test re-targeted v2; RETIRED `test_feature_set_names_not_union_raises` (the
+  FeatureSet validator moved); `test_feature_set_validator_independently` →
+  `test_section_partition_duplicates_rejected`; +8 new (missing-section, hook
+  positive carrier, section_model-without-hook fails, section unknown-key rejected
+  + hookless still loads, section missing-group rejected, unknown strategy_id at
+  the hook, partition cross-check, barrier_mode enum); `test_touch_reversal_plugin.py`
+  section fixture drops label_policy/inference + gains the partition; +1 round-trip
+  pin. **SC 154 → 162.** QL: `nodrift` — structural map drops the section-bound
+  leaves + gains plugin-sourced `label_policy.barrier_mode`; allowlist drops the 7
+  section-bound entries; coverage guard gains the `_PLUGIN_SECTION_FIELDS` source
+  (+ stale/pairwise-disjoint checks); section-bound reads → `contract["section"]`;
+  loader round-trips run the section hook and read `section_model`; +2 new
+  (section-sourcing honesty incl. the partition cross-check; emission fail-closed
+  on partition mismatch). `repoint` — section-bound reads repointed; round-trip
+  reads `section_model`. `acceptance_cli` — `bar_type` + research-scope reads →
+  the section subtree; fixture hand-migrated v3. **QL 740 → 742.** TL: fixture
+  hand-migrated v3 (values byte-preserved; `barrier_mode` added;
+  `forward_bar_type` stays "147t"); `test_strategy_contract` — the
+  all-sections parse test loads hook-on and reads `section_model`; unsupported
+  literal v1 → v2; the feature_set partition-mismatch loader negative →
+  the section-hook rejection; `test_feature_functions` — fixture loads hook-on,
+  section threaded through `LevelContext.from_contract`/`build_feature_vector`
+  (signature change: both now take the typed section);
+  `test_platform_version_binding` +4 new (invalid section at discovery AND
+  activation; partition cross-check mismatch at activation; metadata mismatch
+  rejected at activation; missing sidecar warns on the real activation path);
+  `test_inference_engine` +1 (typed section + real validation result on
+  ActiveModel). **TL 424 → 429.**
+- **D-E3-j (REAL-BUNDLE GATE, post-migration — verbatim in the window report).**
+  Discovery lists EXACTLY the 3 migrated bundles (the legacy/v1 bundles skip on
+  contract_version v1, the v2-era backup-shaped contract on v2); all 3 ACTIVATE
+  sequentially (= hot-swap) with typed `TouchReversalSection`s (bar_type 147t;
+  per-bundle partitions 2+3 / 3+3 / 3+2), real validation results, and the new
+  sidecar-absent warnings; an un-migrated v2 `.bak` copy (temp-dir probe) is
+  skipped at discovery and REJECTED at activation on
+  `unsupported contract_version 'trade_lab_contract_v2'`.
 
 ## Status table
 
@@ -915,7 +1055,7 @@ False); deployed-bundle migration in scope; `contract_id` stamping re-sourced.
 | D | D2 | Confirm TL holds no local candle/session/level recompute, then assert it via test | DONE (pushed at the D1b greenlight) | 2026-06-10 | TL `73aa7df` | TL suite 420 passed 0 skipped (443 collected − 24 deleted engine tests + 1 new guard); strengthened guard + seam green; src-wide grep zero engine names; ruff clean | CandleEngine/_MutableCandle/CandleUpdate + SessionLevelEngine/_SessionRange/_DaySummary/LevelUpdate/SESSION_LEVELS/LEVEL_ORIGIN deleted, DTO types kept; guard = src-wide reintroduction ban + SessionClassifier confinement + DTO-surface pin with documented carve-outs; sessions.py NOT deleted (seed.py debt); httpx2→dev rider. Deviations D-D2-a..c + named debts |
 | E | E1 | Introduce platform_version alongside ENGINE_VERSION, both stamped, loader fail-closes on either | DONE (pushed at the E greenlight) | 2026-06-10 | SC `8e5c017` + QL `baecf66` + TL `9b00eb5` | SC suite 154 (+2 negatives) + ruff + frozen b3 regressions 2 (fixtures untouched) + decision-fn gates 2 UNCHANGED; QL suite 740 + ruff; TL suite 424 + seam 4 + ruff | RATIFIED DEVIATION from the step wording: not "alongside" — a CLEAN RENAME (ENGINE_VERSION → PLATFORM_VERSION "strategy_core_platform_v1", no alias) + contract v2 shape break (engine_version→platform_version field, + required strategy_version); deployed store migrated in place w/ backups (3 v3 bundles; non-v3 deliberately not migratable — D-E-c). D-E-a..c,f |
 | E | E2 | Add per-plugin strategy_version/strategy_id, fail-closed via registry-lookup equality; turn strategy_id into a router | DONE (pushed at the E greenlight) | 2026-06-10 | same window/commits as E1 | TL suite 424 (incl. 5 new gate negatives, both-entry coverage); REAL-BUNDLE GATE: exactly 3 migrated bundles discoverable, all 3 activate incl. hot-swap via the serving-guard registry, un-migrated .bak copy rejected on contract_version | strategy_id = registry ROUTER KEY end-to-end: QL emission resolves get_strategy (unknown id refuses to EMIT), TL gates both registry entries (resolve / version-equality / servable-flag / serving-id guard); contract_id stamping re-sourced to the active bundle id (byte-compatible); supported_by_runtime meaningful (QL True, TL refuses False, QL acceptance flipped). D-E-b,d,e,g,h |
-| E | E3 | Decompose the flat StrategyContract into StrategyEnvelope + typed SectionModel; emit from the plugin | NOT STARTED |  |  |  |  |
+| E | E3 | Decompose the flat StrategyContract into StrategyEnvelope + typed SectionModel; emit from the plugin | DONE (LOCAL — full stop before push) | 2026-06-10 | SC `dc14652` + QL `523ff98` + TL `3d79bc4` | SC suite 162 (+8 contract-v3 negatives, +1 round-trip pin, −1 retired FeatureSet validator test) + frozen b3 digest regressions 2 (fixtures untouched) + decision-fn gates 2 UNCHANGED + ruff; QL suite 742 (740+2) + ruff; TL suite 429 (424+5) + seam-by-name 4 + ruff + frontend untouched; migration #2 on the real store (3 MIGRATED + 3 SKIP, idempotent re-run 6 SKIP); REAL-BUNDLE GATE: exactly 3 discoverable, all 3 activate incl. hot-swap w/ typed sections, v2 .bak copy rejected on contract_version | CONTRACT v3 (shape break #2): envelope = platform-consumed flat keys (+ label_policy.barrier_mode, + SessionScheme.closed_window); ONE "section" subtree typed by the plugin's SectionModel via the loader's opt-in validate_section_via_registry hook (non-field section_model carrier); partition + its validator moved to TouchReversalSection + the validate_feature_partition cross-check at the two validation sites; QL emits the section FROM a configured plugin SectionModel instance; TL validates the section at BOTH registry entries + threads ActiveModel.section to the two read paths; D-E-h ledger items (a)(b)(c)(iv) ALL CLOSED. Deviations D-E3-a..j. |
 | F | F1 | Extend the candle data shape with a BarSpec/kind and add CloseReason.INTERVAL, with TICK behavior unchanged | NOT STARTED |  |  |  |  |
 | F | F2 | Mirror the TIME close trigger into the vectorized batch path and pin it with a new parity test | NOT STARTED |  |  |  |  |
 | F | F3 | Validate archetype 2 (HTF-FVG/iFVG) end-to-end on the same interface as a NEW plugin, behind its own strategy_id | NOT STARTED |  |  |  |  |
@@ -925,6 +1065,47 @@ False); deployed-bundle migration in scope; `contract_id` stamping re-sourced.
 
 ## Change log (newest first)
 
+- **2026-06-10** — **E3 (contract v3 — envelope/section split + emission from the
+  plugin + the D-E-h ledger) landed as LOCAL commits across all THREE repos → E3
+  DONE locally — FULL STOP before push** (SC `dc14652` + QL `523ff98` + TL
+  `3d79bc4` on `platform-refactor`; diffs exported as `E3_SC_DIFF.txt` /
+  `E3_QL_DIFF.txt` / `E3_TL_DIFF.txt`). SC: `StrategyContract` becomes the
+  platform ENVELOPE + ONE raw `section` subtree; the five plugin-consumed groups
+  + the feature partition move into `TouchReversalSection` (partition validator
+  with them; new `validate_feature_partition` cross-check for the two validation
+  sites); loader gains the opt-in `validate_section_via_registry` hook with the
+  NON-FIELD `section_model` carrier (single-return shape preserved, hookless
+  access fails closed); `LabelPolicy.barrier_mode`
+  (`fixed_points|r_relative`, default fixed_points); contract `SessionScheme`
+  gains the optional `closed_window` pair — scheme adapters now round-trip
+  drop-nothing BOTH directions (CT scheme pinned); the section-default
+  `touch_rule.bar_type` "tick" → constant-sourced "147t" and the
+  `forward_bar_type` landmine died with `label_policy`'s move to the envelope;
+  `CONTRACT_VERSION` → v3 (shape break #2). QL: the emitter builds a configured
+  `TouchReversalSection` INSTANCE (plugin default + per-run overrides) and
+  `model_dump()`s it as the section subtree; `barrier_mode` sourced from the
+  plugin's `label_policy()` declaration; the partition cross-check runs AT
+  EMISSION; `scripts/migrate_contracts_v3.py` EXECUTED on the real store —
+  **3 MIGRATED + 3 SKIP (not migratable), idempotent re-run 6 SKIP**, backups
+  `strategy.json.pre_v3.bak`, the tracked bundle's migration committed. TL: BOTH
+  `model_registry` entries load with the section hook (discovery
+  skips-with-warning, activation raises); `ActiveModel` carries the TYPED
+  `section` + the REAL metadata cross-check result; the partition cross-check
+  runs at ACTIVATION; LEDGER (a) metadata cross-check FAIL-CLOSED at activation,
+  (b) absent checksum sidecar now WARNS, (c) `ModelStatus.validation_ok` is the
+  real result, (iv) closed SC-side; the two section read paths
+  (`inference_engine` direction map, `feature_functions` windows/bands) thread
+  `ActiveModel.section` (the duck-typed touch coupling recorded, D-E3-h).
+  REAL-BUNDLE GATE (post-migration): exactly the 3 migrated bundles
+  discoverable; all 3 activate incl. hot-swap with typed sections; an
+  un-migrated v2 `.bak` copy rejected on contract_version. Gates on the final
+  trees: SC **162** + ruff + frozen b3 digest regressions **2** (fixtures
+  untouched) + decision-fn gates **2** UNCHANGED; QL **742** (740+2) + ruff; TL
+  **429** (424+5) + seam-by-name **4** + ruff + frontend UNTOUCHED. Deviations
+  **D-E3-a..j**. PLAN unmodified. PIN NOTE: SC `dc14652` is CONSUMER-FACING for
+  BOTH consumers (the loader hook kwarg, the section model reshape, and the
+  v3 CONTRACT_VERSION are all consumer-imported) — both pins bump to the final
+  pushed SC sha AT GREENLIGHT as chore commits, per the standing pin convention.
 - **2026-06-10** — **E GREENLIGHT executed and PUSHED (all three repos)** after the
   6-lens adversarial verify (6/6 PASS high; journal `wf_a70536bc-ba9`) and owner review
   of the exported diffs. No reviewed commit amended; greenlight work = new commits:
