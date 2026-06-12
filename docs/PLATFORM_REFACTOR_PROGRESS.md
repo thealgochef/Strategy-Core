@@ -27,7 +27,7 @@ deviations.
 - **Active phase:** **Phase E COMPLETE and PUSHED (E1+E2 at the E greenlight; E3 at the E3 greenlight — see the dated bullets below); Phase D COMPLETE and PUSHED** (D1b greenlit 2026-06-10: SC pushed to `2cb27dc`, TL pin chore `5ede158` pushed; decision 9.6 pin convention honored). D-window record: **D1b (flip + delete)** (SC `945f381` + TL `94610ff`): the dashboard now SERVES the streaming honest resolver — resolutions adapt to served `Outcome`s (entry = the real trade print, NEW `entry_price` field; TL-side correctness; SC ZERO-BASED `bars_to_resolution`; `resolved_ts` from the new SC `StreamResolution.resolved_ts_utc`), drops surface explicitly (`prediction.dropped` WS frame + snapshot `dropped` ring + `RuntimeUpdate.dropped` + IntelligencePanel badge w/ reason, NO chart marker), and the legacy `OutcomeTracker` + its 16 tests + the gate-B characterization harness are DELETED; `ResolutionType.SESSION_END`/`NO_RESOLUTION` REMOVED (grep-proven zero refs). Gates: TL suite **419** (= 420 − 16 tracker + 13 adapter + 1 dropped-frame + 1 swallow pin); seam-by-name **4** (acceptance 3 incl. the D2 guard + replay 1); TL ruff clean; frontend typecheck + vitest **142** + build green; SC suite **152** + ruff + frozen b3 regressions **2** (fixtures untouched). 6-agent adversarial verify on the exact commits: **5 PASS (high) + 1 finding REPAIRED in-window** (the `_track_outcomes` per-item swallow guard). Prior D-window state (D1a DARK SC `c7564fd` + TL `c7f2a84`; D2 TL `73aa7df`) unchanged beneath. Decision 9.6 unchanged (pin DECLARED c615e40; enforcement DEFERRED; QL cold-install debt open).
 - **E-WINDOW (E1+E2) DONE and PUSHED at the E greenlight 2026-06-10** (SC `8e5c017` + QL `baecf66` + TL `9b00eb5` on `platform-refactor`, followed by the greenlight chore commits QL `e10d226` + TL `ef8a189` — pin bumps to SC `8e5c017` + CI branch filters — and the SC greenlight doc commit): two-axis versioning live end-to-end. `ENGINE_VERSION` → `PLATFORM_VERSION` (`"strategy_core_platform_v1"`, clean rename, no alias); `CONTRACT_VERSION` → `"trade_lab_contract_v2"` (shape break); contract field `engine_version` → `platform_version` + NEW required `strategy_version`; `strategy_id` re-pointed to the REGISTRY ROUTER KEY. QL emits via `get_strategy` (unknown id fail-closes EMISSION), flips `supported_by_runtime=True` (full contract), and MIGRATED the deployed store in place (3 v3 bundles → v2 w/ backups; the 3 legacy/v1/v2-engine bundles deliberately NOT migrated — see D-E-c); TL gates BOTH registry entries on the platform hook + the 4-check strategy gate (resolve / version-equality / servable-flag / serving-id guard), and `Prediction.contract_id` re-sources to the active bundle id (values byte-compatible). QL CI rider pays the 9.6 debt (cold-install workflow authored; **ENFORCED pending its first green run post-push**); QL tooling aligned py313. REAL-BUNDLE GATE: exactly the 3 migrated bundles discoverable; all 3 activate incl. hot-swap; un-migrated .bak copy rejected on contract_version. Gates: SC **154** + ruff + b3 regressions **2** (fixtures untouched) + decision-fn **2** UNCHANGED; QL **740** (739+1) + ruff (src/tests clean; 13 pre-existing scratch findings stand); TL **424** (419+5) + seam-by-name **4** + ruff + frontend untouched.
 - **E3 DONE and PUSHED at the E3 greenlight 2026-06-10** — SC `dc14652` (code) + `06be823` (record) + QL `523ff98` + TL `3d79bc4` on `platform-refactor`, followed by the greenlight chore commits QL `77c5870` + TL `e855aa3` (both pins → SC `dc14652`) and this SC greenlight doc commit. Contract v3 envelope/section split per the ratified consumer classification; loader section hook; QL emits the section from the plugin's SectionModel + migration #2 executed on the real store (3 MIGRATED + 3 SKIP); TL validates the section at both registry entries, threads the typed section to its two section reads, and closes ALL FOUR D-E-h ledger items. 7-lens adversarial verify 7/7 PASS (high; journal `wf_a678b991-e95`), zero in-window repairs. See the E3 deviations (D-E3-a..j) and the status row.
-- **Next step:** cold wiring audit (read-only), then S9.9 / F1 per the owner's call.
+- **Current:** W2 (OPERATE) next — see POST-E3 section. S9.9/F parked.
 - **Drift-net status:** **S-B3a DONE (fold-collapse + dedup-into-plugin), byte-identical.** The runtime's `level_state`, `_zones_for_snapshot`, `_touched_zone_keys`/`_zone_key`/`_touch_zone_key_from_touch` are DELETED; `RuntimeUpdate.levels` ← `plugin.on_event` return, snapshot/update `zones` ← `plugin.snapshot_zones`, snapshot `levels` ← `plugin.current_levels`, dedup = plugin-owned `_fired_keys`, touches flow back VERBATIM. Proven against the **FROZEN, UNTOUCHED** B3 digests: `test_b3_golive_plugin_regression` + `test_b3_multiday_reset_plugin_regression` **2 passed** (3,284,775 trades, 8 reset boundaries — every per-trade `to_dict()` + snapshot byte-identical). Full SC suite **144**; TL acceptance+replay **3**; decision-fn gates **2** (UNCHANGED); ruff clean. 5-agent adversarial verify: **5 PASS (all high confidence)**. Verified 2026-06-09 on the final tree.
 - **Last-verified date:** 2026-06-10
 - **Note (release, decision 9.6) — AMENDED 2026-06-10 (E3 greenlight):** BOTH consumers pin SC at `dc14652` (the E3 code commit; the E3 doc commits do not move pins). Pin history: TL `cbf9b99 → c615e40` (`0e1c7ce`, C-window) `→ c7564fd` (`4bb9290`, D-window) `→ 945f381` (`5ede158`, D1b greenlight) `→ 8e5c017` (`ef8a189`, E greenlight) `→ dc14652` (`e855aa3`, E3 greenlight); QL `c615e40` (`9b8e798`, declared) `→ 8e5c017` (`e10d226`, E greenlight) `→ dc14652` (`77c5870`, E3 greenlight). PIN CONVENTION unchanged: the pin tracks the latest SC commit with CONSUMER-FACING content; doc-only SC commits do not move it. **STATUS: 9.6 ENFORCED — witnessed 2026-06-10**: QL `ci` run #1 GREEN in 1m27s (cold install 52s resolving the pin anonymously + ruff + 740 tests on a fresh runner) and TL `backend-ci` run #2 GREEN in 51s (cold install 36s + 424 tests). The former NAMED DEBT (QL cold-install resolution check) is CLOSED.
@@ -252,7 +252,7 @@ absent or fewer than 7 days resolve.
   `validation/test_decision_diff.py`: **2 passed** flag-ON.
 - ruff clean: `ruff check src tests` → All checks passed (the project's lint scope); the
   new test file also passes `ruff check` on its own. (Pre-existing un-linted `validation/`
-  harness files are unchanged.)
+  harness files are unchanged.) [scope note 2026-06-13: clean under `ruff check src tests`; repo-root config-faithful run shows 47 errors confined to validation/ (audit F32); resolution rides W2's CI work.]
 
 **Scope guard:** the only working-tree change is the ADDED file
 `validation/test_b3_multiday_reset_parity.py`. No tracked source edited; `state.py`'s
@@ -526,7 +526,7 @@ present and loaded legacy no-field contracts "unbound" with a warning.
   relaxed `requires-python`, and QL's `.python-version` file still says `3.14.5`. AMENDED
   2026-06-09: the pin is DECLARED, not ENFORCED — nothing currently exercises it; NAMED DEBT:
   QL cold-install resolution check (the analog of TL's cold-install CI) — required to make
-  9.6 enforced rather than declared.
+  9.6 enforced rather than declared. [stale claim — superseded by E-window CI work]
 - **Surfaced by the adversarial verify (recorded, deliberately NOT touched):** (i)
   `test_inference_engine.py:451` bare-loads a real bundle's strategy.json — safe ONLY because
   the same test activates that bundle through the gated registry first; if the activation step
@@ -559,7 +559,7 @@ batch 0-based; gate A compares raw, gate B normalizes the tracker's 1-based coun
   predictions register at observation expiry (= touch + the same 5-minute window); the gate-A
   harness registers a pending touch on the first trade at/after its decision instant, with
   post-loop registration for decisions landing in the 17:00–18:00 print-less halt (those drop
-  flatten/cutoff identically to batch — no entry query reached).
+  flatten/cutoff identically to batch — no entry query reached). [CORRECTION 2026-06-13: overstated — equality of contract offset and config window was enforced by a log warning only (audit F13); the W1 refusal gate now refuses the mismatch.]
 - **D-D1a-c (bar-inclusion rule — gate-A arbitrated).** Every closed bar of the forward
   timeframe the caller feeds is a candidate — INCLUDING END_OF_DAY partials — exactly as the
   batch path consumes its `day_bars` list; membership is decided ONLY by the strict
@@ -586,7 +586,7 @@ batch 0-based; gate A compares raw, gate B normalizes the tracker's 1-based coun
   on `tick_timeframes=(2,)` — exactly the silent-never-resolve hole the new fail-loud
   activation validation closes, so they now fail loud by design. Helpers changed to
   `(2, 147)`; the 2t decision bar still drives their touch flow (decision timeframe pins to
-  `min()`); ZERO assertion changes.
+  `min()`); ZERO assertion changes. [CORRECTION 2026-06-13: overstated — the failure 500s after the registry swap; torn state, not a rejection (audit F12); atomic activation scheduled in W2.]
 - **D-D1a-g (gate-A reference).** The batch `trade_price_at` reference is implemented over the
   SAME front-month print set `_read_trades` feeds the runtime (most recent `ts <= as_of`
   within 30 min, binary-searched) — isolating the mechanism comparison (incremental ring vs
@@ -967,7 +967,7 @@ fields were consumed before; the E2 serving guard (check iv) stays.
   unconsumed by the plugin); (2) newly-emitted session blocks carry
   `crosses_midnight` ALWAYS (model_dump), while pre-E3 emission omitted it when
   False and MIGRATED bundles keep their old block shape verbatim — all three forms
-  are SectionModel-identical after validation.
+  are SectionModel-identical after validation. [OVERTURNED 2026-06-13 by cold audit: §3 was violated on both halves — map in platform constants, emitter re-deriving and discarding the plugin value. Original text preserved above per supersession rules. REPAIRED in W1 P2c/P4c: constant removed, plugin owns the lowercase wire vocabulary, emitter ships it verbatim.]
 - **D-E3-f (migration #2).** `scripts/migrate_contracts_v3.py`, same proven
   pattern, with D-E-c's narrowing applied UP FRONT: ONLY
   `contract_version == "trade_lab_contract_v2"` bundles migrate; the store's
@@ -991,7 +991,7 @@ fields were consumed before; the E2 serving guard (check iv) stays.
   interpretation ("fixed_points"|"r_relative", enum-constrained, default
   fixed_points; sourced from the plugin's declaration at emission) — the
   PROTOCOL-level gap (the `Barrier` Protocol cannot reach `trap_mfe_min`) is NOT
-  in E3 scope and stays a named debt.
+  in E3 scope and stays a named debt. [CORRECTION 2026-06-13: the field bound nothing — no consumer read it (audit F20); the W1 gate refuses non-fixed_points until a real consumer exists.]
 - **D-E3-h (KNOWN TL COUPLING — recorded, deliberately accepted).** Generic TL
   code duck-types touch-section attributes: `model_registry` imports the touch
   section's `validate_feature_partition`; `inference_engine._direction_from_section`
@@ -1236,7 +1236,7 @@ bump majors when available, non-urgent.
   firing order; strict-window per-bar excursions; cutoff → no_forward/no_resolution drops),
   runtime trade ring + `trade_price_at` (price>0 ≙ the reference's row-validity; 30-min
   query bound; ctx stub backed; quotes_in_window stays a §9.10 stub), fail-loud
-  forward-timeframe activation validation; TL runs the resolver DARK alongside the tracker
+  forward-timeframe activation validation [CORRECTION 2026-06-13: overstated — the failure 500s after the registry swap; torn state, not a rejection (audit F12); atomic activation scheduled in W2.]; TL runs the resolver DARK alongside the tracker
   (touch-anchored registration off the observation chain, same closed-bars hook, parallel
   500-cap dark ring, zero WS/DTO/frontend change; offset-mismatch warning once at
   activation). **GATE A: EXACT streaming==batch per-touch parity** over the 9 real store
@@ -1261,7 +1261,7 @@ bump majors when available, non-urgent.
 - **2026-06-09** — **POST-C AMENDMENT (doc-only):** (1) **9.6 re-statused: pin DECLARED
   (c615e40), enforcement DEFERRED** — dev resolves SC via the editable install; nothing
   currently exercises the pin; NAMED DEBT added: **QL cold-install resolution check** (the
-  analog of TL's cold-install CI), required to make 9.6 enforced rather than declared. The
+  analog of TL's cold-install CI), required to make 9.6 enforced rather than declared. [stale claim — superseded by E-window CI work] The
   C-window record's "9.6 IMPLEMENTED" headlines are amended accordingly (Current state, the
   9.6 decision line, D-9.6a, the C-window entry below). (2) **Before-state CORRECTION
   (D-C1f), probe-verified:** through a temporary TL worktree at `be90af3` running the pre-C1
@@ -1423,3 +1423,40 @@ bump majors when available, non-urgent.
   test_honest_entry, test_candle_parity, test_contract) + the A3 equivalence test all green;
   full SC suite 140 passed; ruff clean; unwired-invariant verified (`import strategy_core`
   leaves the registry empty). No protected file modified (state.py:271-280 untouched).
+
+---
+
+## POST-E3: COLD AUDIT, CONVERGENCE RULINGS, AND THE W-PLAN (2026-06-10 → 2026-06-13)
+
+### Audit record
+Three independent docs-blind audits ran against SC/TL/QL @ platform-refactor tips (SC 0c1cc62 · TL e855aa3 · QL 77c5870): GPT-5.5 v1, GPT-5.5 v2, and a CC/Fable multi-agent audit (journals wf_207898e6-873, wf_39fa019c-fa5, wf_64f69c57-296; 50 adversarial verdicts — 39 confirmed, 11 adjusted, 0 refuted). Full report with 243-finding annex: COLD_WIRING_AUDIT_REPORT.md (job-tmp original is volatile; owner holds a safe copy). A targeted verification (Q1–Q4) followed with per-feature and per-mechanism verdicts.
+
+Headline: three serving-path BLOCKERs invisible to every existing gate (all proofs stop at the SC engine boundary): F1 dwell features served from quote mids vs trade-print training; F2 PDH/PDL structurally unreachable live; F3 200k buffer cap evicts feature windows during NY RTH. Load-bearing DEFECTs include F5 (replay day = UTC file slice, 147t grid phase shift — root cause of the e2e touch/entry deltas, confirmed by Q2), F6/F7 (research-side: bar-close session attribution leaks prints into level values; zones built once from final levels = lookahead serving cannot replicate), F9/F18 (entry tie-break + float ns decode), F10 (resolver flush() has zero callers), F17 (day-context-free 16:40 compare embargoes the evening half of every trading day from the label universe), F22/F27 (8-vs-3 feature vocabulary ungated; acceptance cannot run — no bundle has oos_predictions.parquet because the writer is conditional on a non-empty frame). Q3 verdict: the live drift net (b3 digests, duckdb-streaming parity, decision-diff, d1 streaming-vs-batch) is GREEN at HEAD; red harnesses are rot reaching for never-committed symbols, scheduled for deletion per D-P-02. The doc never claimed research↔serving parity — the BLOCKERs lived in the gap the record did not cover. This section closes that gap.
+
+### Ratified rulings (owner; FINAL unless superseded by labeled block)
+- D-P-01 — Tracer-dye policy: zero effort rehabilitating pre-convergence models; not retrained, not performance-chased, not test baselines. Acceptance runs on a FRESH model trained through the converged pipeline.
+- D-P-02 — Legacy QL artifacts are untrusted and not tested against. Disposition is deletion, not repair: parity_harness.py / parity_harness_v2.py, phase8_1 golden + captures, audit_lookahead.py (W2 cargo); the legacy reader/level/zone stages left the production path in W1 (moved to ml/legacy_decision.py, parity-tests-only); the QL dashboard stack remains a superseded POC, removal deferred.
+- D-P-03 — Data-availability parity (L1-consumption invariant): live is MBP-1; research and replay consume ONLY the L1 projection (trades + TOB-change-deduped quotes) of the mbp-10 parquets, through one canonical SC reader. Parquets remain the sole research/replay source (including >1-year regimes); the Databento historical API exists solely for the live warm-start slice. The two routes are shape-checked against each other once (route-seam check, W2).
+- D-P-04 — Flatten policy: flat by NY futures close, daily; FLATTEN_TIME = 16:40 ET (= 15:40 CT), anchored to the decision's OWN trading day. The prior day-context-free compare was the defect (F17), not the time. The 15:55 executor literal is deprecated with its legacy stack.
+- D-P-05 — F6/F7 research-causality fixes ride the convergence; the resulting change to future training data is accepted.
+- D-P-06 — Live warm-start: at startup and on reconnect, the engine is fed the trading day's events from 18:00 ET (Databento live replay-start or historical API) before going real-time; the Chicago display seed is retired. (W2)
+- D-P-07 — Prediction journaling: append-only record of predictions/outcomes/drops so serving evidence survives restarts (soak prerequisite). (W2)
+- D-P-08 — Repo visibility: private flip deferred indefinitely; whenever chosen, an authenticated token mechanism lands and proves green in CI BEFORE the flip.
+- D-P-09 — platform-refactor is never squash-merged (pinned-SHA orphan risk).
+- D-P-10 — Roadmap: S9.9 and Phase F are PARKED behind the W-plan below. The interim "P-window" framing is superseded.
+
+### The W-plan
+- W1 — ONE SURFACE: COMPLETE (record below).
+- W2 — OPERATE: warm-start + reconnect recovery; flush() wired at replay-end/live-stop/hot-swap; atomic activation preserving loop-atomicity; typed frontend reset; named-feature failure visibility; journaling; sidecar writer; unconditional OOS writer (+ root-cause of historically empty frames); acceptance via the registry section hook; SC CI with validation tests in the suite; TL live-adapter integer-ns decode; D-P-02 deletions (parity_harness*, phase8_1 golden + captures incl. engine.json, audit_lookahead); verify organic PDH banking's weekend-gap lookup (Friday→Monday) in the level-state emission.
+- W3 — PROVE: batch-vs-stream parity gate on canonical input, hard-green with fault-injection sensitivity tests (gate expectations must include the preserved research `<5-interaction-print` drop rule — a known, deliberate serving asymmetry); fresh train → emit → discover → activate → replay acceptance; then live with journaling and a ≥7-trading-day soak before any number is trusted. Quote-pass vectorization in stream labeling precedes any multi-day training run. Doc/decision reconciliation residue (incl. whether test_decision_repoint_parity retires) rides this greenlight.
+Discipline: strictly serial with full hunk review between windows; tests only for created/changed code during a window, one full suite+lint pass per repo at window close; review-tier conventions unchanged.
+
+### W1 record (2026-06-12, greenlit after full three-repo hunk review)
+Scope landed: SC canonical ingestion (day-mode for_trading_day [prev 18:00 ET, day 18:00 ET) with UTC-midnight file partition, post-merge TOB L1 dedup, count-based front month with larger-id tie-break, bytes-tolerant decode, row-group pruning); F17 day-anchored flatten (batch + streaming, evening setups label/serve against their own day); PDH/PDL organic banking at the day roll (explicit seed wins); DIRECTION_FROM_SIDE repaired per §3 (platform constant removed; typed engine default in decisions/touch.py; plugin owns the lowercase wire vocabulary; QL emitter ships it verbatim). TL: adapter = thin shim over the SC source (−1,403 lines; no-dedup quote path and float-ns decode deleted; date-directory replay sources play the canonical trading day); contract-driven retention (approach+interaction+10 — corrected from the spec's max()) with 6M safety ceiling and time-governed eviction; the six features call SC formulas over trade prints with the exact zone representative price threaded touch→observation→inference; serving_compatibility_error — one fail-closed 8-check activation gate, a negative test per check; chimera fixture made producible (v3 scheme, prior_day_full). QL: production labeling = batch drive of the SC runtime over the canonical stream (process_single_date_stream; half-open [start,end) feature windows matching serving; wire-last 30-min-bounded entry; <5-print research drop preserved; deduped quotes feed app_max_spread); legacy stages → ml/legacy_decision.py (parity-tests-only, verified by a sys.modules call-graph assertion); dataset_config_hash folds decision_pipeline=sc_runtime_stream_v1 (pre-W1 caches invalidate); use_engine=False raises.
+Commits: SC 2beb022..256020c (6) · TL e855aa3..0ffc9ff (5, landed ff-only from worktree-w1-migration) · QL 4 + lint. Suites at close: SC 177 / TL 381 / QL 744, ruff clean (configured scope). TL 429→381 reconciled exactly: 83 removed (41 deleted TL-local normalization pins + 41 star-import duplicates via tests/test_historical_parquet.py + 1 rename) vs 35 added; every removed pin maps to deleted machinery now covered by SC's 15 parquet-source tests or the new shim/gate/retention tests.
+Review verdict: approved, zero code fixes. Accepted deviations: retention formula (CC's correction of the spec); legacy moved-not-deleted (book-mid parity proof still drives it; W3 decides retirement). Unflagged behavior fix recorded: the old TL adapter mapped Databento side 'A' (sell aggressor) to UNKNOWN; the shim maps it correctly. Pins: TL+QL Strategy-Core pin dc14652 → 256020c (W1 greenlight chore commits). Operator note: pre-W1 bundles with 120-min approach windows are refused by the gate under the default 45-min retention ceiling — correct behavior; they are tracer dye under D-P-01 and the fresh W3 bundle declares its own windows.
+
+### Status
+Phases A–E3: COMPLETE. W1: COMPLETE (pushed; pins bumped; CI witnessed). Current: W2 next. S9.9, F1–F3: PARKED behind W3 green + soak. Live model outputs remain DECORATIVE until W3's gate is green on the fresh bundle.
+
+---
