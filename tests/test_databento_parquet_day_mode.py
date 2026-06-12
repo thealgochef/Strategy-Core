@@ -125,6 +125,20 @@ def test_merge_tie_break_is_side_signed_deterministic(tmp_path: Path) -> None:
     assert prices == [17000.75, 17000.25, 17000.25, 17000.75]
 
 
+def test_bytes_action_and_side_cells_are_decoded(tmp_path: Path) -> None:
+    """Mixed-type parquet columns surface as bytes; action/side/symbol decode must
+    tolerate them (the TL catalog fixtures and some real dumps carry them)."""
+    path = _write(tmp_path / "mbp10.parquet", [
+        {"ts_event": datetime(2026, 1, 6, 14, tzinfo=UTC), "action": b"T", "price": 17000.0, "size": 1, "side": b"B", "bid_px_00": None, "ask_px_00": None, "sequence": 1},
+        {"ts_event": datetime(2026, 1, 6, 14, 1, tzinfo=UTC), "action": b"A", "price": 17000.25, "size": 1, "side": b"B", "bid_px_00": 17000.0, "ask_px_00": 17000.5, "sequence": 2},
+    ])
+    events = list(DatabentoParquetSource(paths=(path,), requested_symbol="NQ", schema="mbp-10").events())
+    trades = _trades(events)
+    assert len(trades) == 1
+    assert trades[0].side == "B"
+    assert len(_quotes(events)) == 1
+
+
 def test_naive_timestamp_rejected_with_warning(tmp_path: Path) -> None:
     path = _write(tmp_path / "trades.parquet", [
         {"ts_event": datetime(2026, 1, 6, 14), "price": 17000.0, "size": 1, "side": "B", "sequence": 1},

@@ -345,7 +345,8 @@ class DatabentoParquetSource:
         size = row.get("size")
         if not isinstance(size, int) or isinstance(size, bool) or size <= 0:
             return self._warning(DataQualityCode.INVALID_RECORD, "invalid historical parquet record", source, event_ts_utc=ts)
-        side = None if row.get("side") is None else str(row.get("side")).upper()
+        side_text = self._as_text(row.get("side"))
+        side = None if side_text is None else side_text.upper()
         trade = Trade(event_ts_utc=ts, price_ticks=price_ticks, size=size, side=side)
         sequence = self._optional_int(row.get("sequence")) or self._optional_int(row.get("seq")) or 0
         key = (ts, sequence, side_signed_price_ticks(trade, buy_side=BUY_AGGRESSOR_SIDE), size)
@@ -407,12 +408,24 @@ class DatabentoParquetSource:
         return self._optional_int(row.get("instrument_id")) != front_month_id
 
     @staticmethod
+    def _as_text(value: Any) -> str | None:
+        """Decode parquet string-ish cells; mixed columns surface as bytes."""
+
+        if value is None:
+            return None
+        if isinstance(value, bytes):
+            return value.decode("utf-8", errors="replace")
+        return str(value)
+
+    @staticmethod
     def _is_spread_symbol(value: Any) -> bool:
-        return isinstance(value, str) and "-" in value
+        text = DatabentoParquetSource._as_text(value)
+        return text is not None and "-" in text
 
     @staticmethod
     def _is_trade_action(value: Any) -> bool:
-        return str(value).upper() in {"T", "TRADE"}
+        text = DatabentoParquetSource._as_text(value)
+        return text is not None and text.upper() in {"T", "TRADE"}
 
     @staticmethod
     def _has_top_of_book(row: dict[str, Any]) -> bool:
