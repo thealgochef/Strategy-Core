@@ -302,11 +302,22 @@ class DatabentoParquetSource:
         # of aborting the k-way merge. Per-row warn/skip behavior is unchanged: row
         # warnings are still yielded inline below; only decode failures land here.
         try:
-            front_month_id = self._front_month_instrument_id(parquet, selected) if self.front_month_only else None
             window_start, window_end = window
             start = window_start.astimezone(UTC) if window_start is not None else None
             end = window_end.astimezone(UTC) if window_end is not None else None
-            for batch in parquet.iter_batches(columns=selected, batch_size=self.batch_size):
+            # W1 P1: prune row groups by ts_event statistics so a narrow window
+            # (e.g. the prior-day hour of a trading-day composition) never decodes
+            # the whole file. Conservative: groups without usable stats are kept;
+            # the exact per-row window filter below is unchanged.
+            row_groups = self._window_row_groups(parquet, start, end)
+            front_month_id = (
+                self._front_month_instrument_id(parquet, selected, row_groups)
+                if self.front_month_only
+                else None
+            )
+            for batch in parquet.iter_batches(
+                columns=selected, batch_size=self.batch_size, row_groups=row_groups
+            ):
                 events: list[tuple[SortKey, Trade | Quote]] = []
                 for row in batch.to_pylist():
                     if self.front_month_only and self._is_off_front_month(row, front_month_id):
@@ -373,32 +384,105 @@ class DatabentoParquetSource:
         sequence = self._optional_int(row.get("sequence")) or self._optional_int(row.get("seq")) or 0
         return (ts, sequence, 0, 0), quote
 
-    def _front_month_instrument_id(self, parquet: Any, selected: list[str]) -> int | None:
+    @staticmethod
+    def _window_row_groups(
+        parquet: Any, start: datetime | None, end: datetime | None
+    ) -> list[int] | None:
+        """Row groups whose ts_event range can intersect [start, end); None = all.
+
+        Conservative by construction: any group whose statistics are absent or
+        unreadable is kept. Returning ``None`` keeps the default full scan.
+        """
+
+        if start is None and end is None:
+            return None
+        try:
+            ts_index = parquet.schema_arrow.names.index("ts_event")
+        except ValueError:
+            return None
+        metadata = parquet.metadata
+        groups: list[int] = []
+        for group_index in range(metadata.num_row_groups):
+            try:
+                stats = metadata.row_group(group_index).column(ts_index).statistics
+            except Exception:
+                groups.append(group_index)
+                continue
+            if stats is None or not stats.has_min_max:
+                groups.append(group_index)
+                continue
+            group_min, group_max = stats.min, stats.max
+            if not isinstance(group_min, datetime) or not isinstance(group_max, datetime):
+                groups.append(group_index)
+                continue
+            if group_min.tzinfo is None or group_max.tzinfo is None:
+                groups.append(group_index)
+                continue
+            if start is not None and group_max < start:
+                continue
+            if end is not None and group_min >= end:
+                continue
+            groups.append(group_index)
+        return groups
+
+    def _front_month_instrument_id(
+        self, parquet: Any, selected: list[str], row_groups: list[int] | None
+    ) -> int | None:
         """Dominant non-spread instrument by TRADE-row count (ties -> larger id).
 
         Matches the Trade-Lab/Quant-Lab front-month rule: spread symbols (containing
         ``-``) are excluded, only trade rows are counted (every row counts for
         schemas without an ``action`` column), and ties break toward the larger
-        instrument id.
+        instrument id. Vectorized (pyarrow compute) and restricted to the scanned
+        row groups so the prescan never decodes more than the window does.
         """
 
         if "instrument_id" not in selected:
             return None
-        has_action = "action" in selected
-        counts: dict[int, int] = {}
-        for batch in parquet.iter_batches(columns=selected, batch_size=self.batch_size):
-            for row in batch.to_pylist():
-                if has_action and not self._is_trade_action(row.get("action")):
-                    continue
-                if self._is_spread_symbol(row.get("raw_symbol") or row.get("symbol")):
-                    continue
-                instrument_id = self._optional_int(row.get("instrument_id"))
-                if instrument_id is None:
-                    continue
-                counts[instrument_id] = counts.get(instrument_id, 0) + 1
-        if not counts:
+        import pyarrow as pa
+        import pyarrow.compute as pc
+
+        columns = [
+            name
+            for name in ("action", "instrument_id", "raw_symbol", "symbol")
+            if name in selected
+        ]
+        if row_groups is None:
+            table = parquet.read(columns=columns)
+        elif not row_groups:
             return None
-        return max(counts.items(), key=lambda item: (item[1], item[0]))[0]
+        else:
+            table = parquet.read_row_groups(row_groups, columns=columns)
+        if table.num_rows == 0:
+            return None
+        mask = None
+        if "action" in columns:
+            action = pc.utf8_lower(pc.cast(table["action"], pa.string()))
+            mask = pc.is_in(action, value_set=pa.array(["t", "trade"]))
+        for symbol_column in ("raw_symbol", "symbol"):
+            if symbol_column in columns:
+                not_spread = pc.invert(
+                    pc.match_substring(pc.cast(table[symbol_column], pa.string()), "-")
+                )
+                not_spread = pc.fill_null(not_spread, True)
+                mask = not_spread if mask is None else pc.and_kleene(mask, not_spread)
+        instruments = table["instrument_id"]
+        if mask is not None:
+            instruments = instruments.filter(pc.fill_null(mask, False))
+        instruments = instruments.drop_null().combine_chunks()
+        if len(instruments) == 0:
+            return None
+        value_counts = pc.value_counts(instruments)
+        ranked = [
+            (count.as_py(), value.as_py())
+            for value, count in zip(
+                value_counts.field("values"), value_counts.field("counts"), strict=True
+            )
+            if value.as_py() is not None
+        ]
+        if not ranked:
+            return None
+        return max(ranked)[1]
 
     def _is_off_front_month(self, row: dict[str, Any], front_month_id: int | None) -> bool:
         if self._is_spread_symbol(row.get("raw_symbol") or row.get("symbol")):
