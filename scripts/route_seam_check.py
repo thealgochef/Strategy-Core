@@ -33,7 +33,7 @@ from strategy_core.data.databento_parquet import DatabentoParquetSource
 from strategy_core.types import Quote, Trade
 
 _DEFAULT_DAY = "2026-02-18"
-_DEFAULT_SYMBOL_DIR = Path(r"C:/Users/gonza/Documents/Trade-Dashboard/data/databento/NQ")
+_DEFAULT_SYMBOL_DIR = Path(r"C:/Users/gonza/Documents/Claude-Quant-Lab/data/databento/NQ")
 _DEFAULT_OUT = Path("route_seam_report.json")
 _DATASET = "GLBX.MDP3"
 _REQUESTED_SYMBOL = "NQ.c.0"
