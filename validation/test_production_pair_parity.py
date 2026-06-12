@@ -41,9 +41,9 @@ TICK_SIZE = 0.25
 BUY_SIDE = "B"  # VERIFIED: databento side='B' = buy aggressor (see constants.BUY_AGGRESSOR_SIDE)
 SAMPLE_DAYS = ["2025-07-15", "2025-07-07", "2025-07-11"]
 
-from strategy_core.candles.streaming import CandleEngine
-from strategy_core.constants import BUY_AGGRESSOR_SIDE, RESEARCH_SESSION_SCHEME
-from strategy_core.types import Trade
+from strategy_core.candles.streaming import CandleEngine  # noqa: E402 (imports follow the sys.path bootstrap)
+from strategy_core.constants import BUY_AGGRESSOR_SIDE, RESEARCH_SESSION_SCHEME  # noqa: E402 (imports follow the sys.path bootstrap)
+from strategy_core.types import Trade  # noqa: E402 (imports follow the sys.path bootstrap)
 
 # order/membership-sensitive fields; excludes open_ts/close_ts (the us-vs-ns ts seam).
 CORE = ("trading_day", "bar_index", "open_t", "high_t", "low_t", "close_t",
@@ -231,7 +231,8 @@ if __name__ == "__main__":
     all_ok = True
     for day in SAMPLE_DAYS:
         if not _available(day):
-            print(f"  {day}: NO DATA"); continue
+            print(f"  {day}: NO DATA")
+            continue
         r = run_day(day)
         ok = (r["before_4d_diff"] >= 4 * max(r["gate_diff"], 1)
               and r["gate_ohlc_diff"] <= max(8, r["bars"] // 100)

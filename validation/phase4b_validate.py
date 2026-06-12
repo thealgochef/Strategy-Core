@@ -12,8 +12,10 @@ Checks:
 """
 from __future__ import annotations
 
-import sys, time, warnings
-from datetime import date, datetime, time as dtime, timedelta
+import sys
+import time
+import warnings
+from datetime import date, timedelta
 from pathlib import Path
 
 CQL_SRC = r"C:/Users/gonza/Documents/Claude-Quant-Lab/src"
@@ -22,18 +24,18 @@ DATA_DIR = Path(r"C:/Users/gonza/Documents/Trade-Dashboard/data/databento")
 SYMBOL = "NQ"
 CANON_TICK = 0.125  # book-mid lands on the 0.125 grid -> lossless integer ticks
 
-import numpy as np
-import pandas as pd
+import numpy as np  # noqa: E402 (imports follow the sys.path bootstrap)
+import pandas as pd  # noqa: E402 (imports follow the sys.path bootstrap)
 
-import strategy_core as sc
-from strategy_core.candles._ids import make_bar_id
-from strategy_core.candles.batch import build_tick_bars_from_frame
-from strategy_core.types import Bar, CloseReason, Direction, Level, Side
-from strategy_core.constants import RESEARCH_SESSION_SCHEME
+import strategy_core as sc  # noqa: E402 (imports follow the sys.path bootstrap)
+from strategy_core.candles._ids import make_bar_id  # noqa: E402 (imports follow the sys.path bootstrap)
+from strategy_core.candles.batch import build_tick_bars_from_frame  # noqa: E402 (imports follow the sys.path bootstrap)
+from strategy_core.types import Bar, CloseReason, Level, Side  # noqa: E402 (imports follow the sys.path bootstrap)
+from strategy_core.constants import RESEARCH_SESSION_SCHEME  # noqa: E402 (imports follow the sys.path bootstrap)
 
-from alpha_lab.agents.data_infra.ml.config import MLPipelineConfig
-from alpha_lab.agents.data_infra.ml import dashboard_utility_builder as B
-from alpha_lab.agents.data_infra.ml import dashboard_utility_labeling as L
+from alpha_lab.agents.data_infra.ml.config import MLPipelineConfig  # noqa: E402 (imports follow the sys.path bootstrap)
+from alpha_lab.agents.data_infra.ml import dashboard_utility_builder as B  # noqa: E402 (imports follow the sys.path bootstrap)
+from alpha_lab.agents.data_infra.ml import dashboard_utility_labeling as L  # noqa: E402 (imports follow the sys.path bootstrap)
 
 CFG = MLPipelineConfig(
     training_mode="dashboard_utility", instrument=SYMBOL, tick_size=0.25,
@@ -138,7 +140,8 @@ def legacy_build(frame: pd.DataFrame, timeframe: int, scheme=RESEARCH_SESSION_SC
                     high_ticks=("price_ticks", "max"), low_ticks=("price_ticks", "min"),
                     volume=("size", "sum"), trade_count=("price_ticks", "size")).reset_index())
         for row in agg.itertuples(index=False):
-            td = row.trading_day.date(); bi = int(row.bar_index)
+            td = row.trading_day.date()
+            bi = int(row.bar_index)
             complete = int(row.trade_count) == tf
             bars.append(Bar(timeframe_ticks=tf, trading_day=td, bar_index=bi,
                             bar_id=make_bar_id(tf, td, bi),
@@ -154,7 +157,8 @@ def legacy_build(frame: pd.DataFrame, timeframe: int, scheme=RESEARCH_SESSION_SC
 
 # ───────────────────────── windows ─────────────────────────
 def research_window(day: str) -> tuple[pd.Timestamp, pd.Timestamp, list[str]]:
-    d = date.fromisoformat(day); prev = d - timedelta(days=1)
+    d = date.fromisoformat(day)
+    prev = d - timedelta(days=1)
     start = pd.Timestamp(f"{prev.isoformat()} 23:00:00", tz="America/Chicago").tz_convert("UTC")
     end = pd.Timestamp(f"{d.isoformat()} 23:00:00", tz="America/Chicago").tz_convert("UTC")
     return start, end, [prev.isoformat(), d.isoformat()]
@@ -162,7 +166,8 @@ def research_window(day: str) -> tuple[pd.Timestamp, pd.Timestamp, list[str]]:
 
 def engine_td_window(day: str) -> tuple[pd.Timestamp, pd.Timestamp, list[str]]:
     """Events whose 18:00-ET trading_day == day: [prev 18:00 ET, day 18:00 ET)."""
-    d = date.fromisoformat(day); prev = d - timedelta(days=1)
+    d = date.fromisoformat(day)
+    prev = d - timedelta(days=1)
     start = pd.Timestamp(f"{prev.isoformat()} 18:00:00", tz=ET).tz_convert("UTC")
     end = pd.Timestamp(f"{d.isoformat()} 18:00:00", tz=ET).tz_convert("UTC")
     return start, end, [prev.isoformat(), d.isoformat()]
@@ -190,7 +195,8 @@ def bars_to_et_df(bars: list[Bar]) -> pd.DataFrame:
 
 
 def df_to_engine_bars(bars_et: pd.DataFrame, day: str) -> list[Bar]:
-    td = date.fromisoformat(day); out = []
+    td = date.fromisoformat(day)
+    out = []
     for i, (ts, r) in enumerate(bars_et.iterrows()):
         ts_utc = ts.tz_convert("UTC").to_pydatetime()
         out.append(Bar(timeframe_ticks=TF, trading_day=td, bar_index=i, bar_id=make_bar_id(TF, td, i),
@@ -204,7 +210,8 @@ def df_to_engine_bars(bars_et: pd.DataFrame, day: str) -> list[Bar]:
 
 # ───────────── canonical levels/zones (prev-day carry) ─────────────
 def prior_available(day: str, back: int = 7) -> list[str]:
-    d = date.fromisoformat(day); out = []
+    d = date.fromisoformat(day)
+    out = []
     for k in range(back, 0, -1):
         c = (d - timedelta(days=k)).isoformat()
         if (DATA_DIR / SYMBOL / c / "mbp10.parquet").exists():
@@ -218,7 +225,8 @@ def canonical_levels_and_bars(day: str):
     (research bars_et for `day`, levels list)."""
     seq = prior_available(day, back=4)
     prev_ny = prev_asia = prev_london = None
-    bars_et = None; levels = None
+    bars_et = None
+    levels = None
     for ds in seq:
         bars = B._build_bars_for_date(DATA_DIR, SYMBOL, ds, U)
         if bars.empty:
@@ -233,7 +241,7 @@ def canonical_levels_and_bars(day: str):
 
 
 def levels_to_engine(levels):
-    return [Level(name=l["name"], price=float(l["price"]), side=Side(l["side"])) for l in levels]
+    return [Level(name=lvl["name"], price=float(lvl["price"]), side=Side(lvl["side"])) for lvl in levels]
 
 
 # ───────────────────────── checks ─────────────────────────
@@ -250,13 +258,17 @@ def check_a_and_d():
         ev = load_book_mid_events(s, e, files)
         frame = events_to_frame(ev)
         # legacy timing
-        t0 = time.perf_counter(); legacy = legacy_build(frame, TF); t_leg = time.perf_counter() - t0
+        t0 = time.perf_counter()
+        legacy = legacy_build(frame, TF)
+        t_leg = time.perf_counter() - t0
         # new timing
         t0 = time.perf_counter()
         new = build_tick_bars_from_frame(frame, (TF,), scheme=RESEARCH_SESSION_SCHEME, tick_size=CANON_TICK)
         t_new = time.perf_counter() - t0
         # DuckDB baseline
-        t0 = time.perf_counter(); _ = B._build_bars_for_date(DATA_DIR, SYMBOL, day, U); t_duck = time.perf_counter() - t0
+        t0 = time.perf_counter()
+        _ = B._build_bars_for_date(DATA_DIR, SYMBOL, day, U)
+        t_duck = time.perf_counter() - t0
         same = len(legacy) == len(new) and all(bar_tuple(a) == bar_tuple(b) for a, b in zip(legacy, new))
         n_complete = sum(1 for b in new if b.is_complete)
         print(f"  {day}: bars new={len(new)} legacy={len(legacy)} complete={n_complete} | "
@@ -264,7 +276,8 @@ def check_a_and_d():
         if not same:
             for a, b in zip(legacy, new):
                 if bar_tuple(a) != bar_tuple(b):
-                    print(f"     FIRST DIFF: legacy={bar_tuple(a)}\n                  new   ={bar_tuple(b)}"); break
+                    print(f"     FIRST DIFF: legacy={bar_tuple(a)}\n                  new   ={bar_tuple(b)}")
+                    break
 
 
 def _norm(t):
@@ -298,19 +311,20 @@ def check_b_c():
     for day in SEAM_DAYS:
         bars_et, levels = canonical_levels_and_bars(day)
         if bars_et is None or not levels:
-            print(f"  {day}: no canonical bars/levels (skip)"); continue
+            print(f"  {day}: no canonical bars/levels (skip)")
+            continue
         eng_bars = engine_bars_for_day(day)
         eng_bars_et = bars_to_et_df(eng_bars)
 
         # zones: identical inputs (levels are session max/min -> bucketing-independent)
-        zc = B._build_zones([dict(l) for l in levels])
+        zc = B._build_zones([dict(lvl) for lvl in levels])
         ze = sc.build_zones(levels_to_engine(levels))
         zones_same = (len(zc) == len(ze) and all(
             abs(a["representative_price"] - b.representative_price) < 1e-9 and str(a["side"]) == str(b.side)
             and tuple(a["names"]) == tuple(b.names) for a, b in zip(zc, ze)))
 
         # (b1) LOGIC UNCHANGED: identical bars -> identical touches (research fn vs engine fn)
-        canon_t_same_bars = B._detect_touches(bars_et, [dict(z) for z in B._build_zones([dict(l) for l in levels])])
+        canon_t_same_bars = B._detect_touches(bars_et, [dict(z) for z in B._build_zones([dict(lvl) for lvl in levels])])
         eng_t_same_bars = sc.detect_touches(df_to_engine_bars(bars_et, day),
                                             sc.build_zones(levels_to_engine(levels)),
                                             tick_size=CANON_TICK, trading_day=date.fromisoformat(day))
@@ -320,7 +334,7 @@ def check_b_c():
             for a, b in zip(canon_t_same_bars, eng_t_same_bars))
 
         # (b2) BOUNDARY EFFECT: canonical bars vs engine 18:00-ET bars (same zones)
-        canon_touches = B._detect_touches(bars_et, [dict(z) for z in B._build_zones([dict(l) for l in levels])])
+        canon_touches = B._detect_touches(bars_et, [dict(z) for z in B._build_zones([dict(lvl) for lvl in levels])])
         eng_touches = sc.detect_touches(df_to_engine_bars(eng_bars_et, day),
                                         sc.build_zones(levels_to_engine(levels)),
                                         tick_size=CANON_TICK, trading_day=date.fromisoformat(day))
@@ -336,7 +350,8 @@ def check_b_c():
             lc = label_for(ct["rep"], ct["direction"], fwd_c)
             fwd_e = eng_bars_et[(eng_bars_et.index > et["ts"].tz_convert(ET)) & (eng_bars_et.index < cutoff)]
             le = label_for(et["rep"], et["direction"], fwd_e)
-            classes_seen.add(lc["label"]); classes_seen.add(le["label"])
+            classes_seen.add(lc["label"])
+            classes_seen.add(le["label"])
             if lc["label"] == le["label"]:
                 lbl_match += 1
             else:
@@ -360,7 +375,8 @@ def seam_audit(day: str, eng_bars: list[Bar]):
     d = date.fromisoformat(day)
     seam = pd.Timestamp(f"{(d - timedelta(days=1)).isoformat()} 18:00:00", tz=ET)  # td-D opens here
     if not eng_bars:
-        print(f"    [seam audit {day}] no engine bars"); return
+        print(f"    [seam audit {day}] no engine bars")
+        return
     b0 = eng_bars[0]  # first bar of trading_day D
     # raw events for td-D window, independently
     s, e, files = engine_td_window(day)

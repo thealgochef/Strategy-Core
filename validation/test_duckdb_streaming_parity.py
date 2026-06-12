@@ -40,10 +40,10 @@ SYMBOL = "NQ"
 TICK_COUNT = 147
 TICK_SIZE = 0.25  # NQ trade prints land on the 0.25 grid -> lossless integer ticks
 
-from strategy_core.candles._ids import make_bar_id
-from strategy_core.candles.streaming import CandleEngine
-from strategy_core.constants import RESEARCH_SESSION_SCHEME
-from strategy_core.types import CloseReason, Trade
+from strategy_core.candles._ids import make_bar_id  # noqa: E402 (imports follow the sys.path bootstrap)
+from strategy_core.candles.streaming import CandleEngine  # noqa: E402 (imports follow the sys.path bootstrap)
+from strategy_core.constants import RESEARCH_SESSION_SCHEME  # noqa: E402 (imports follow the sys.path bootstrap)
+from strategy_core.types import Trade  # noqa: E402 (imports follow the sys.path bootstrap)
 
 # ties-heavy big day; Sunday-Globex / 18:00-ET-seam day (Monday's trading day opens at
 # Sunday 18:00 ET and pulls in the Sunday-evening Globex); ordinary RTH weekday.

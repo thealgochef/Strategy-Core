@@ -30,7 +30,9 @@ dev = [
 packages = ["src/strategy_core"]
 
 [tool.pytest.ini_options]
-testpaths = ["tests"]
+# W2 P4a: validation/ rides the suite; its data-dependent tests self-skip
+# loudly when the local store / research repo are absent (CI cold runners).
+testpaths = ["tests", "validation"]
 addopts = "-q"
 
 [tool.ruff]

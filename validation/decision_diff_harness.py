@@ -99,7 +99,6 @@ MAX_PRIOR_WALKBACK_DAYS = 7
 
 from strategy_core import (  # noqa: E402
     Bar,
-    Direction,
     Level,
     Quote,
     Side,
@@ -627,7 +626,7 @@ FEATURE_EPS = 1e-6  # below this, two feature values are "identical" (approach u
 
 
 def _level_map(levels: list[Level]) -> dict:
-    return {l.name: (round(float(l.price), 6), l.side.value) for l in levels}
+    return {lvl.name: (round(float(lvl.price), 6), lvl.side.value) for lvl in levels}
 
 
 def _zone_set(zones: list) -> set:

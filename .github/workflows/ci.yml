@@ -1,0 +1,41 @@
+name: ci
+
+# W2 P4a: Strategy-Core cold-install CI — the analog of TL's backend-ci and
+# QL's ci. Cold pip install, config-faithful repo-root ruff (validation/
+# included), pytest with validation/ in testpaths; the data-dependent
+# validation tests self-skip loudly on a fresh runner (no local store).
+on:
+  push:
+    branches: [main, platform-refactor]
+  pull_request:
+    branches: [main]
+  # W2 P4b (A157): manual runs for greenlight witnessing without a push.
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  strategy-core:
+    name: strategy-core (cold install + ruff + pytest)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.13
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+
+      # Clean install from scratch: catches undeclared dependencies the
+      # editable/PYTHONPATH dev runs mask.
+      - name: Install (cold)
+        run: pip install -e ".[dev]"
+
+      - name: Lint (ruff, repo root — config-faithful)
+        run: ruff check .
+
+      - name: Test (pytest — tests + validation)
+        run: pytest -q
