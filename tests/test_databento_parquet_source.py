@@ -49,11 +49,24 @@ def test_invalid_rows_produce_path_safe_warning(tmp_path: Path) -> None:
 
 
 def test_front_month_filter_drops_spreads_and_non_dominant_instruments(tmp_path: Path) -> None:
+    # Dominance is by TRADE-ROW COUNT (the TL/QL rule), not summed size: id 1 has two
+    # rows and wins despite id 3's larger single trade.
     path = _write(tmp_path / "mixed.parquet", [
-        {"ts_event": datetime(2026, 1, 6, 14, tzinfo=UTC), "price": 17000.0, "size": 10, "side": "B", "instrument_id": 1, "raw_symbol": "NQZ6", "sequence": 1},
-        {"ts_event": datetime(2026, 1, 6, 14, 1, tzinfo=UTC), "price": 17000.25, "size": 1, "side": "B", "instrument_id": 2, "raw_symbol": "NQZ6-NQH7", "sequence": 2},
-        {"ts_event": datetime(2026, 1, 6, 14, 2, tzinfo=UTC), "price": 17000.50, "size": 1, "side": "B", "instrument_id": 3, "raw_symbol": "NQH7", "sequence": 3},
+        {"ts_event": datetime(2026, 1, 6, 14, tzinfo=UTC), "price": 17000.0, "size": 1, "side": "B", "instrument_id": 1, "raw_symbol": "NQZ6", "sequence": 1},
+        {"ts_event": datetime(2026, 1, 6, 14, 1, tzinfo=UTC), "price": 17000.0, "size": 1, "side": "B", "instrument_id": 1, "raw_symbol": "NQZ6", "sequence": 2},
+        {"ts_event": datetime(2026, 1, 6, 14, 2, tzinfo=UTC), "price": 17000.25, "size": 50, "side": "B", "instrument_id": 2, "raw_symbol": "NQZ6-NQH7", "sequence": 3},
+        {"ts_event": datetime(2026, 1, 6, 14, 3, tzinfo=UTC), "price": 17000.50, "size": 50, "side": "B", "instrument_id": 3, "raw_symbol": "NQH7", "sequence": 4},
+    ])
+    events = [event for event in DatabentoParquetSource(paths=(path,), requested_symbol="NQ.c.0", schema="trades", front_month_only=True).events() if isinstance(event, Trade)]
+    assert len(events) == 2
+    assert all(event.price_ticks == 68000 for event in events)
+
+
+def test_front_month_count_tie_breaks_to_larger_instrument_id(tmp_path: Path) -> None:
+    path = _write(tmp_path / "tie.parquet", [
+        {"ts_event": datetime(2026, 1, 6, 14, tzinfo=UTC), "price": 17000.0, "size": 9, "side": "B", "instrument_id": 1, "raw_symbol": "NQZ6", "sequence": 1},
+        {"ts_event": datetime(2026, 1, 6, 14, 1, tzinfo=UTC), "price": 17000.50, "size": 1, "side": "B", "instrument_id": 3, "raw_symbol": "NQH7", "sequence": 2},
     ])
     events = [event for event in DatabentoParquetSource(paths=(path,), requested_symbol="NQ.c.0", schema="trades", front_month_only=True).events() if isinstance(event, Trade)]
     assert len(events) == 1
-    assert events[0].price_ticks == 68000
+    assert events[0].price_ticks == 68002

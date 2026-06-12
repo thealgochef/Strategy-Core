@@ -4,14 +4,20 @@ from __future__ import annotations
 
 from collections.abc import Iterator
 from dataclasses import dataclass
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal, InvalidOperation
 from heapq import heappop, heappush
 from itertools import count
 from pathlib import Path
 from typing import Any
+from zoneinfo import ZoneInfo
 
-from strategy_core.constants import BUY_AGGRESSOR_SIDE, DEFAULT_TICK_SIZE
+from strategy_core.constants import (
+    BUY_AGGRESSOR_SIDE,
+    DEFAULT_TICK_SIZE,
+    SESSION_TIMEZONE,
+    TRADING_DAY_BOUNDARY,
+)
 from strategy_core.data.events import (
     DataQualityCode,
     DataQualitySeverity,
@@ -60,6 +66,14 @@ TRADE_SELECTED = (
 SortKey = tuple[datetime, int, int, int]
 SourceItem = tuple[SortKey, Trade | Quote] | DataQualityWarning
 
+#: Per-date file resolution priority for trading-day composition (mirrors the
+#: research store convention: best book depth available wins).
+DAY_FILE_PRIORITY = (
+    ("mbp10.parquet", "mbp-10"),
+    ("mbp1.parquet", "mbp-1"),
+    ("trades.parquet", "trades"),
+)
+
 
 @dataclass(frozen=True, slots=True)
 class DatabentoParquetSource:
@@ -70,9 +84,116 @@ class DatabentoParquetSource:
     end_ts_utc: datetime | None = None
     front_month_only: bool = False
     batch_size: int = 65_536
+    #: Optional per-path [start, end) UTC windows; when set, overrides the global
+    #: start/end for that path. Length must match ``paths``.
+    path_windows: tuple[tuple[datetime | None, datetime | None], ...] | None = None
+    #: Warnings produced at composition time (e.g. missing prior-day file); yielded
+    #: on the event stream before any market data.
+    pending_warnings: tuple[DataQualityWarning, ...] = ()
+
+    def __post_init__(self) -> None:
+        if self.path_windows is not None and len(self.path_windows) != len(self.paths):
+            raise ValueError("path_windows must match paths length")
+
+    @classmethod
+    def for_trading_day(
+        cls,
+        symbol_dir: Path | str,
+        trading_day: date,
+        *,
+        requested_symbol: str | None = None,
+        front_month_only: bool = True,
+        batch_size: int = 65_536,
+    ) -> DatabentoParquetSource:
+        """Canonical trading-day stream: [prev-day 18:00 ET, trading-day 18:00 ET).
+
+        Composes the window from the two per-date files under ``symbol_dir``
+        (``<symbol_dir>/<YYYY-MM-DD>/{mbp10,mbp1,trades}.parquet``), DST-aware via
+        ``SESSION_TIMEZONE``. The two files are partitioned at UTC midnight of
+        ``trading_day`` — the physical file boundary — so rows duplicated across
+        adjacent day files are never double-emitted. A missing (or schema-mismatched)
+        prior-day file degrades to a single-file scan and surfaces a
+        ``MISSING_PRIOR_DAY_FILE`` warning on the event stream.
+        """
+
+        root = Path(symbol_dir)
+        symbol = requested_symbol or root.name
+        day_resolved = cls._resolve_day_file(root, trading_day)
+        if day_resolved is None:
+            raise FileNotFoundError(
+                f"no parquet day file for {symbol} {trading_day.isoformat()}"
+            )
+        day_path, day_schema = day_resolved
+        prev_day = trading_day - timedelta(days=1)
+        tz = ZoneInfo(SESSION_TIMEZONE)
+        start = datetime.combine(prev_day, TRADING_DAY_BOUNDARY, tzinfo=tz).astimezone(UTC)
+        end = datetime.combine(trading_day, TRADING_DAY_BOUNDARY, tzinfo=tz).astimezone(UTC)
+        split = datetime(trading_day.year, trading_day.month, trading_day.day, tzinfo=UTC)
+        prev_resolved = cls._resolve_day_file(root, prev_day)
+        warnings: list[DataQualityWarning] = []
+        if prev_resolved is not None and prev_resolved[1] != day_schema:
+            warnings.append(
+                cls._warning(
+                    DataQualityCode.MISSING_PRIOR_DAY_FILE,
+                    "prior-day file schema differs; trading-day window served from a single file",
+                    str(day_path),
+                    trading_day=trading_day.isoformat(),
+                    prior_day=prev_day.isoformat(),
+                    prior_schema=prev_resolved[1],
+                    schema=day_schema,
+                )
+            )
+            prev_resolved = None
+        if prev_resolved is None:
+            if not warnings:
+                warnings.append(
+                    cls._warning(
+                        DataQualityCode.MISSING_PRIOR_DAY_FILE,
+                        "prior-day file missing; trading-day window served from a single file",
+                        str(day_path),
+                        trading_day=trading_day.isoformat(),
+                        prior_day=prev_day.isoformat(),
+                    )
+                )
+            return cls(
+                paths=(day_path,),
+                requested_symbol=symbol,
+                schema=day_schema,
+                front_month_only=front_month_only,
+                batch_size=batch_size,
+                path_windows=((start, end),),
+                pending_warnings=tuple(warnings),
+            )
+        return cls(
+            paths=(prev_resolved[0], day_path),
+            requested_symbol=symbol,
+            schema=day_schema,
+            front_month_only=front_month_only,
+            batch_size=batch_size,
+            path_windows=((start, split), (split, end)),
+            pending_warnings=tuple(warnings),
+        )
+
+    @staticmethod
+    def _resolve_day_file(root: Path, day: date) -> tuple[Path, str] | None:
+        folder = root / day.isoformat()
+        for filename, schema in DAY_FILE_PRIORITY:
+            candidate = folder / filename
+            if candidate.exists():
+                return candidate, schema
+        return None
+
+    def _window_for(self, index: int) -> tuple[datetime | None, datetime | None]:
+        if self.path_windows is not None:
+            return self.path_windows[index]
+        return (self.start_ts_utc, self.end_ts_utc)
 
     def events(self) -> Iterator[Trade | Quote | DataQualityWarning]:
-        streams = [iter(self._scan_file(Path(path))) for path in self.paths]
+        yield from self.pending_warnings
+        streams = [
+            iter(self._scan_file(Path(path), self._window_for(index)))
+            for index, path in enumerate(self.paths)
+        ]
         if not streams:
             return
         heap: list[tuple[SortKey, int, int, Trade | Quote]] = []
@@ -112,9 +233,24 @@ class DatabentoParquetSource:
             if not progressed:
                 break
 
+        # L1 dedup: a Quote is emitted only when level-0 state (bid/ask price or
+        # size) changes from the previously *emitted* top-of-book state. Applies
+        # across the whole merged stream, so it holds for multi-file day windows.
+        last_tob: tuple[int, int, int, int] | None = None
         while heap:
             _, _, stream_index, event = heappop(heap)
-            yield event
+            if isinstance(event, Quote):
+                tob = (
+                    event.bid_price_ticks,
+                    event.ask_price_ticks,
+                    event.bid_size,
+                    event.ask_size,
+                )
+                if tob != last_tob:
+                    last_tob = tob
+                    yield event
+            else:
+                yield event
             primed[stream_index] = False
             for warning in prime(stream_index):
                 yield warning
@@ -127,7 +263,9 @@ class DatabentoParquetSource:
                 else:
                     break
 
-    def _scan_file(self, path: Path) -> Iterator[SourceItem]:
+    def _scan_file(
+        self, path: Path, window: tuple[datetime | None, datetime | None]
+    ) -> Iterator[SourceItem]:
         import pyarrow.parquet as pq
 
         source = safe_source(str(path)) or "historical-parquet"
@@ -165,8 +303,9 @@ class DatabentoParquetSource:
         # warnings are still yielded inline below; only decode failures land here.
         try:
             front_month_id = self._front_month_instrument_id(parquet, selected) if self.front_month_only else None
-            start = self.start_ts_utc.astimezone(UTC) if self.start_ts_utc is not None else None
-            end = self.end_ts_utc.astimezone(UTC) if self.end_ts_utc is not None else None
+            window_start, window_end = window
+            start = window_start.astimezone(UTC) if window_start is not None else None
+            end = window_end.astimezone(UTC) if window_end is not None else None
             for batch in parquet.iter_batches(columns=selected, batch_size=self.batch_size):
                 events: list[tuple[SortKey, Trade | Quote]] = []
                 for row in batch.to_pylist():
@@ -234,19 +373,31 @@ class DatabentoParquetSource:
         return (ts, sequence, 0, 0), quote
 
     def _front_month_instrument_id(self, parquet: Any, selected: list[str]) -> int | None:
-        counts: dict[int, int] = {}
+        """Dominant non-spread instrument by TRADE-row count (ties -> larger id).
+
+        Matches the Trade-Lab/Quant-Lab front-month rule: spread symbols (containing
+        ``-``) are excluded, only trade rows are counted (every row counts for
+        schemas without an ``action`` column), and ties break toward the larger
+        instrument id.
+        """
+
         if "instrument_id" not in selected:
             return None
+        has_action = "action" in selected
+        counts: dict[int, int] = {}
         for batch in parquet.iter_batches(columns=selected, batch_size=self.batch_size):
             for row in batch.to_pylist():
+                if has_action and not self._is_trade_action(row.get("action")):
+                    continue
                 if self._is_spread_symbol(row.get("raw_symbol") or row.get("symbol")):
                     continue
                 instrument_id = self._optional_int(row.get("instrument_id"))
                 if instrument_id is None:
                     continue
-                size = self._optional_int(row.get("size")) or 1
-                counts[instrument_id] = counts.get(instrument_id, 0) + max(size, 1)
-        return max(counts.items(), key=lambda item: item[1])[0] if counts else None
+                counts[instrument_id] = counts.get(instrument_id, 0) + 1
+        if not counts:
+            return None
+        return max(counts.items(), key=lambda item: (item[1], item[0]))[0]
 
     def _is_off_front_month(self, row: dict[str, Any], front_month_id: int | None) -> bool:
         if self._is_spread_symbol(row.get("raw_symbol") or row.get("symbol")):

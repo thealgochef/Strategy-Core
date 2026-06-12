@@ -40,6 +40,7 @@ class DataQualityCode(StrEnum):
     TIMESTAMP_REGRESSION = "timestamp_regression"
     BACKPRESSURE_DROP = "backpressure_drop"
     PROVIDER_ERROR = "provider_error"
+    MISSING_PRIOR_DAY_FILE = "missing_prior_day_file"
 
 
 _WINDOWS_PATH_RE = re.compile(r"[A-Za-z]:\\[^\s,;]+")
