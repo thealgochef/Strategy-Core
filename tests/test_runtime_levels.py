@@ -64,3 +64,24 @@ def test_asia_and_london_ranges_use_strategy_core_sessions_not_chicago_closed_wi
     levels = {level.name for level in runtime.snapshot().levels}
     assert {"asia_high", "asia_low", "london_high", "london_low"} <= levels
     assert runtime.snapshot().trading_day is not None
+
+
+def test_friday_bank_serves_monday_pdh_pdl_across_the_weekend_gap() -> None:
+    """W2 P1f rider: the emission lookup resolves the MOST RECENT banked day with
+    key < the current trading day, so a Friday bank serves Monday across the
+    weekend gap (verified: no fix needed — this pins the behavior)."""
+    state = StrategyLevelState()
+    # Trading day Friday 2025-07-11 (rolls at 18:00 ET on Thu 7/10): high/low banked.
+    state.process_trade(_et_trade(2025, 7, 10, 19, 0, 68400))
+    state.process_trade(_et_trade(2025, 7, 11, 10, 0, 68000))
+    assert {level.name for level in state.levels()}.isdisjoint({"pdh", "pdl"})
+    # First trade of Monday's trading day (Sunday 19:00 ET) rolls across the
+    # weekend; Friday is the most recent banked day and must emit as pdh/pdl.
+    levels = {
+        level.name: level
+        for level in state.process_trade(_et_trade(2025, 7, 13, 19, 0, 68200))
+    }
+    assert levels["pdh"].price == 68400 * 0.25
+    assert levels["pdl"].price == 68000 * 0.25
+    assert levels["pdh"].side is Side.HIGH
+    assert levels["pdl"].side is Side.LOW
