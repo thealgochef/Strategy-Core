@@ -173,6 +173,32 @@ def test_flatten_boundary_is_non_strict():
     assert out.reason == "flatten"
 
 
+# ── W1 P2a: flatten is trading-day anchored, not a bare wall-clock compare ────
+def test_evening_touch_of_next_trading_day_is_not_flattened():
+    """A 20:00 ET touch belongs to the NEXT trading day (rolls at 18:00 ET); its
+    decision must NOT drop at the prior session's flatten and resolves against its
+    OWN trading day's cutoff (~21h away)."""
+    touch_close = datetime(2025, 7, 14, 20, 0, tzinfo=_ET).astimezone(timezone.utc)
+    fwd = _bar(touch_close + timedelta(minutes=6), high_pts=116.0, low_pts=100.0)
+
+    out = _resolve(_touch(touch_close), [fwd], price=100.0)
+
+    assert isinstance(out, OutcomeResult)
+    assert out.label == TRADEABLE_REVERSAL
+
+
+def test_evening_decision_still_drops_at_its_own_days_flatten():
+    """The same-trading-day 16:40 anchor still applies: a decision landing at/after
+    16:40 ET ON the touch's trading day drops as flatten."""
+    touch_close = _et(16, 36)  # decision 16:41 ET on 2025-07-15 >= 16:40 that day
+    fwd = _bar(touch_close + timedelta(minutes=6), high_pts=200.0, low_pts=50.0)
+
+    out = _resolve(_touch(touch_close), [fwd], price=100.0)
+
+    assert isinstance(out, HonestEntryDrop)
+    assert out.reason == "flatten"
+
+
 # ── defaults are single-sourced from the engine constants ────────────────────
 def test_defaults_pull_from_constants():
     """With no override, a touch right before the flatten survives; one at the

@@ -112,7 +112,8 @@ def resolve_honest_outcome(
             ``resolve_outcome``.
         decision_offset_minutes: Minutes after the touch close the decision fires
             (default the engine constant == the interaction window).
-        flatten_time: ET wall-clock at/after which a decision is never traded.
+        flatten_time: ET wall-clock ON ``touch.trading_day`` at/after which a
+            decision is never traded (same-day anchored, like the cutoff).
         rth_end: ET wall-clock RTH cutoff (forward-window upper bound + cutoff drop).
         timezone: IANA tz for the ET conversions (default the engine session tz).
 
@@ -123,19 +124,22 @@ def resolve_honest_outcome(
     tz = ZoneInfo(timezone)
 
     # (a) decision instant = touch close + decision_offset (== interaction window).
-    # Timedelta addition on the absolute instant; ET is for the wall-clock checks.
     decision_ts_utc = touch.bar_ts_utc + timedelta(minutes=decision_offset_minutes)
-    decision_ts_et = decision_ts_utc.astimezone(tz)
 
     # The touch-date forward cutoff (ET) = the ny-session close (engine v3: rth_end ==
     # 17:00 ET; was 16:15). touch.trading_day is the processing date the cutoff is
     # built from; 17:00 ET is never DST-ambiguous (DST flips at 02:00 ET).
     rth_cutoff_et = datetime.combine(touch.trading_day, rth_end, tzinfo=tz)
+    # W1 P2a: flatten is anchored to the SAME trading day as the cutoff (an absolute
+    # instant, not a bare wall-clock compare), so evening touches — which belong to
+    # the NEXT trading day whose cutoff is ~21h away — are no longer embargoed by a
+    # time-of-day comparison against the prior session's flatten.
+    flatten_cutoff_et = datetime.combine(touch.trading_day, flatten_time, tzinfo=tz)
 
     # (b) executor no-entry rule: drop a decision at/after the flatten (non-strict,
-    # ``t >= flatten``) or at/after the RTH cutoff (non-strict, ``>= cutoff``). The
-    # cutoff compare is on absolute instants (equivalent to the copies' ET compare).
-    if decision_ts_et.time() >= flatten_time:
+    # ``t >= flatten``) or at/after the RTH cutoff (non-strict, ``>= cutoff``). Both
+    # compares are on absolute instants anchored to ``touch.trading_day``.
+    if decision_ts_utc >= flatten_cutoff_et:
         return HonestEntryDrop(reason="flatten", decision_ts_utc=decision_ts_utc)
     if decision_ts_utc >= rth_cutoff_et:
         return HonestEntryDrop(reason="cutoff", decision_ts_utc=decision_ts_utc)

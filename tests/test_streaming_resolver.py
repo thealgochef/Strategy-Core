@@ -93,6 +93,27 @@ def test_registration_flatten_drop_at_exact_1640_et_boundary() -> None:
     assert drop.decision_ts_utc == _et(16, 40)
 
 
+def test_registration_evening_touch_of_next_trading_day_not_flattened() -> None:
+    """W1 P2a: flatten is anchored to the setup's trading day. A 20:00 ET touch the
+    prior evening (trading day _DAY, which rolls at 18:00 ET) registers live and
+    resolves against _DAY's cutoff."""
+    resolver = _resolver()
+    prev_evening = datetime(2025, 7, 14, 20, 0, tzinfo=_ET).astimezone(UTC)
+    assert (
+        resolver.register(
+            "k", touch_bar_ts_utc=prev_evening, trading_day=_DAY, direction="long"
+        )
+        is None
+    )
+    assert resolver.open_count == 1
+    # A next-morning bar (inside _DAY's RTH, before the 17:00 ET cutoff) advances the
+    # setup: +16 pts off the 23000.0 entry -> TP for the long.
+    emitted = resolver.on_bar(_bar(_et(10, 0), 23016.0, 23000.0))
+    assert len(emitted) == 1
+    assert isinstance(emitted[0], StreamResolution)
+    assert resolver.open_count == 0
+
+
 def test_registration_no_fill_when_no_qualifying_print() -> None:
     resolver = _resolver(trade_price_at=lambda ts: None)
     drop = resolver.register(

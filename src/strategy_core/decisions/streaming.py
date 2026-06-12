@@ -210,10 +210,12 @@ class StreamingHonestResolver:
         barrier resolves it or its cutoff passes).
         """
         decision_ts_utc = touch_bar_ts_utc + self._decision_offset
-        decision_ts_et = decision_ts_utc.astimezone(self._tz)
         rth_cutoff = datetime.combine(trading_day, self._rth_end, tzinfo=self._tz)
+        # W1 P2a: flatten anchored to the setup's trading day (absolute instant),
+        # mirroring honest_entry — evening next-trading-day setups are not embargoed.
+        flatten_cutoff = datetime.combine(trading_day, self._flatten_time, tzinfo=self._tz)
 
-        if decision_ts_et.time() >= self._flatten_time:
+        if decision_ts_utc >= flatten_cutoff:
             return StreamDrop(reason="flatten", key=key, decision_ts_utc=decision_ts_utc)
         if decision_ts_utc >= rth_cutoff:
             return StreamDrop(reason="cutoff", key=key, decision_ts_utc=decision_ts_utc)
