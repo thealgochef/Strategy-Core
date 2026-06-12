@@ -89,7 +89,7 @@ def _section() -> TouchReversalSection:
             zone_proximity_pts=ZONE_PROXIMITY_PTS,
             zone_representative_price="mean_of_constituent_levels",
             scope="first_touch_per_zone_per_day",
-            direction_from_side={"LOW": "LONG", "HIGH": "SHORT"},
+            direction_from_side={"low": "long", "high": "short"},
         ),
         feature_windows=FeatureWindows(
             interaction_window_minutes=5,

@@ -25,10 +25,18 @@ from __future__ import annotations
 from collections.abc import Mapping, Sequence
 from datetime import date
 
-from strategy_core.constants import DIRECTION_FROM_SIDE
 from strategy_core.types import Bar, Direction, Side, Touch, Zone
 
-__all__ = ["is_touch", "detect_touches"]
+__all__ = ["DEFAULT_DIRECTION_FROM_SIDE", "is_touch", "detect_touches"]
+
+#: Engine default: low touch -> long, high touch -> short (the touch-reversal rule).
+#: Ratified §3 (W1 P2c): this typed map is engine-internal; the lowercase WIRE
+#: vocabulary ({"low": "long", "high": "short"}) is plugin-owned and emitted by
+#: ``default_touch_reversal_section()``.
+DEFAULT_DIRECTION_FROM_SIDE: Mapping[Side, Direction] = {
+    Side.LOW: Direction.LONG,
+    Side.HIGH: Direction.SHORT,
+}
 
 
 def is_touch(bar_low_points: float, bar_high_points: float, zone_rep_points: float) -> bool:
@@ -50,7 +58,7 @@ def detect_touches(
     *,
     tick_size: float,
     trading_day: date,
-    direction_from_side: Mapping[Side, Direction] = DIRECTION_FROM_SIDE,
+    direction_from_side: Mapping[Side, Direction] = DEFAULT_DIRECTION_FROM_SIDE,
 ) -> list[Touch]:
     """Detect first-touch events over ``bars`` in order.
 

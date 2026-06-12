@@ -36,7 +36,6 @@ from strategy_core.constants import (
     DEFAULT_APPROACH_WINDOW_MINUTES,
     DEFAULT_INTERACTION_WINDOW_MINUTES,
     DEFAULT_TICK_COUNT,
-    DIRECTION_FROM_SIDE,
     INTERACTION_FEATURES,
     LEVEL_AVAILABLE_FROM_GUARD,
     LARGE_TRADE_THRESHOLD,
@@ -189,9 +188,9 @@ def default_touch_reversal_section() -> TouchReversalSection:
             zone_proximity_pts=ZONE_PROXIMITY_PTS,
             zone_representative_price=ZONE_REPRESENTATIVE_PRICE,
             scope=TOUCH_SCOPE,
-            direction_from_side={
-                side.value: direction.value for side, direction in DIRECTION_FROM_SIDE.items()
-            },
+            # Ratified §3 (W1 P2c): the plugin OWNS the wire vocabulary — lowercase,
+            # emitted verbatim into contracts and read directly by Trade-Lab.
+            direction_from_side={"low": "long", "high": "short"},
         ),
         feature_windows=FeatureWindows(
             interaction_window_minutes=DEFAULT_INTERACTION_WINDOW_MINUTES,

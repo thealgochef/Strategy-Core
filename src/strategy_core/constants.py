@@ -16,7 +16,7 @@ from __future__ import annotations
 
 from datetime import time
 
-from strategy_core.types import Direction, SessionScheme, SessionWindow, Side
+from strategy_core.types import SessionScheme, SessionWindow
 
 # ── Instrument ──────────────────────────────────────────────────────────────
 #: NQ trade-price grid. Production tick bars are TRADE-PRICE tick bars (a "tick" is
@@ -61,12 +61,10 @@ POINT_VALUE: dict[str, float] = {"NQ": 20.0, "ES": 50.0}
 #: Merge levels whose prices are within this many points into one zone.
 #: (dashboard_utility_builder.py:54  _ZONE_PROXIMITY = 3.0)
 ZONE_PROXIMITY_PTS = 3.0
-#: Side -> trade direction. low touch -> long, high touch -> short.
-#: (dashboard_utility_builder.py:431)
-DIRECTION_FROM_SIDE: dict[Side, Direction] = {
-    Side.LOW: Direction.LONG,
-    Side.HIGH: Direction.SHORT,
-}
+#: Ratified §3 (W1 P2c): the side->direction map is plugin-owned, not a platform
+#: constant. The typed engine default lives in ``decisions/touch.py``
+#: (``DEFAULT_DIRECTION_FROM_SIDE``); the lowercase WIRE vocabulary is emitted by
+#: ``default_touch_reversal_section()`` and sourced verbatim by the QL emitter.
 
 # ── Feature windows / thresholds ────────────────────────────────────────────
 #: Half-width (points) of the within-band dwell feature ``int_time_within_2pts``.
@@ -305,7 +303,6 @@ __all__ = [
     "TRADE_BAR_ORDER",
     "POINT_VALUE",
     "ZONE_PROXIMITY_PTS",
-    "DIRECTION_FROM_SIDE",
     "WITHIN_BAND_PTS",
     "LEVEL_PROXIMITY_PTS",
     "LARGE_TRADE_THRESHOLD",

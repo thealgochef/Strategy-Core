@@ -131,7 +131,7 @@ def _valid_contract_dict() -> dict[str, Any]:
                 "zone_proximity_pts": 3.0,
                 "zone_representative_price": "mean",
                 "scope": "trading_day",
-                "direction_from_side": {"LOW": "LONG", "HIGH": "SHORT"},
+                "direction_from_side": {"low": "long", "high": "short"},
             },
             "feature_windows": {
                 "interaction_window_minutes": 5,
