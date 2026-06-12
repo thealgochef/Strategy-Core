@@ -1,11 +1,20 @@
 from datetime import UTC, datetime
+from zoneinfo import ZoneInfo
 
+from strategy_core.runtime.levels import StrategyLevelState
 from strategy_core.runtime.state import StrategyRuntime
 from strategy_core.types import Side, Trade
+
+_ET = ZoneInfo("US/Eastern")
 
 
 def _ts(hour: int, minute: int = 0) -> datetime:
     return datetime(2026, 1, 6, hour, minute, tzinfo=UTC)
+
+
+def _et_trade(year: int, month: int, day: int, hour: int, minute: int, price_ticks: int) -> Trade:
+    ts = datetime(year, month, day, hour, minute, tzinfo=_ET).astimezone(UTC)
+    return Trade(ts, price_ticks, 1, "B")
 
 
 def test_prior_day_summary_loads_pdh_pdl_with_start_availability() -> None:
@@ -16,6 +25,35 @@ def test_prior_day_summary_loads_pdh_pdl_with_start_availability() -> None:
     assert levels["pdh"].side is Side.HIGH
     assert levels["pdl"].side is Side.LOW
     assert levels["pdh"].available_from is not None
+
+
+def test_two_day_stream_banks_pdh_pdl_organically() -> None:
+    """W1 P2b: the trading-day roll banks the completed day's extremes; day 2 emits
+    pdh/pdl with no external seed."""
+    state = StrategyLevelState()
+    # Trading day 2025-07-15 (rolls at 18:00 ET on 7/14): high 68400, low 68000.
+    state.process_trade(_et_trade(2025, 7, 14, 19, 0, 68400))
+    state.process_trade(_et_trade(2025, 7, 15, 10, 0, 68000))
+    assert {level.name for level in state.levels()}.isdisjoint({"pdh", "pdl"})
+    # First trade after 18:00 ET on 7/15 rolls to trading day 2025-07-16.
+    levels = {level.name: level for level in state.process_trade(_et_trade(2025, 7, 15, 19, 30, 68200))}
+    assert levels["pdh"].price == 68400 * 0.25
+    assert levels["pdl"].price == 68000 * 0.25
+    assert levels["pdh"].side is Side.HIGH
+    assert levels["pdl"].side is Side.LOW
+
+
+def test_explicit_prior_day_load_wins_over_organic_banking() -> None:
+    """W1 P2b: an external seed for the same completed day is never overwritten by
+    the roll — the explicitly loaded extremes win."""
+    state = StrategyLevelState()
+    state.process_trade(_et_trade(2025, 7, 14, 19, 0, 68400))
+    state.load_prior_day_summary(
+        datetime(2025, 7, 15, tzinfo=UTC).date(), high_ticks=70000, low_ticks=60000
+    )
+    levels = {level.name: level for level in state.process_trade(_et_trade(2025, 7, 15, 19, 30, 68200))}
+    assert levels["pdh"].price == 70000 * 0.25
+    assert levels["pdl"].price == 60000 * 0.25
 
 
 def test_asia_and_london_ranges_use_strategy_core_sessions_not_chicago_closed_window() -> None:

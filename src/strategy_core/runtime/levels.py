@@ -68,6 +68,17 @@ class StrategyLevelState:
         if info.trading_day is None:
             return self.levels()
         if self._trading_day != info.trading_day:
+            # W1 P2b: bank the completed day's extremes BEFORE resetting so pdh/pdl
+            # emit organically on multi-day streams. An explicit load_prior_day_summary
+            # for the same day stays authoritative (the external seed is never
+            # overwritten by the organic roll; a later explicit load overwrites).
+            if (
+                self._trading_day is not None
+                and self._day_high is not None
+                and self._day_low is not None
+                and self._trading_day not in self._summaries
+            ):
+                self._summaries[self._trading_day] = _DaySummary(self._day_high, self._day_low)
             self._trading_day = info.trading_day
             self._day_high = None
             self._day_low = None
