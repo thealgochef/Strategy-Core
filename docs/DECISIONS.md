@@ -110,6 +110,26 @@ proven on a FRESH model, then soaked ≥7 trading days before any number is trus
   ~34µs/event × 15.3M events × 2 passes is a platform tax on all future research, but
   fixing it mid-PROVE puts engine churn under the proof; the weekend absorbs the build
   for free. Enforced: W3a record (options preserved); post-soak roadmap.
+- D-P-15 RATIFIED (2026-06-12) — W3A-READER: D-P-14's SC-freeze is SUPERSEDED for one
+  component, pre-build — `DatabentoParquetSource`'s row-by-row decode internals are
+  vectorized BEFORE the W3 dataset build, gated by (1) a full-day event-by-event
+  IDENTITY PROOF on 2022-02-15 + 2026-02-18 (count, order, every field, ns-exact ts;
+  `W3A_READER_PROOF.log`: 5,218,914 + 10,720,798 events IDENTICAL, zero warnings; warm
+  drains ×13.0/×12.5) and (2) the full drift net green on the committed P2 tree (SC 184
+  = tests + validation: b3 golive/multiday digests, duckdb-streaming parity,
+  decision-diff, d1 streaming-vs-batch, production-pair parity; repo-root ruff; QL 751
+  via the editable install). The row-wise path was deleted only on full green (the W3a
+  P1 quote-pass convention; the proof harness re-runs at the pre-delete commit
+  `332ad3e`). Documented edge deviations, all unreachable on store data (zero-warning
+  proof tallies attest): inf-price / out-of-datetime-range-timestamp / uint64-overflow
+  cells now warn-and-skip the ROW where the row-wise path aborted the FILE (and
+  |price/tick| > 2^62 now warns instead of emitting a wrapped int). D-P-14's REMAINING
+  scope — L1 event cache, single-pass quote collection, parallel day-pool — stays
+  post-soak. Why: the stop-gated build was ~2×513s/day of reader decode; an
+  output-identical reader swap under proof + net is churn-free and cuts the build
+  projection 24.1 h → ~8.7 h (the residual is the non-reader ~420s/day — exactly the
+  post-soak scope). Enforced: this entry; the W3a record's W3A-READER subsection;
+  proof log + drift-net tallies as receipts.
 
 ## How to add an entry
 New ruling in a design exchange → it gets the next D-P id, lands here in the same
