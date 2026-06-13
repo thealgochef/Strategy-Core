@@ -26,7 +26,6 @@ from strategy_core.data.events import (
     DataQualityWarning,
     safe_source,
 )
-from strategy_core.data.ordering import side_signed_price_ticks
 from strategy_core.types import Quote, Trade
 
 __all__ = ["DatabentoParquetSource"]
@@ -39,11 +38,10 @@ TOB_ALIASES = (
 )
 BID_SIZE_ALIASES = ("bid_size", "bid_sz", "bid_sz_00")
 ASK_SIZE_ALIASES = ("ask_size", "ask_sz", "ask_sz_00")
-# W3A-READER P2: ROWWISE path only (kept alive until P3 passes); includes ts_recv,
-# which the decode never used — the vectorized selection below drops it.
-TRADE_SELECTED = (
+#: W3A-READER P2: the decode reads only columns the normalization consumes
+#: (the retired row-wise path also decoded ts_recv and discarded it).
+DECODE_SELECTED = (
     "ts_event",
-    "ts_recv",
     "sequence",
     "seq",
     "instrument_id",
@@ -68,9 +66,6 @@ TRADE_SELECTED = (
     "ask_sz",
     "ask_sz_00",
 )
-#: W3A-READER P2: the vectorized decode reads only columns the normalization
-#: consumes (ts_recv was decoded and discarded by the row-wise path).
-DECODE_SELECTED = tuple(name for name in TRADE_SELECTED if name != "ts_recv")
 
 SortKey = tuple[datetime, int, int, int]
 SourceItem = tuple[SortKey, Trade | Quote] | DataQualityWarning
@@ -981,207 +976,6 @@ class DatabentoParquetSource:
         )
         return warnings, decoded
 
-    # ── W3A-READER P2: row-wise path, kept alive until the P3 identity proof ──
-    # passes; P3c deletes everything in this section (same convention as the
-    # W3a P1 quote-pass vectorization).
-
-    def _events_rowwise(self) -> Iterator[Trade | Quote | DataQualityWarning]:
-        yield from self.pending_warnings
-        streams = [
-            iter(self._scan_file_rowwise(Path(path), self._window_for(index)))
-            for index, path in enumerate(self.paths)
-        ]
-        if not streams:
-            return
-        heap: list[tuple[SortKey, int, int, Trade | Quote]] = []
-        tie = count()
-        primed = [False] * len(streams)
-        exhausted = [False] * len(streams)
-
-        def ready() -> bool:
-            return all(is_primed or is_exhausted for is_primed, is_exhausted in zip(primed, exhausted, strict=True))
-
-        def prime(index: int) -> Iterator[DataQualityWarning]:
-            while not primed[index] and not exhausted[index]:
-                try:
-                    item = next(streams[index])
-                except StopIteration:
-                    exhausted[index] = True
-                    break
-                if isinstance(item, DataQualityWarning):
-                    yield item
-                    continue
-                key, event = item
-                heappush(heap, (key, next(tie), index, event))
-                primed[index] = True
-
-        while not ready():
-            progressed = False
-            for stream_index in range(len(streams)):
-                if primed[stream_index] or exhausted[stream_index]:
-                    continue
-                for warning in prime(stream_index):
-                    yield warning
-                    progressed = True
-                    break
-                if primed[stream_index] or exhausted[stream_index]:
-                    progressed = True
-                    break
-            if not progressed:
-                break
-
-        # L1 dedup: a Quote is emitted only when level-0 state (bid/ask price or
-        # size) changes from the previously *emitted* top-of-book state. Applies
-        # across the whole merged stream, so it holds for multi-file day windows.
-        last_tob: tuple[int, int, int, int] | None = None
-        while heap:
-            _, _, stream_index, event = heappop(heap)
-            if isinstance(event, Quote):
-                tob = (
-                    event.bid_price_ticks,
-                    event.ask_price_ticks,
-                    event.bid_size,
-                    event.ask_size,
-                )
-                if tob != last_tob:
-                    last_tob = tob
-                    yield event
-            else:
-                yield event
-            primed[stream_index] = False
-            for warning in prime(stream_index):
-                yield warning
-            while not ready():
-                for idx in range(len(streams)):
-                    if not primed[idx] and not exhausted[idx]:
-                        for warning in prime(idx):
-                            yield warning
-                        break
-                else:
-                    break
-
-    def _scan_file_rowwise(
-        self, path: Path, window: tuple[datetime | None, datetime | None]
-    ) -> Iterator[SourceItem]:
-        import pyarrow.parquet as pq
-
-        source = safe_source(str(path)) or "historical-parquet"
-        try:
-            parquet = pq.ParquetFile(path)
-        except Exception as exc:
-            yield self._warning(DataQualityCode.INVALID_RECORD, f"could not open historical parquet: {type(exc).__name__}", source, severity=DataQualitySeverity.ERROR)
-            return
-        # audit N5: schema_arrow decode can fail on a corrupt file footer; warn-and-skip.
-        try:
-            names = set(parquet.schema_arrow.names)
-        except Exception as exc:
-            yield self._warning(DataQualityCode.INVALID_RECORD, f"could not decode historical parquet: {type(exc).__name__}", source, severity=DataQualitySeverity.ERROR)
-            return
-        schema = self.schema.lower()
-        is_trade_schema = schema in {"trades", "trade"}
-        is_mbp10 = schema in {"mbp-10", "mbp10", "cmbp-10", "cmbp10"}
-        is_tob = schema in {"mbp-1", "cmbp-1", "bbo", "cbbo", "tbbo"}
-        if is_trade_schema:
-            missing = TRADE_REQUIRED - names
-        elif is_mbp10:
-            missing = MBP10_REQUIRED - names
-        elif is_tob:
-            missing = self._missing_tob(names)
-        else:
-            yield self._warning(DataQualityCode.UNSUPPORTED_SCHEMA, "unsupported historical parquet schema", source, severity=DataQualitySeverity.ERROR)
-            return
-        if missing:
-            yield self._warning(DataQualityCode.MISSING_REQUIRED_COLUMN, "missing required historical parquet fields", source, severity=DataQualitySeverity.ERROR, missing=sorted(missing))
-            return
-        selected = [name for name in TRADE_SELECTED if name in names]
-        # audit N5: the front-month prescan and iter_batches/to_pylist decode read
-        # actual data pages, so a corrupt page must warn-and-skip this file instead
-        # of aborting the k-way merge. Per-row warn/skip behavior is unchanged: row
-        # warnings are still yielded inline below; only decode failures land here.
-        try:
-            window_start, window_end = window
-            start = window_start.astimezone(UTC) if window_start is not None else None
-            end = window_end.astimezone(UTC) if window_end is not None else None
-            # W1 P1: prune row groups by ts_event statistics so a narrow window
-            # (e.g. the prior-day hour of a trading-day composition) never decodes
-            # the whole file. Conservative: groups without usable stats are kept;
-            # the exact per-row window filter below is unchanged.
-            row_groups = self._window_row_groups(parquet, start, end)
-            front_month_id = (
-                self._front_month_instrument_id(parquet, selected, row_groups)
-                if self.front_month_only
-                else None
-            )
-            for batch in parquet.iter_batches(
-                columns=selected, batch_size=self.batch_size, row_groups=row_groups
-            ):
-                events: list[tuple[SortKey, Trade | Quote]] = []
-                for row in batch.to_pylist():
-                    if self.front_month_only and self._is_off_front_month(row, front_month_id):
-                        continue
-                    normalized = self._normalize_row(row, schema=schema, source=source, is_trade_schema=is_trade_schema, is_mbp10=is_mbp10, is_tob=is_tob)
-                    for item in normalized:
-                        if isinstance(item, DataQualityWarning):
-                            yield item
-                            continue
-                        key, event = item
-                        if start is not None and event.event_ts_utc < start:
-                            continue
-                        if end is not None and event.event_ts_utc >= end:
-                            continue
-                        events.append((key, event))
-                yield from sorted(events, key=lambda item: item[0])
-        except Exception as exc:
-            yield self._warning(DataQualityCode.INVALID_RECORD, f"could not decode historical parquet: {type(exc).__name__}", source, severity=DataQualitySeverity.ERROR)
-            return
-
-    def _normalize_row(self, row: dict[str, Any], *, schema: str, source: str, is_trade_schema: bool, is_mbp10: bool, is_tob: bool) -> tuple[SourceItem, ...]:
-        items: list[SourceItem] = []
-        if is_trade_schema or (is_mbp10 and self._is_trade_action(row.get("action"))):
-            items.append(self._normalize_trade(row, schema=schema, source=source))
-        if is_tob or (is_mbp10 and self._has_top_of_book(row)):
-            items.append(self._normalize_quote(row, schema=schema, source=source))
-        return tuple(items)
-
-    def _normalize_trade(self, row: dict[str, Any], *, schema: str, source: str) -> SourceItem:
-        ts = self._timestamp(row.get("ts_event"), source=source)
-        if isinstance(ts, DataQualityWarning):
-            return ts
-        price_ticks = self._price_ticks(row.get("price"), source=source)
-        if isinstance(price_ticks, DataQualityWarning):
-            return price_ticks
-        size = row.get("size")
-        if not isinstance(size, int) or isinstance(size, bool) or size <= 0:
-            return self._warning(DataQualityCode.INVALID_RECORD, "invalid historical parquet record", source, event_ts_utc=ts)
-        side_text = self._as_text(row.get("side"))
-        side = None if side_text is None else side_text.upper()
-        trade = Trade(event_ts_utc=ts, price_ticks=price_ticks, size=size, side=side)
-        sequence = self._optional_int(row.get("sequence")) or self._optional_int(row.get("seq")) or 0
-        key = (ts, sequence, side_signed_price_ticks(trade, buy_side=BUY_AGGRESSOR_SIDE), size)
-        return key, trade
-
-    def _normalize_quote(self, row: dict[str, Any], *, schema: str, source: str) -> SourceItem:
-        _ = schema
-        ts = self._timestamp(row.get("ts_event"), source=source)
-        if isinstance(ts, DataQualityWarning):
-            return ts
-        bid = self._price_ticks(self._first(row, TOB_ALIASES[0]), source=source)
-        ask = self._price_ticks(self._first(row, TOB_ALIASES[1]), source=source)
-        if isinstance(bid, DataQualityWarning):
-            return bid
-        if isinstance(ask, DataQualityWarning):
-            return ask
-        quote = Quote(
-            event_ts_utc=ts,
-            bid_price_ticks=bid,
-            ask_price_ticks=ask,
-            bid_size=self._optional_int(self._first(row, ("bid_size", "bid_sz", "bid_sz_00"))) or 0,
-            ask_size=self._optional_int(self._first(row, ("ask_size", "ask_sz", "ask_sz_00"))) or 0,
-        )
-        sequence = self._optional_int(row.get("sequence")) or self._optional_int(row.get("seq")) or 0
-        return (ts, sequence, 0, 0), quote
-
-    # ── end of the row-wise section P3c deletes ────────────────────────────────
 
     @staticmethod
     def _window_row_groups(
@@ -1283,13 +1077,6 @@ class DatabentoParquetSource:
             return None
         return max(ranked)[1]
 
-    def _is_off_front_month(self, row: dict[str, Any], front_month_id: int | None) -> bool:
-        if self._is_spread_symbol(row.get("raw_symbol") or row.get("symbol")):
-            return True
-        if front_month_id is None:
-            return False
-        return self._optional_int(row.get("instrument_id")) != front_month_id
-
     @staticmethod
     def _as_text(value: Any) -> str | None:
         """Decode parquet string-ish cells; mixed columns surface as bytes."""
@@ -1299,20 +1086,6 @@ class DatabentoParquetSource:
         if isinstance(value, bytes):
             return value.decode("utf-8", errors="replace")
         return str(value)
-
-    @staticmethod
-    def _is_spread_symbol(value: Any) -> bool:
-        text = DatabentoParquetSource._as_text(value)
-        return text is not None and "-" in text
-
-    @staticmethod
-    def _is_trade_action(value: Any) -> bool:
-        text = DatabentoParquetSource._as_text(value)
-        return text is not None and text.upper() in {"T", "TRADE"}
-
-    @staticmethod
-    def _has_top_of_book(row: dict[str, Any]) -> bool:
-        return any(name in row and row.get(name) is not None for aliases in TOB_ALIASES for name in aliases)
 
     @staticmethod
     def _missing_tob(names: set[str]) -> set[str]:
@@ -1369,13 +1142,6 @@ class DatabentoParquetSource:
             return int(value)
         except (TypeError, ValueError):
             return None
-
-    @staticmethod
-    def _first(row: dict[str, Any], names: tuple[str, ...]) -> Any:
-        for name in names:
-            if row.get(name) is not None:
-                return row.get(name)
-        return None
 
     @staticmethod
     def _warning(code: DataQualityCode, message: str, source: str, *, severity: DataQualitySeverity = DataQualitySeverity.WARNING, event_ts_utc: datetime | None = None, **metadata: Any) -> DataQualityWarning:
