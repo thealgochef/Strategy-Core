@@ -130,6 +130,33 @@ proven on a FRESH model, then soaked ≥7 trading days before any number is trus
   projection 24.1 h → ~8.7 h (the residual is the non-reader ~420s/day — exactly the
   post-soak scope). Enforced: this entry; the W3a record's W3A-READER subsection;
   proof log + drift-net tallies as receipts.
+- D-P-16 RATIFIED (2026-07-03) — W3b READER ADOPTION on the reduced-coverage re-gate:
+  the vectorized `DatabentoParquetSource` (SC `332ad3e` decode + `37359ae` row-wise
+  delete) is THE reader — research (QL), serving (TL), and the gate all consume it;
+  the pre-vectorization installed reader is RETIRED (no consumer may resolve it: both
+  pins move to the adopting SC tip, and the rebuilt bundle `NQ_W3_20260617T220752Z`
+  supersedes the stale-reader `NQ_W3_20260613T055600Z` as the W3 artifact). Acceptance
+  evidence, two independent legs: (1) CORRECTNESS — `READER_CORRECTNESS_PROOF.md`
+  (TL root, 2026-06-17): byte-correct vs raw parquet, incl. a full 1,968,223-event
+  trading day and the 159,256-event window straddling the disputed 10:54 ET PDL touch.
+  (2) BATCH≡STREAM on the rebuild — the REDUCED-COVERAGE re-gate: 30-day journal base
+  (2025-11-21→12-17 contiguous + 12-18 + 12-23 + a 5-day spread) 92/92 HARD-GREEN;
+  dense 7-day set {12-18, 12-23, 01-20, 01-29, 02-03, 02-12, 02-13} 29/29 HARD-GREEN
+  at workers=2 AND workers=4 with IDENTICAL per-day rows (worker-count nondeterminism
+  ruled out); 2-day bench 8/8 at workers=1/2; 0 mismatches on every axis in every run;
+  watchdog(120 s) fires: 0. Why REDUCED (not full-73-day) coverage is accepted: the
+  spread is stress-weighted — it contains the densest days (6 of the 7 dense-set days
+  ≥1 GB) and BOTH previously-problematic days, each now explained and green (12-18,
+  the end-of-stream wedge = a harness/runtime terminalization livelock, fixed at both
+  layers + regression-tested, completes 13,483,063 events; 02-12, the stale-cache RED
+  = None-seeded standalone cache, regenerated seeded + QL `098e354` guard, now 5/5).
+  The drift class the gate exists to catch was thereby empirically DISCHARGED on the
+  hardest inputs — greens on non-problematic days are informative because the failure
+  modes were run down to root cause, not assumed away — and the 06-16 full-73-day
+  236/236 stale-reader run stands as CONSISTENCY evidence that the shared pipeline is
+  deterministic end-to-end. The un-re-gated remainder (38 of 73 days) is accepted
+  risk, bounded by legs (1)+(2). References: D-P-15 (the identity-proof vectorization
+  this adoption completes); PROGRESS §W3b CLOSE (the coverage table + run artifacts).
 
 ## How to add an entry
 New ruling in a design exchange → it gets the next D-P id, lands here in the same
