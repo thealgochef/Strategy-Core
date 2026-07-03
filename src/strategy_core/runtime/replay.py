@@ -176,6 +176,24 @@ class ReplayRuntime:
             self._last_error = type(exc).__name__
             self._last_message = safe_text(str(exc)) or type(exc).__name__
             self._failed_at_utc = datetime.now(UTC)
+        finally:
+            # Liveness guard: a BaseException (asyncio.CancelledError,
+            # KeyboardInterrupt, SystemExit, GeneratorExit) bypasses the
+            # `except Exception` above and would otherwise leave _state pinned at
+            # RUNNING (set at the top of this method) — stranding every status()
+            # poller forever (the W3b headless replay _drive livelock). Record a
+            # terminal FAILED here WITHOUT swallowing the exception: a bare
+            # `finally` re-raises whatever is in flight after it runs, so a
+            # cancellation still cancels, but pollers always observe a terminal
+            # state. No-op on every normal exit (state is already COMPLETED /
+            # FAILED / STOPPED).
+            if self._state in (ReplayState.RUNNING, ReplayState.PAUSED):
+                self._state = ReplayState.FAILED
+                self._last_error = self._last_error or "aborted"
+                self._last_message = (
+                    self._last_message or "historical replay aborted before terminal state"
+                )
+                self._failed_at_utc = datetime.now(UTC)
 
     async def pause(self) -> None:
         if self._state == ReplayState.RUNNING:

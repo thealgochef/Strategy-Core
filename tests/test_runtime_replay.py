@@ -2,6 +2,8 @@ import asyncio
 import time
 from datetime import UTC, datetime
 
+import pytest
+
 from strategy_core.runtime.replay import ReplayConfig, ReplayRuntime, ReplayState
 from strategy_core.runtime.state import StrategyRuntime
 from strategy_core.types import Trade
@@ -12,6 +14,10 @@ class _Source:
         self._items = items
     def events(self):
         yield from self._items
+
+
+class _Boom(BaseException):
+    """A BaseException (NOT an Exception): what escapes ``except Exception``."""
 
 class _FailingSource:
     def events(self):
@@ -69,6 +75,26 @@ def test_replay_runtime_accepts_custom_processor_and_update_callback() -> None:
     assert replay.status().events_processed == 1
     assert processed == [trade]
     assert updates == ["update"]
+
+
+def test_replay_baseexception_still_reaches_terminal_failed_state() -> None:
+    """A BaseException escaping ``except Exception`` must NOT leave _state pinned
+    at RUNNING — the liveness ``finally`` records terminal FAILED (so status()
+    pollers cannot spin forever) while still re-raising the exception."""
+
+    trade = Trade(datetime(2026, 1, 6, 14, 0, tzinfo=UTC), 68000, 1, "B")
+
+    def boom(_item):
+        raise _Boom("simulated cancellation / abort")
+
+    replay = ReplayRuntime(None, _Source([trade]), process_item=boom)
+
+    with pytest.raises(_Boom):
+        asyncio.run(replay.start(ReplayConfig(speed=0)))
+
+    status = replay.status()
+    assert status.state is ReplayState.FAILED
+    assert status.failed_at_utc is not None
 
 
 def test_replay_fetches_blocking_source_items_off_event_loop_and_honors_stop() -> None:
