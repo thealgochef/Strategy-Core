@@ -30,10 +30,6 @@ they land in PROGRESS. Doc-only; commits ride the next greenlight.
 
 ## Tier 3 — Near-term (queued behind W3b)
 
-- **TL warm-up thread.** The viewport fix `ddcfdc0` broke warm-up replay; warm-up **and**
-  full marker-history visibility are both dark and need restoring.
-- **D1b — flip TL dashboard to `StreamingHonestResolver`, retire `OutcomeTracker`.** Prompt
-  delivered; pending execution.
 - **TL live-insight surfaces UI.** Surface the serving stack's live insight as first-class UI
   panels — predictions/probabilities with gate state, level/touch context, drop reasons, and
   the prediction-journal history; today the chart markers + hover tooltip are the only surface.
