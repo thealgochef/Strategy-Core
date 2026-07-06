@@ -13,6 +13,10 @@ they land in PROGRESS. Doc-only; commits ride the next greenlight.
   validated the **replay** reader (`DatabentoParquetSource`) against raw ground truth; the soak
   runs the **live** path, which is a separate code path with no equivalent raw-bytes proof yet.
   Audit the live normalize path to the same standard before trusting live numbers.
+  Rider (2026-07-06, SEED window): live seed key/skip divergence from training's carry on
+  holiday keys (weekday-only `prior_trading_day` + skip-on-empty-fetch, no backward walk;
+  e.g. 2025-12-26 keys empty 12-25) is papered over only by the 2-day warm-start's organic
+  banking — verify against the carry in this audit (SEED_PARITY_RECON §2).
 - **Counter-vs-QL equality test for the Finding-1 asymmetry reconciler.** The
   `classify_serving_only` reconciler (the deliberate `<5-interaction-print` serving asymmetry)
   needs a test asserting its counter matches QL's, owed to a fully-green W3b.
@@ -33,10 +37,15 @@ they land in PROGRESS. Doc-only; commits ride the next greenlight.
 - **TL live-insight surfaces UI.** Surface the serving stack's live insight as first-class UI
   panels — predictions/probabilities with gate state, level/touch context, drop reasons, and
   the prediction-journal history; today the chart markers + hover tooltip are the only surface.
-- **Verify-prior-session-levels recon.** Recon TL's LIVE prior-session level seeding (rolling
-  PDH/PDL + session extremes) against the canonical store for a sample of live days. The W3b
-  gate proves the REPLAY path's seeding (and 02-12 showed exactly how a wrong seed silently
-  changes the level set); the live path's equivalent is unproven.
+- **Verify-prior-session-levels — build half (IN-FLIGHT: the SEED window; close in its
+  PROGRESS record).** The verification half CLOSED 2026-07-06 (`SEED_PARITY_RECON.md` at the
+  TL root; PROGRESS record of the same date): QL's `prev_full_hl` carry proven tick-exact vs
+  canonical prior-day extremes on 7/7 probes (incl. Christmas/Sunday-file/store-hole
+  carry-through, independent pyarrow cross-check to exact trade counts); the TL dashboard
+  replay proven structurally UNSEEDED (no seed call on the path, fresh plugin per reset,
+  single-day window cannot roll). Remaining (this window): SC canonical store-walk helper +
+  TL replay-start seeding + the QL cache-stamp churn fix. The LIVE-path divergence moved to
+  the Tier-1 live-reader audit rider.
 - **QL Training UI (`ml_training_tab.py`).** Pin-features multiselect, RFECV decoupling,
   fold-scheme controls.
 - **IFVG plugin `ifvg_smc`.** Design complete through Phase 5; open **Q-40** (4H/1H bar
