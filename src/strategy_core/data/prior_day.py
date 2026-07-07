@@ -12,9 +12,16 @@ This is the canonical store-walk for prior-day seeding. ``SEED_PARITY_RECON.md``
 short sessions, the Christmas empty-window carry-through (12-25 -> 12-24), the
 Sunday-file carry (2026-01-11 -> 2026-01-09), and the 2025-11-20 store-hole — with an
 independent pyarrow re-computation agreeing on every day including exact trade counts.
-A consumer that seeds ``load_prior_day_summary`` from this walk therefore reproduces the
-training seed exactly (the SC emission lookup is most-recent-banked-below-D, so any
-banked key ``< D`` emits identically; see the recon §4).
+A consumer that seeds ``load_prior_day_summary`` from this walk reproduces the training
+seed exactly on every recon-probed day (the SC emission lookup is
+most-recent-banked-below-D, so any banked key ``< D`` emits identically; recon §4). Two
+recon-documented caveats scope that guarantee: (1) front-month election differs
+mechanically from QL's bar builder (this reader: dominant instrument by TRADE-row count;
+QL TickStore: all-row count over the two-day union) — it did not bite on any probe day
+but is unproven on roll-week days (recon §5); (2) a TRAINING WINDOW's first day carries
+a cold ``None`` seed in QL, while this walk seeds from pre-window store days — the
+documented window-first-day divergence (the SEED close record in
+``PLATFORM_REFACTOR_PROGRESS.md``).
 
 Walk semantics (mirrors QL's carry-through): a candidate day whose trading-day window
 contains zero trades — an empty directory, a directory without a recognized day file, or
@@ -58,9 +65,14 @@ def prior_full_day_extremes(
     canonical reader's trading-day stream is drained (``front_month_only`` default True)
     accumulating max/min of ``Trade.price_ticks``; the first candidate with at least one
     trade in its window wins. Directories that exist but yield no events (no day file,
-    or no in-window trades) are empty candidates, not errors. An exhausted walk returns
-    ``None`` — the caller's cold-start case, parity-consistent with QL's first window day.
+    or no in-window trades) are empty candidates, not errors. Only strict ``YYYY-MM-DD``
+    directory names are candidates (``date.fromisoformat`` also accepts compact and
+    ISO-week forms that would resolve to a DIFFERENT directory name downstream). A
+    non-positive ``max_walk_days`` walks nothing. An exhausted walk returns ``None`` —
+    the caller's cold-start case, parity-consistent with QL's first window day.
     """
+    if max_walk_days <= 0:
+        return None
     root = Path(symbol_dir)
     if not root.is_dir():
         return None
@@ -73,6 +85,8 @@ def prior_full_day_extremes(
             day = date.fromisoformat(entry.name)
         except ValueError:
             continue
+        if day.isoformat() != entry.name:
+            continue  # compact/ISO-week forms parse but name a different directory
         if day < trading_day:
             candidates.append(day)
 
