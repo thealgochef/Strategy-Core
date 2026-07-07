@@ -31,14 +31,17 @@ they land in PROGRESS. Doc-only; commits ride the next greenlight.
 - **Minor cosmetics.** `c6fc42c` parses `--pin-features` via `_parse_sessions` (works;
   cosmetic naming); `ef77885` proof note on low-touch days (timings near-neutral because
   unseeded proof days yield few touches — record the caveat).
+- **Warmer stamp-convention test (SEED verify residue, 2026-07-06).** QL
+  `w3_cache_warmer`'s entering-seed stamp is declared load-bearing by the SEED P3 record
+  (the builder now matches ITS convention) but has zero test coverage — add a warmer-side
+  companion test next to `tests/agents/test_cache_seed_guard.py` pinning `_seed_for_day`
+  + the stamp it writes.
 
 ## Tier 3 — Near-term (queued behind W3b)
 
 - **TL live-insight surfaces UI.** Surface the serving stack's live insight as first-class UI
   panels — predictions/probabilities with gate state, level/touch context, drop reasons, and
   the prediction-journal history; today the chart markers + hover tooltip are the only surface.
-- **QL Training UI (`ml_training_tab.py`).** Pin-features multiselect, RFECV decoupling,
-  fold-scheme controls.
 - **IFVG plugin `ifvg_smc`.** Design complete through Phase 5; open **Q-40** (4H/1H bar
   anchoring); blocked on W3b.
 
