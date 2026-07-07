@@ -37,15 +37,6 @@ they land in PROGRESS. Doc-only; commits ride the next greenlight.
 - **TL live-insight surfaces UI.** Surface the serving stack's live insight as first-class UI
   panels — predictions/probabilities with gate state, level/touch context, drop reasons, and
   the prediction-journal history; today the chart markers + hover tooltip are the only surface.
-- **Verify-prior-session-levels — build half (IN-FLIGHT: the SEED window; close in its
-  PROGRESS record).** The verification half CLOSED 2026-07-06 (`SEED_PARITY_RECON.md` at the
-  TL root; PROGRESS record of the same date): QL's `prev_full_hl` carry proven tick-exact vs
-  canonical prior-day extremes on 7/7 probes (incl. Christmas/Sunday-file/store-hole
-  carry-through, independent pyarrow cross-check to exact trade counts); the TL dashboard
-  replay proven structurally UNSEEDED (no seed call on the path, fresh plugin per reset,
-  single-day window cannot roll). Remaining (this window): SC canonical store-walk helper +
-  TL replay-start seeding + the QL cache-stamp churn fix. The LIVE-path divergence moved to
-  the Tier-1 live-reader audit rider.
 - **QL Training UI (`ml_training_tab.py`).** Pin-features multiselect, RFECV decoupling,
   fold-scheme controls.
 - **IFVG plugin `ifvg_smc`.** Design complete through Phase 5; open **Q-40** (4H/1H bar
