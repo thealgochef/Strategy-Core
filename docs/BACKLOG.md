@@ -17,6 +17,12 @@ they land in PROGRESS. Doc-only; commits ride the next greenlight.
   holiday keys (weekday-only `prior_trading_day` + skip-on-empty-fetch, no backward walk;
   e.g. 2025-12-26 keys empty 12-25) is papered over only by the 2-day warm-start's organic
   banking — verify against the carry in this audit (SEED_PARITY_RECON §2).
+  Rider (2026-07-07, WARM-FIX window): the wedge fix upgraded the live host SDK
+  databento 0.71.0 → 0.81.0 (databento_dbn 0.49.0 → 0.62.0) and TL declared the floor
+  `databento>=0.79` (first release with the `Live.start()` thread-marshaling fix;
+  `subscribe()` is still caller-thread as of 0.81.0, so TL's facade marshals it — see the
+  2026-07-07 PROGRESS wedge record). This audit must therefore run against the NEW SDK's
+  live record shapes, not the 0.71-era ones the June sessions used.
 - **Counter-vs-QL equality test for the Finding-1 asymmetry reconciler.** The
   `classify_serving_only` reconciler (the deliberate `<5-interaction-print` serving asymmetry)
   needs a test asserting its counter matches QL's, owed to a fully-green W3b.
@@ -39,6 +45,15 @@ they land in PROGRESS. Doc-only; commits ride the next greenlight.
 
 ## Tier 3 — Near-term (queued behind W3b)
 
+- **TL 8000-bar shared closed-bar cap — midday-restart eviction (chart-only,
+  WARM_PERF_RECON §5, 2026-07-07).** `recent_closed_bar_limit=8_000` (TL `app.py`) is ONE
+  list shared across all three timeframes (SC `state.py` — not per-timeframe). Two full July
+  warm days ≈ 6,267 bars, so a live restart from ~midday onward on average-or-heavier days
+  pushes past the cap and silently evicts the oldest warm bars (worst measured Feb case
+  ≈ 10,212 → ~2,212 evicted); the "never truncated" comment at the cap site holds only for
+  early-session restarts. Chart/display only — the honest resolver and features do not read
+  this list. Fix candidates: per-timeframe caps (matching the frontend's per-timeframe 8k)
+  or a day-aware cap.
 - **TL live-insight surfaces UI.** Surface the serving stack's live insight as first-class UI
   panels — predictions/probabilities with gate state, level/touch context, drop reasons, and
   the prediction-journal history; today the chart markers + hover tooltip are the only surface.

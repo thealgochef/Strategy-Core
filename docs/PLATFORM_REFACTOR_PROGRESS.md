@@ -1517,7 +1517,7 @@ Phases A–E3: COMPLETE. W1: COMPLETE (pushed; pins bumped; CI witnessed). W2: C
 
 ---
 
-#### SEED — dashboard replays get the training-parity PDH/PDL seed; QL cache-stamp churn fixed (2026-07-06; cross-repo, LOCAL — NOT pushed)
+#### SEED — dashboard replays get the training-parity PDH/PDL seed; QL cache-stamp churn fixed (2026-07-06; cross-repo, PUSHED)
 
 **Scope (evidence base `SEED_PARITY_RECON.md` at the TL root; its §5 probe values are this window's test oracles):** SC gains ONE additive module — `strategy_core/data/prior_day.py`: `PriorDayExtremes` + `prior_full_day_extremes(symbol_dir, trading_day, *, requested_symbol=None, max_walk_days=10)` — the recon §5 ground-truth computation verbatim (dated store dirs strictly before the day, descending, <= max_walk_days candidates; drain the canonical `for_trading_day` reader per candidate accumulating max/min `Trade.price_ticks`; first candidate with >=1 front-month trade wins; empty dirs/dayless dirs/trade-less windows skipped like QL's carry-through; exhausted -> None). NO engine-path change; frozen digests untouched by construction (the full-suite pass, incl. validation/, is the check). TL `HistoricalReplayService.start` seeds day-mode replays: AFTER `runtime.reset` (the rebuilt SC service would wipe an earlier seed) and BEFORE the core replay task starts (the summary is banked before the first event), via `asyncio.to_thread`; found -> `runtime.levels.load_prior_day_summary(extremes.source_day, ...)` keyed by the WALKED day (SC emission is most-recent-banked-below-D, so any key < D emits identically to QL's calendar-D-1 key — recon §4) + "seeded PDH/PDL from <source_day>" in the loading feed status; walk miss -> warning + proceed unseeded (QL cold-start equivalent); ANY seed exception -> warning + proceed (a seed problem never kills a replay); non-day-mode (synthetic) replays unchanged. The `requested_symbol` threaded into the walk is `ReplayConfig.requested_symbol` (the same value the runtime reset and the day-mode scan already use). QL `build_utility_dataset` now stamps each day-D cache with the seed ENTERING D (`entering_seed` captured before the carry reassignment) — the value the trust check compares against on the next run and the warmer's convention; pre-fix the builder stamped the post-update carry (day D's OWN H/L), so every builder-written cache self-invalidated on the next run (recon §3(d) rebuild churn; content was never wrong — rebuilds used the correct seed).
 
@@ -1527,8 +1527,45 @@ Phases A–E3: COMPLETE. W1: COMPLETE (pushed; pins bumped; CI witnessed). W2: C
 
 **w3b harness interaction (recorded):** `headless_replay.py` passes `trading_day`/`symbol_dir`, so gate replays now ALSO get the service seed; its `_SeedingSource` still seeds during `scan()` — after the service seed — under key calendar D-1 >= the walked key, so on every day with a non-None QL carry the harness's entry wins the most-recent-banked lookup — with values proven tick-identical on every recon-probed day (7/7; the front-month election difference — reader trade-count vs TickStore all-row — did not bite on any probe but is unproven on roll-week days, recon §5): banked gate evidence unchanged. The one divergence is a window's FIRST day (e.g. 2025-11-21 in D-036): its cache was built with a cold None seed, but a re-gated replay now banks 11-19 extremes from the all-store walk — re-gating that day requires regenerating its cache under the all-store seed (or accounting for the delta). With seed values proven identical on every recon-probed day (and the roll-week election caveat above), dashboard replays are the w3b harness-equivalent on the proven surface, and the W3b gate evidence transfers to dashboard replays on that basis.
 
-**Gates (pre-verify trees):** SC **190 passed** (incl. the 5 new prior_day tests; validation/ digests green) + ruff clean (src/tests/scripts). TL backend **444 passed / 1 skipped** (incl. the 3 new seed tests) + ruff clean. QL **764 passed** (763 + the new stamp test) + ruff clean. `verify-prior-session-levels`: **CLOSED** (verification half by the recon, build half by this window; BACKLOG entry graduated). **Pins:** bump to the new SC tip at the greenlight (consumer-facing: TL imports `strategy_core.data.prior_day`). **NOT pushed (work-order FULL STOP).**
+**Gates (pre-verify trees):** SC **190 passed** (incl. the 5 new prior_day tests; validation/ digests green) + ruff clean (src/tests/scripts). TL backend **444 passed / 1 skipped** (incl. the 3 new seed tests) + ruff clean. QL **764 passed** (763 + the new stamp test) + ruff clean. `verify-prior-session-levels`: **CLOSED** (verification half by the recon, build half by this window; BACKLOG entry graduated). **Pins:** bump to the new SC tip at the greenlight (consumer-facing: TL imports `strategy_core.data.prior_day`).
+
+**Pushed (2026-07-06, greenlight):** SC `1650327` · TL `c92f13b` (pin bumped f9a1f63 → 1650327) · QL `75f83dc`. CI ×3 green with pin resolution witnessed: SC ci **28839878234** #6 success on 1650327 · TL backend-ci **28839902876** #8 success on c92f13b · QL ci **28839925480** #8 success on 75f83dc; both consumers' cold installs resolved strategy-core @ 1650327.
 
 **Adversarial verify (mandatory close gate, 2026-07-06):** read-only 25-agent workflow (5 lenses x find, then per-finding adversarial refutation) against the exact window commits — 20 findings, **18 CONFIRMED / 2 REFUTED**. Fixed in-window: TL `91e4537` — the 5-35 s seed drain had turned three previously-instantaneous `start()` gaps into real races (concurrent second start passed the `_task` guard; `status()` reported the PREVIOUS run's stale COMPLETED for the whole drain, which also punched through the app-level live/replay 409 exclusion; a mid-drain `stop()` was silently overwritten) — closed with an in-flight `_starting` flag, dropping the stale core handle first, and honoring `_stop_requested` post-drain; the seed try now also covers the banking call (the "ANY seed exception" claim is literally true) — all four pinned by new tests. SC `a4969a0` — non-positive `max_walk_days` walked all-but-|n| candidates (slice semantics; now walks nothing), lenient `date.fromisoformat` dir names consumed walk slots (now strict `YYYY-MM-DD` round-trip), docstring parity claim scoped to the recon-probed surface; the carry-through skip branch is now CI-runnable synthetically (out-of-window-rows + quotes-only candidates). Doc corrections in THIS commit: the two close-record overclaims ("guaranteed by the recon proof" scoped to the 7/7-probed surface with the roll-week election caveat; the cost figures re-attributed to this session's probe timings), the stale Tier-3 QL-Training-UI BACKLOG item removed (delivered by QL-UI-PARITY), and the warmer stamp-test gap filed as Tier-2. Report-only residue: QL empty-output days write no cache and rebuild each run (pre-existing, known-accepted warmer behavior); TL `ReplayStatus` counters during LOADING read from the internal fields (post-fix truthful). **Gates (final trees, post-fix):** SC **194 passed** + ruff clean · TL backend **447 passed / 1 skipped** + ruff clean · QL **764 passed** + ruff clean (unchanged).
+
+---
+
+#### Live post-drain wedge — root cause banked (2026-07-07; doc-op, opens the TL WARM-FIX window)
+
+The silent post-drain live stall (first observed as WARM_PERF_RECON's anomaly: 45+ min of
+`warm_start_state:"warming"`, counters frozen at the warm total, feed "connected", zero live events, no
+error) was captured and **reproduced deterministically (2/2)** under DEBUG instrumentation — evidence
+`WEDGE_CAPTURE.md` at the TL root. Root cause has three blind layers:
+
+1. **Cross-thread transport writes in databento-python.** `Live.subscribe()`/`Live.start()` execute the
+   gateway writes on the CALLING thread (`session.subscribe` → `protocol.subscribe` →
+   `transport.writelines`; same for `start`'s `transport.write` pre-0.79), while the transport belongs to
+   the SDK's private `databento_live` event loop — asyncio transports are not thread-safe. TL's
+   post-drain `_connect` (`databento.py:362`) runs on the uvicorn MainThread, so all six post-auth writes
+   raced the loop thread's auth-completion callback (~1 ms window). The capture shows CRAM auth succeed
+   (its writes run ON the loop thread) and then **zero inbound bytes ever** — no records and no
+   heartbeats despite the negotiated 30 s interval — i.e. the gateway never received subscribe/start.
+   The SDK's thread-safe paths (`stop()`, `call_soon_threadsafe(transport.close)`) worked instantly
+   mid-wedge, isolating the unsynchronized writes as the failing pair.
+2. **SDK watchdog blind at `math.inf`.** The SDK's own gateway-timeout monitor computes
+   `gap = loop.time() − _last_msg_loop_time`, but `_last_msg_loop_time` initializes to `math.inf` and is
+   only set by `received_record` — a session that never receives its FIRST record has gap = −inf
+   forever: no timeout, no reconnect, no exception. The SDK cannot self-heal exactly this failure.
+3. **TL status blind by construction.** FeedStatus CONNECTED is asserted before any live byte arrives,
+   `warm_start_state` flips only on a post-anchor event (which never comes), and nothing compares
+   last-event age to wall clock — the operator surface stays green over a dead feed.
+
+Upstream verdict: databento **0.79.0** (2026-06-02) fixed the `Live.start()`/`terminate()` half
+("thread-unsafe behavior … which would call methods from the client's event loop in the main thread");
+`subscribe()` writes **remain caller-thread as of 0.81.0** (verified from source). The TL WARM-FIX window
+takes: SDK floor >=0.79 with host install 0.81.0, facade-level marshaling of subscribe/start onto the
+SDK session loop (fail-loud if the loop handle is unreachable), a TL liveness watchdog (D-P-06
+single-retry), the warm inference gate, the schema-scoped warm fetch, and a real backend logging config
+(the wedge was also invisible because the deployment had none — WEDGE_CAPTURE §A.2).
 
 ---
