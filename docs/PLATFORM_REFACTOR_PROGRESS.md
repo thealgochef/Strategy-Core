@@ -1569,3 +1569,64 @@ single-retry), the warm inference gate, the schema-scoped warm fetch, and a real
 (the wedge was also invisible because the deployment had none — WEDGE_CAPTURE §A.2).
 
 ---
+
+#### WARM-FIX — live wedge fixed + warm gated + fetch scoped + logging (2026-07-08; TL window, CLOSED — LOCAL, not pushed)
+
+**Commits (TL, ordered, base c92f13b):** `4d0eb81` P1 wedge fix → `6019bef` P2 watchdog → `e69937f` P3
+warm gate → `0fcffa2` P4 scoped fetch → `850e361` P5 logging → `5a661ea` P6 verify fixes. SC: `7001f0c`
+(window-open doc-op) + this close record. Work order: WARM_PERF_RECON.md + WEDGE_CAPTURE.md at the TL root.
+
+**P1 (wedge fix + SDK verdict):** host SDK upgraded databento 0.71.0 → **0.81.0** (databento_dbn 0.49.0 →
+0.62.0); upstream **0.79.0** fixed the `Live.start()`/`terminate()` half of the cross-thread write bug,
+`subscribe()` still writes caller-thread as of 0.81.0 (verified from source) — so the TL facade now
+force-connects with zero subscription writes (guarded private-handle access, LOUD failure if the SDK
+shape moved) and marshals every subscribe/start onto the SDK session loop via call_soon_threadsafe with
+a bounded wait. Floor declared as the new pyproject extra `[live] databento>=0.79` (SDK stays optional).
+**P2 (watchdog):** post-drain silence beyond `TRADE_LAB_LIVE_WATCHDOG_SECONDS` (default 120) → loud
+wedge-signature error + DEGRADED + the D-P-06 single-attempt reconnect; second silent episode → FAILED.
+Disarms on the warm→live flip; liveness evidence includes the feed's provider-callback stamp (see verify
+fix 1). **P3 (warm gate):** runtime suppresses predict+resolver-register+journal atomically for
+observations whose ORIGINATING TOUCH predates the warm anchor (anchor-based after the verify pass);
+everything else builds unchanged; default off (replay/tests keep predict-on-completion). Kills the
+restart-duplicate mode="live" journal rows (WARM_PERF_RECON §2, measured up to ×10). **P4 (scoped
+fetch):** trades keep the full 2-prior-trading-day span; mbp-1 starts at now − (max(contract-driven
+buffer retention, settings baseline) + 10 min slack), read at fetch time (hot-swap staleness caveat in
+the docstring); per-schema end<=start guard + availability clamp; both spans logged at INFO. **P5
+(logging):** root→stderr with UTC timestamps at `TRADE_LAB_LOG_LEVEL` (default INFO), uvicorn.access
+capped WARNING (uvicorn launched with `log_config=None` so its dictConfig can't undo the cap — verify
+fix 5), databento at INFO / DEBUG when env DEBUG.
+
+**Live smoke (2026-07-08 03:55-04:03Z, Globex open, NQU6, real gateway, new SDK):** POST→200 in
+**19.8 s** (was 2 m 57 s); drain 966,315 warm events in ~116 s; **warm total 2 m 15 s vs ~20 min
+pre-fix** (recon projected ~1.5-2 min / ~0.96M — both hit); **warming→live flip observed** (the exact
+transition that wedged 2/2 pre-fix) with **20,789 live events** in the 5-min observation window,
+last-event lag sub-second; the INFO span line read "trades from 2026-07-05T22:00Z, quotes from
+2026-07-08T03:00:26Z (retention 45m + 10m slack)"; **zero journal rows** added (no model active — the
+gate's zero-rows proof is the P3 test set); clean stop ("connection closed" in 1 ms).
+
+**Adversarial verify (mandatory close gate):** read-only 35-agent workflow (5 lenses × find → 2
+adversarial refuters per finding) against the exact commits — 15 findings, **10 CONFIRMED / 2 PLAUSIBLE
+/ 3 REFUTED** (dedup → 6 distinct). Fixed in-window (TL `5a661ea`): (1) MAJOR heartbeat-blind watchdog —
+the adapter drops gateway SystemMsg heartbeats below the liveness stamp, so a healthy quiet-market start
+(weekend/halt) would double-strike into terminal FAILED; the feed now stamps
+`last_provider_activity_utc` on every provider callback and the watchdog folds it in (the
+WEDGE_CAPTURE §C.4 healthy-vs-wedge discriminator); (2) MAJOR reconnect-vs-replay collision — the
+internal auto-reconnect could reset the shared runtime + arm the gate under a replay started during the
+reconnect delay; it now checks the injected `_replay_is_active` predicate (audit #NN-2 extended to the
+internal path); (3) watchdog strikes reset on operator start (stale-strike leak denied a fresh session
+its retry); (4) gate seam-tail leak — warm touches whose windows cross the drain's end journaled
+duplicates post-flip; the gate became anchor/origin-based; (5) uvicorn.access cap was silently undone by
+uvicorn's default dictConfig (it names that logger); `log_config=None` now; (6) diverging per-schema
+availability ends (>60 s) now warn instead of hiding inside the max-based seam stamp. Upheld-plausible
+recorded: the P1 docstring's loop-block quantification corrected (~1-2 s connect+auth dominated).
+**Report-only residue (pre-existing):** `replay.stop()` on an IDLE never-started service stamps the
+shared runtime's feed status mode="replay", mislabeling subsequent live journal rows — filed here, not
+window-introduced.
+
+**Gates (final trees):** TL backend **466 passed / 1 skipped** + ruff clean; frontend tsc clean +
+vitest **154 passed** (16 files). SC untouched by code (docs only). Deliverables at the TL root:
+`WARMFIX_TL_DIFF.txt` (c92f13b..5a661ea), `WARMFIX_SC_DIFF.txt` (1650327..tip, docs only). **NOT pushed
+(work-order FULL STOP).** Pins unchanged (no SC code change; TL pyproject gained only the optional
+`[live]` extra).
+
+---
