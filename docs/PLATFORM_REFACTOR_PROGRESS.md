@@ -1630,3 +1630,46 @@ vitest **154 passed** (16 files). SC untouched by code (docs only). Deliverables
 `[live]` extra).
 
 ---
+
+#### WARM-FIX pushed annotation (2026-07-10)
+
+The WARM-FIX close record above (2026-07-08) recorded "CLOSED - LOCAL, not pushed". The window has
+since been GREENLIT + PUSHED: TL `origin/platform-refactor` = `5a661ea` with **backend-ci run
+29073049585 = success** (push event, branch platform-refactor); SC `origin/platform-refactor` =
+`6e94091` (docs only) with **ci run 29073067597 = success**. Pins unchanged (no SC code change in
+that window).
+
+---
+
+#### REPORT - performance surface: journal aggregator + read-only endpoint + Performance page (2026-07-10; TL window, CLOSED - local commit `8e54ad1`, not pushed)
+
+**Dual purpose:** the trader's reporting dashboard AND the D-P-12 soak adjudication artifact - one
+implementation, two consumers. **SUPERSESSION recorded:** this replaces the earlier plan of a
+QL-side adjudication script for the D-P-12 soak; adjudication now reads
+`GET /api/v1/performance` (or calls `trade_lab.services.performance.aggregate_performance`
+directly) instead of a bespoke QL script.
+
+**Commit (TL, base 5a661ea):** `8e54ad1` - `services/performance.py` (pure aggregator; no
+engine/registry/strategy_core imports), `GET /api/v1/performance` (read-only, per-request file
+opens, 404 clean on missing journal dir), Performance page (top-level tab: cards row with
+simulated-$ toggle at $20/pt labeled "simulated, 1-contract, no costs", cumulative curve + daily
+bars, trading-day CALENDAR on Mon-Fri trading weeks with 18:00 ET day keys + week subtotals +
+green/red intensity, per-class/level/session/drop/funnel tables, OOS-vs-journal panel when a
+bundle is active, journal data-quality strip). SC untouched (this doc-op only).
+
+**Recon facts built to (TL/REPORT_RECON.md):** ResolutionType is `tp_hit`/`sl_hit` ONLY - D1b
+retired force-labels; flatten/cutoff/no-resolution surface as DROP rows with no exit price, so
+they are excluded from net and bucketed by reason, never priced. Outcome rows carry no
+session/direction/eligibility (prediction join via `prediction_id`, across day files - a 17:59 ET
+prediction resolves into the next trading day's file). The OOS artifacts
+(`oos_predictions.parquet` 41 rows, `evaluation.json`) carry NO MFE/MAE - the comparison shows
+MFE/MAE journal-side only. Pricing proxy ladder: row tp/sl values > row `bundle_id` contract
+under `TRADE_LAB_MODELS_PATH` > explicitly requested bundle contract > unpriced bucket. Trades
+are dated by the OUTCOME's trading day; the funnel is prediction-cohort based (follows in-window
+predictions to their eventual fate). Every rate carries numerator/denominator; whole-directory
+anomaly buckets (malformed/duplicate-id/orphan/conflict/undated) are counted pre-filter.
+
+**Gates:** TL backend **485 passed / 1 skipped** + ruff clean; frontend **170 passed** (17 files,
+incl. 16 new viewmodel/calendar cases) + tsc + eslint clean. Live smoke against the real journal +
+active bundle `NQ_W3_20260613T055600Z`: page verified in-browser (cards/curve/bars/calendar/
+tables/OOS panel/$-toggle/month nav; zero console errors), model deactivated after.
