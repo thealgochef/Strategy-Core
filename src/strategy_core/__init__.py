@@ -107,6 +107,7 @@ from strategy_core.decisions.sessions import (
     trading_day_for,
 )
 from strategy_core.decisions.streaming import (
+    OpenSetupView,
     StreamDrop,
     StreamingHonestResolver,
     StreamResolution,
@@ -177,6 +178,7 @@ __all__ = [
     "StreamingHonestResolver",
     "StreamResolution",
     "StreamDrop",
+    "OpenSetupView",
     # contract
     "StrategyContract",
     "load_strategy_contract",

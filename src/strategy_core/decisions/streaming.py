@@ -63,7 +63,7 @@ from strategy_core.constants import (
 from strategy_core.decisions.outcomes import OutcomeResult, classify_mae_first
 from strategy_core.types import Bar, Direction
 
-__all__ = ["StreamDrop", "StreamResolution", "StreamingHonestResolver"]
+__all__ = ["OpenSetupView", "StreamDrop", "StreamResolution", "StreamingHonestResolver"]
 
 #: The bounded entry-print lookback (minutes) — the reference semantics of
 #: ``validation/decision_diff_harness.py:594-616`` (``ENTRY_LOOKBACK_MIN``) and the
@@ -116,6 +116,38 @@ class StreamResolution:
     entry_price: float
     resolved_ts_utc: datetime
     result: OutcomeResult
+
+
+@dataclass(frozen=True, slots=True)
+class OpenSetupView:
+    """Read-only projection of one open setup's registration-time economics (EXEC P1).
+
+    The honest fill and the barrier prices the resolver already implied at
+    registration, surfaced for OBSERVER consumers (Trade-Lab's paper-execution
+    tracker): the fill exists at ``register()`` but previously surfaced only at
+    resolution/drop. ``prediction_id`` is the caller's registration ``key``
+    (Trade-Lab registers the prediction id). ``entry_ts_utc`` is the decision
+    instant the fill was anchored at.
+
+    Prices are integer TICKS of the resolver's ``tick_size``: the fill comes off
+    the tick grid (a real print) and the production tp/sl offsets are tick
+    multiples, so ``round()`` only absorbs float representation noise. Barriers
+    follow the excursion rule exactly — LONG tp = entry + tp_points, sl =
+    entry - sl_points; SHORT mirrored. Both SL-side labels (trap and
+    blowthrough) share the one SL barrier; MAE-first arbitration is the
+    resolver's concern, not the view's.
+
+    Each ``open_setups()`` call constructs views fresh from the private state,
+    so an already-returned tuple is a point-in-time snapshot: later
+    ``on_bar``/``flush``/``reset`` calls never retro-change it.
+    """
+
+    prediction_id: object
+    entry_price_ticks: int
+    entry_ts_utc: datetime
+    direction: Direction
+    tp_price_ticks: int
+    sl_price_ticks: int
 
 
 @dataclass(slots=True)
@@ -190,6 +222,35 @@ class StreamingHonestResolver:
     @property
     def open_count(self) -> int:
         return len(self._open)
+
+    def open_setups(self) -> tuple[OpenSetupView, ...]:
+        """Snapshot every open setup as a read-only :class:`OpenSetupView`.
+
+        Additive observer accessor (EXEC P1): no mutation, no influence on
+        registration/advancement/resolution. See the view docstring for field
+        semantics; ordering follows registration order (the ``_open`` list).
+        """
+
+        tick = self._tick_size
+        views: list[OpenSetupView] = []
+        for setup in self._open:
+            if setup.direction is Direction.LONG:
+                tp_price = setup.entry_points + self._tp_points
+                sl_price = setup.entry_points - self._sl_points
+            else:  # SHORT
+                tp_price = setup.entry_points - self._tp_points
+                sl_price = setup.entry_points + self._sl_points
+            views.append(
+                OpenSetupView(
+                    prediction_id=setup.key,
+                    entry_price_ticks=round(setup.entry_points / tick),
+                    entry_ts_utc=setup.decision_ts_utc,
+                    direction=setup.direction,
+                    tp_price_ticks=round(tp_price / tick),
+                    sl_price_ticks=round(sl_price / tick),
+                )
+            )
+        return tuple(views)
 
     def register(
         self,

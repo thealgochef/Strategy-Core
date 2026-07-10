@@ -17,12 +17,13 @@ from datetime import UTC, date, datetime, time, timedelta
 from zoneinfo import ZoneInfo
 
 from strategy_core.decisions.streaming import (
+    OpenSetupView,
     StreamDrop,
     StreamingHonestResolver,
     StreamResolution,
 )
 from strategy_core.runtime.state import StrategyRuntime
-from strategy_core.types import Bar, Trade
+from strategy_core.types import Bar, Direction, Trade
 
 _ET = ZoneInfo("US/Eastern")
 _DAY = date(2025, 7, 15)  # a Tuesday
@@ -188,6 +189,76 @@ def test_no_resolution_via_on_bar_excludes_the_cutoff_straddling_bars_range() ->
     assert (drop.max_mfe, drop.max_mae) == (3.0, 1.0)  # the 10:10 bar only
     assert drop.bars_to_resolution == -1
     assert not isinstance(drop, StreamResolution)
+
+
+def test_open_setups_exposes_fill_and_barriers_per_direction() -> None:
+    # EXEC P1: the accessor projects the registration-time fill + implied
+    # barriers in ticks. _resolver policy: tick 0.25, tp 15.0, sl 30.0.
+    resolver = _resolver(trade_price_at=lambda ts: 23000.0)
+    assert resolver.open_setups() == ()
+    resolver.register("p-long", touch_bar_ts_utc=_et(10, 0), trading_day=_DAY, direction="long")
+    resolver.register("p-short", touch_bar_ts_utc=_et(10, 1), trading_day=_DAY, direction="short")
+    views = resolver.open_setups()
+    assert [v.prediction_id for v in views] == ["p-long", "p-short"]
+    long_view, short_view = views
+    assert isinstance(long_view, OpenSetupView)
+    assert long_view.entry_ts_utc == _et(10, 5)
+    assert long_view.direction is Direction.LONG
+    assert long_view.entry_price_ticks == 92000  # 23000.0 / 0.25
+    assert long_view.tp_price_ticks == 92060  # entry + 15.0 pts
+    assert long_view.sl_price_ticks == 91880  # entry - 30.0 pts
+    assert short_view.entry_ts_utc == _et(10, 6)
+    assert short_view.direction is Direction.SHORT
+    assert short_view.entry_price_ticks == 92000
+    assert short_view.tp_price_ticks == 91940  # entry - 15.0 pts
+    assert short_view.sl_price_ticks == 92120  # entry + 30.0 pts
+
+
+def test_open_setups_registration_drop_never_appears() -> None:
+    resolver = _resolver(trade_price_at=lambda ts: None)
+    drop = resolver.register(
+        "k", touch_bar_ts_utc=_et(10, 0), trading_day=_DAY, direction="long"
+    )
+    assert isinstance(drop, StreamDrop) and drop.reason == "no_fill"
+    assert resolver.open_setups() == ()
+
+
+def test_open_setups_resolved_and_flushed_setups_disappear() -> None:
+    resolver = _resolver(trade_price_at=lambda ts: 23000.0)
+    resolver.register("resolves", touch_bar_ts_utc=_et(10, 0), trading_day=_DAY, direction="long")
+    resolver.register("rides", touch_bar_ts_utc=_et(10, 1), trading_day=_DAY, direction="short")
+    assert len(resolver.open_setups()) == 2
+    # TP bar for the long (short MFE 0 / MAE 16 < sl 30 -> still open).
+    emitted = resolver.on_bar(_bar(_et(10, 10), 23016.0, 23000.0))
+    assert len(emitted) == 1 and isinstance(emitted[0], StreamResolution)
+    remaining = resolver.open_setups()
+    assert [v.prediction_id for v in remaining] == ["rides"]
+    # Terminal drop via flush removes the survivor too.
+    flushed = resolver.flush(_et(18, 0))
+    assert len(flushed) == 1 and flushed[0].reason == "no_resolution"
+    assert resolver.open_setups() == ()
+    # reset() clears as well (fresh registration, then reset).
+    resolver.register("cleared", touch_bar_ts_utc=_et(11, 0), trading_day=_DAY, direction="long")
+    assert len(resolver.open_setups()) == 1
+    resolver.reset()
+    assert resolver.open_setups() == ()
+
+
+def test_open_setups_tuple_is_a_point_in_time_snapshot() -> None:
+    resolver = _resolver(trade_price_at=lambda ts: 23000.0)
+    resolver.register("k", touch_bar_ts_utc=_et(10, 0), trading_day=_DAY, direction="long")
+    before = resolver.open_setups()
+    assert len(before) == 1
+    # Advance the engine past resolution: the already-returned tuple must not
+    # retro-change (frozen views constructed fresh per call).
+    emitted = resolver.on_bar(_bar(_et(10, 10), 23016.0, 23000.0))
+    assert len(emitted) == 1
+    assert resolver.open_setups() == ()
+    assert len(before) == 1
+    assert before[0].prediction_id == "k"
+    assert before[0].entry_price_ticks == 92000
+    assert before[0].tp_price_ticks == 92060
+    assert before[0].sl_price_ticks == 91880
 
 
 def test_trade_ring_lookback_bound_and_retention_eviction() -> None:
