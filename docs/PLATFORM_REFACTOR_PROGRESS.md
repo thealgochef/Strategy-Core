@@ -1840,3 +1840,108 @@ commits do not move the pin), and pin RESOLUTION was witnessed in both consumers
 raw logs on those runs (`Resolved ... Strategy-Core.git to commit 3d4193e6bf3e...` in both).
 Current window: **COCKPIT** — the trader-facing UI pass (TL frontend + ONE display-only backend
 DTO addition; SC doc-ops only).
+
+---
+
+#### COCKPIT — trader-facing UI pass: strip, decision surfaces, chart cockpit, trade tape (2026-07-10; TL window + SC doc-ops, CLOSED — LOCAL, not pushed)
+
+**Commits:** SC `a36b858` (P0 doc-op: the EXEC pushed annotation above + COCKPIT status line) +
+this close record (docs only — NO SC code this window). TL, base `c9a06d5`: `07586d9` (P1
+backend) + `30bc5b5` (P2 strip) + `b2f5172` (P3 decision surfaces) + `dbc8bed` (P4 chart) +
+`b23cc57` (P5 tape).
+
+**P1 (TL backend, display-only):** the model-status DTO gains the serving-gate parameters from
+the active contract's InferencePolicy — `confidence_gate`, `eligible_class`,
+`eligible_sessions` — all null when no model is loaded. `eligible_sessions` ships the RUNTIME
+session vocabulary (`["ny"]`, not the contract's raw `ny_rth`) via `eligible_session_tokens`,
+the display projection of `_session_matches`' leading-token rule kept beside the predicate so
+the two conventions cannot drift; contract tests pin unloaded nulls, fixture values
+(0.7 / tradeable_reversal / [ny]), deactivate-reverts, and token/predicate agreement. The gate
+itself stays in `InferenceEngine.predict_for_observation`, stamped per-prediction as
+`is_eligible` — the DTO never influences serving. **P1b level-origin investigation =
+REPORT-THE-GAP (no code):** "Level origin: unknown" is NOT a DTO/normalize seam drop —
+`origin_session` flows faithfully end-to-end; the panel read `levels[0]`, which is PDH by SC
+emission order, and the adapter's `_level_origin` maps PDH/PDL to None by construction. The
+PDH/PDL DAY-origin is computed-then-discarded inside SC `StrategyLevelState.levels()` (the
+engine `Level` dataclass carries no source-day field), and seed-vs-organic provenance is
+genuinely absent upstream (`load_prior_day_summary` and the organic day-roll write
+indistinguishable summaries; `_SeedingSource` is w3b-harness-only). Threading it requires an SC
+`Level` field — out of this window's scope; the display side is made honest in P3a
+(`levelOriginLabel`: nearest level's origin; PDH/PDL with null origin render "prior day").
+
+**DEVIATION (DTO budget):** the work order budgeted ONE backend DTO addition (the model-status
+fields). The window shipped a SECOND display-only passthrough — `ObservationDTO.direction` —
+because P3c requires direction on the active-setup card WHILE the observation is open, no wire
+field carries it pre-prediction, and client-side re-derivation from `level_kind` is exactly the
+documented audit-#NN-1 inversion bug (mixed-side merged zones). It passes through the
+AUTHORITATIVE `Observation.direction` (null-safe for legacy observations), contract-tested;
+zero serving influence.
+
+**P2 (strip):** `TraderStrip` replaces `TopStatusBar` — large last price (newest print from the
+forming/closed bar streams, forming wins wall-clock ties) with tick-direction flash; session net
+change vs the trading day's `bar_index`-0 open (EXACT-OR-NOTHING: em-dash when bar 0 is
+truncated out of retention — never an approximation); day high/low across the day's retained
+bars; NY-open 09:30 and flatten 16:40 countdowns on America/New_York wall time via the Intl
+timezone database with an inverse-lookup correction loop (NEVER fixed UTC offsets), switching to
+"since" after passing, day-scoped — pinned by spring-forward (7h real) and fall-back (9h real)
+transition-day tests. Ops pills compacted right. Safe Replay / Databento collapse to one status
+line each once RUNNING (state chip · N events · last event) with Expand/Collapse.
+
+**P3 (decision surfaces):** (a) levels sort by |distance| from the last print — signed
+points+ticks per row, nearest highlighted, absolute price demoted; fixed kind order remains the
+no-print fallback. (b) PredictionRow renders the gate math — eligible-class probability vs
+confidence_gate ("0.82 / 0.70") with a filled bar + threshold tick, and WHY when ineligible,
+derived client-side in priority order class > session > gate; rendered ONLY when
+`prediction.modelId` matches the active model (hot-swap safe) and never overriding the backend
+`is_eligible` verdict. (c) active-setup card while an observation is open: level kind/price,
+touch price (joined via `originating_touch_id`, null-safe on a missed join — the reconnect
+snapshot carries observations but no touches), authoritative direction, and a countdown to the
+observation window end on the EVENT clock (latest print ts — replay runs at replay speed, a
+paused feed freezes).
+
+**P4 (chart):** (a) open paper positions draw TP (green) / SL (red) as large-dashed 1px price
+lines on a dedicated overlay layer keyed `tp:/sl:<predictionId>`, removed when the id vanishes.
+(b) session shading — translucent full-height bands (asia/london/ny) classified from bar opens
+in ET per the SC v3 scheme, ET offsets Intl-derived with a per-UTC-hour cache (US DST
+transitions land on UTC hour boundaries), rendered as a lightweight-charts v5 series primitive
+(`drawBackground`, z-order bottom) with the band→pixel clipping pure and unit-tested. (c)
+outcome markers RE-ANCHORED to the resolution bar (`resolved_ts`) per VIZ_RECON §3; touch and
+prediction markers stay on the touch bar. (d) the decision timeframe tab is badged
+"147t · decision", derived as min(supportedTimeframes) — the same rule the backend uses for
+`ServingCapabilities.decision_timeframe_ticks`.
+
+**P5 (tape):** the blotter is a trade tape — typed `TapeRow` payloads attached at WS ingestion:
+prediction (class, predicted-class probability, gate verdict, direction, session), outcome
+(resolution, correct/miss, actual class + realized points joined at RENDER time from the
+executions store by prediction id, both bracket columns), drop (reason), position open (both
+entry columns + tp/sl) and close (reason, both point columns, exit). Filter chips
+all/predictions/executions/drops (untyped runtime events All-only; filtering precedes the
+80-row render slice), newest-row flash, 200-event store bound unchanged.
+
+**Gates (final trees):** TL backend **510 passed / 1 skipped** (+3 over EXEC: 2 gate-param + 1
+observation-direction contract tests) + ruff clean; TL frontend **243 passed** (23 files; +56)
++ tsc + eslint + vite build clean. SC code untouched (doc-ops only); pins UNCHANGED at
+`3d4193e` per the 9.6 convention.
+
+**Adversarial verify (bounded close gate, 2026-07-10):** 6 agents (the window cap) — 3 lens
+finders (ET/DST clock math incl. both 2026 transition days; DTO/normalize seam for the new
+fields; store/viewmodel lifecycle across reset/reconnect) + one refutation pass per lens.
+**7 findings → 4 CONFIRMED minors / 3 REFUTED, ZERO majors** (refuted: session-pill-vs-shading
+divergence — the pill is SC-v3-fed through `strategy_core_service.snapshot().session` and agrees
+with the shading at every minute; client session-predicate drift — unreachable over the closed
+single-token session vocabulary; filter-chips-hide-the-reset-row — intended filter semantics,
+not a regression). **4 confirmed minors REPORTED, not fixed:** (1) the countdowns are
+calendar-day-scoped with no trading-calendar awareness — a weekend shows "since" for a
+09:30/16:40 that was never a market event; (2) gate-reason text can render
+"gate — 0.70 below 0.70" when the probability rounds up to the gate at 2dp (verdict correct,
+text self-contradictory; reachable whenever p ∈ [gate−0.005, gate)); (3) TraderStrip
+tick-direction refs survive model.reset — one stale cross-run flash and a transiently colored
+em-dash after a reset drops the price; (4) outcome tape rows silently lose their realized-points
+bracket after model.reset (clearExecutions wipes the render-time join source while blotter
+events survive; neighboring close rows keep self-contained points — tape internally
+inconsistent; also reachable via the 100-close cap inside the 200-event tape).
+
+**Deliverables:** `COCKPIT_TL_DIFF.txt` (c9a06d5..b23cc57) + `COCKPIT_STATES.md` (the
+strip/cards states description) at the TL root; `COCKPIT_SC_DIFF.txt` (f2f0d16..tip, docs only)
+at the SC root. **NOT pushed (work-order FULL STOP).** Pins: no bump required at greenlight —
+no consumer-facing SC change this window.
