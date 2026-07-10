@@ -1709,3 +1709,115 @@ in `209f1d0`). The window has since been GREENLIT + PUSHED (REPORT_GREENLIGHT_RE
 branch platform-refactor); SC `origin/platform-refactor` = `17ee822` (docs only, this record + the
 verify record) with **ci run 29077759730 = success**. Pins unchanged at `1650327` (no
 consumer-facing SC change that window).
+
+---
+
+#### EXEC — paper execution layer: derived fills, positions, P&L as an observer of the observer (2026-07-10; cross-repo, CLOSED — LOCAL, not pushed)
+
+**Commits:** SC `c81982e` (P0c doc-op: the REPORT pushed annotation above) + `3d4193e` (P1
+accessor); TL `4411347` (P0 riders) + `a31e357` (P2 tracker) + `e7bb6fa` (P3 surface) +
+`009889e` (P4 verify major fix). Evidence base: TL/REPORT_RECON.md (drop semantics),
+TL/VIZ_RECON.md §5 (entry exists at `register()`, previously surfaced only at resolution).
+
+**THE OBSERVER INVARIANT (stated, enforced, verified):** the paper-execution tracker has ZERO
+influence on touches, inference, the resolver, or the prediction journal. It consumes the same
+RuntimeUpdate stream the UI receives — observed once per broadcast at the WebSocketBroadcaster
+choke point, clients connected or not — plus two READ-ONLY providers (the resolver's
+`open_setups()` snapshot via `runtime.open_setup_views()`; the active contract's
+ExecutionPolicy), and writes only its own `executions/<trading_day>.jsonl` beside the prediction
+journal (same never-raises discipline). Nothing in the tracker can mutate serving state; its
+`observe()` swallows everything.
+
+**P1 (SC, additive):** `StreamingHonestResolver.open_setups() -> tuple[OpenSetupView, ...]` — a
+frozen read-only projection (prediction_id, entry_price_ticks, entry_ts_utc, direction,
+tp_price_ticks, sl_price_ticks) of the private open-setup state: the honest fill and the
+barrier prices already implied at registration (LONG tp = entry + tp_points / sl = entry −
+sl_points; SHORT mirrored — exactly the excursion rule). Integer ticks; `round()` absorbs float
+representation only (fills and the production tp/sl offsets sit on the tick grid). Engine call
+paths untouched by construction — accessor only — so parity digests unaffected. +4 tests
+(fill/barriers per direction, registration drops never appear, resolved/flushed/reset disappear,
+returned tuple is a point-in-time snapshot).
+
+**P2 (TL tracker, `services/execution.py`):** pure state machine. OPEN: an ELIGIBLE prediction
+whose setup appears in `open_setups()` (the resolver filled); ineligible predictions never
+tracked in v1; the same-batch register+resolve race reconstructs from the outcome/drop row's own
+honest entry (counted). CLOSE: `tp_hit`/`sl_hit` at the setup's barrier; terminal drops
+(`no_forward`/`no_resolution`) at the tracker's last-seen trade print; registration drops
+(`flatten`/`cutoff`/`no_fill`, entry null) mean the position NEVER existed (invariant counter if
+violated, never raised). **THE TWO-COLUMN BRACKET = the execution-drag measurement:** optimistic
+prices the exact honest anchor/barriers; conservative prices a 1-tick-adverse entry and a
+1-tick-adverse sl exit (tp exit AT the barrier — the print requirement is already resolution
+semantics; drop exits are real prints, unadjusted). The spread between the columns measures how
+much of the observed edge survives minimal slippage: an edge that exists only in the optimistic
+column is not tradeable. Sizing 1 contract at the contract's point_value (default 20). All
+prices tracked in integer ticks for exact column arithmetic. **RESET semantics:** every runtime
+reset (replay start `replay_reset`, live start `live_reset`, activation) clears open positions
+with a `reset` journal row carrying the cleared prediction ids — no phantom carry, NO synthetic
+closes (the activation path first broadcasts the old resolver's flush drops, which the tracker
+CLOSES properly at the last print, then the reset clears only what could never resolve).
+Live positions are live-originated only by construction (the anchor-based warm gate blocks
+warm-REPLAYED touches).
+
+**P3 (TL surface):** `position.opened`/`position.closed` typed WS frames (emitted AFTER the
+prediction frames they derive from) + a snapshot `open_positions` block with live unrealized P&L
+(both columns) against the tracker's last-seen print; price-anchored chart markers at the actual
+FILL prices (lightweight-charts v5 SeriesMarkerPrice, `atPriceMiddle` — visually distinct from
+every bar-anchored touch/observation/prediction/outcome glyph); an Executions panel
+(open-position card: side/entry/both-column unrealized recomputed against the local latest
+print/age on the event clock; closed table: entry/exit/points both columns/reason); the
+Performance page gains a paper-execution summary card when execution files exist —
+`aggregate_executions` is ONE pure function with counted buckets
+(unreadable/decode/malformed/unknown/undated/outside-filters/missing-pnl), close rows filtered
+like the journal and dated by their own exit ts, `None` until the tracker ever writes.
+
+**P0 riders (TL `4411347`):** two REPORT verify minors fixed — the performance session filter now
+validates against the plugin vocabulary (typo → 400, not all-zeros 200); a well-formed ?bundle=
+absent from models_root no longer 404s (bundle_id row filter with no OOS panel — retired
+bundles' journal history stays queryable).
+
+**Adversarial verify (bounded close gate, 2026-07-10):** 6 agents (the window cap) — 3 lens
+finders (tracker state machine vs resolver semantics incl. every drop reason; DTO/WS seam +
+reset ordering; P&L arithmetic both columns) + one refutation pass per lens. **18 findings → 14
+distinct: 1 MAJOR (confirmed by all three refuters) + 13 confirmed minors + 1 REFUTED** (a
+policy-provider fault aborting an update's closes — the shipped providers cannot raise:
+lock-protected committed registry reads + pydantic-validated contract fields). **The MAJOR,
+FIXED in-window (TL `009889e`):** the live warm/lag throttle swallowed every market
+RuntimeUpdate while `_live_streaming` was False (warm catch-up tail AND the mid-session >30s
+stall relapse), and the tracker observes only broadcast updates — a catch-up-tail prediction
+never opened, and a stall-window resolution left a position stuck open forever with no close
+row (executions journal permanently diverging from the prediction journal). Updates carrying
+predictions/outcomes/drops/resets are now ALWAYS forwarded to the choke point (a handful per
+session — no flood risk); market-only updates keep the snapshot throttle; regression test pins
+forwarded-vs-suppressed per delta kind. Two window-introduced doc statements the verify proved
+false were corrected in the same commit (execution.py live-phase docstring; stores.ts closed-
+table reconnect comment). **13 confirmed minors REPORTED, not fixed:** (1) cap eviction (>500
+open backstop) leaves a dangling journal open row and the later resolution is silently ignored
+(same trace gap in the registration-drop-while-open guard); (2) flat 0-point closes counted as
+losses in aggregate_executions' win/loss split; (3) the same-batch fallback stamps entry_ts from
+prediction.event_ts, diverging from the view's decision instant under the log-warned
+offset-mismatch config; (4) a mid-replay activation broadcasts its reset frame ahead of the
+replay's buffered pre-activation deltas (post-reset open+close attribution possible in the 50ms
+flush window; activation-during-replay has no 409 guard); (5) WS backpressure drop-oldest can
+discard a position.closed/model.reset frame for a slow client (phantom open card until
+reconnect; backend journal correct); (6) the closed-executions table survives a reset missed
+while disconnected (comment corrected; behavior reported); (7) the Performance $ card recomputes
+dollars from headline point_value instead of the exact realized.dollars the backend ships
+(diverges on multi-point-value journals); (8) activation flush closes appear in the UI then are
+wiped by the following reset's clearExecutions (journal/Performance page retain them); (9) SC
+OpenSetupView `round()` snaps non-tick-multiple tp/sl barriers off the true excursion trigger
+(latent; production policy is tick-multiple; nothing validates multiplicity); (10) the tracker
+mixes feed-grid bar ticks with contract-grid position ticks in drop exits/unrealized marks
+(latent; garbage P&L only for a contract with tick ≠ 0.25, unreachable today); (11) the frontend
+hardcodes 0.25 when recomputing the unrealized mark (same latent class; DTO carries no
+tick_size); (12) aggregate_executions sums dollars independently of the points guard — a row
+with points but no dollars silently diverges the two with no counter; (13) undated close rows
+are summed uncounted when no day window is set (anomaly accounting is filter-dependent,
+contradicting the docstring's promise).
+
+**Gates (final trees):** TL backend **507 passed / 1 skipped** + ruff clean; frontend **187
+passed** (19 files) + tsc + eslint clean; SC **192 passed** (+4) + ruff clean. End-to-end test
+drives the REAL resolver → accessor → tracker → choke point → journal (honest fill, barriers,
+frame ordering, never-opened flatten). Deliverables at the repo roots: `EXEC_TL_DIFF.txt`
+(209f1d0..tip) and `EXEC_SC_DIFF.txt` (17ee822..tip). **NOT pushed (work-order FULL STOP).**
+**Pins: bump BOTH consumers to the pushed SC tip AT GREENLIGHT — the OpenSetupView accessor is
+consumer-facing (TL requires SC ≥ `3d4193e`).**
