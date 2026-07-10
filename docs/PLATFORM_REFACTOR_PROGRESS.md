@@ -1673,3 +1673,27 @@ anomaly buckets (malformed/duplicate-id/orphan/conflict/undated) are counted pre
 incl. 16 new viewmodel/calendar cases) + tsc + eslint clean. Live smoke against the real journal +
 active bundle `NQ_W3_20260613T055600Z`: page verified in-browser (cards/curve/bars/calendar/
 tables/OOS panel/$-toggle/month nav; zero console errors), model deactivated after.
+
+**Adversarial verify (bounded close gate, 2026-07-10):** 6 agents total (the window cap) - 3 lens
+finders (aggregator math vs the real journal schema; endpoint contract + failure modes; frontend
+viewmodel + trading-day calendar math) + one refutation pass per lens on the finders' findings
+only. **18 findings -> 15 CONFIRMED / 3 REFUTED** (refuted as unreachable given the real writer:
+weekend-key intensity pollution, formatMoney "-$0", missing-session misclassification). **4 majors
+FIXED in-window (TL `209f1d0`):** (1) non-UTF-8 bytes in any journal file 500'd every request
+(UnicodeDecodeError past `except OSError`) - now salvaged via errors="replace" + counted in
+`anomalies.decode_error_files`; (2) OSError-unreadable journal files silently vanished while
+files_scanned claimed them read - now `anomalies.unreadable_files`; (3) non-dict
+`quality_gates.gates` in evaluation.json raised AttributeError out of the WHOLE report - now
+degrades the OOS section only; (4) PerformancePage fetch race (older all-bundle response could
+overwrite the newer active-bundle one) - request sequencing, latest wins. **11 confirmed minors
+REPORTED, not fixed:** null/mismatched-bundle outcomes under ?bundle= excluded without a scoped
+counter (funnel/headline gap); scoped-drop exclusions under session/eligibility filters uncounted;
+gated_hit_rate shows 0.0 (not null) when eligible_class is unresolvable; ?bundle= 404s for retired
+bundles whose journal rows persist; session filter domain-unvalidated (typo -> all-zeros 200);
+_is_safe_bundle_id lacks the registry's Windows-drive-prefix check (cross-drive strategy.json read
+under a tampered row bundle_id); NaN in outcome numerics nulls means / order-dependent median with
+no anomaly flag; failed refresh leaves the stale report + noJournal panel rendered under new filter
+labels; month cursor stays pinned to an empty month across filter changes; zero-net day renders a
+1px green sliver below the axis; only-malformed-rows journal shows the "rows outside filters"
+empty-state with the data-quality strip hidden. Post-fix gates: TL backend **488 passed / 1
+skipped** + ruff clean; frontend **170 passed** + tsc + eslint clean.
