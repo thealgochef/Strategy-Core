@@ -1689,7 +1689,8 @@ overwrite the newer active-bundle one) - request sequencing, latest wins. **11 c
 REPORTED, not fixed:** null/mismatched-bundle outcomes under ?bundle= excluded without a scoped
 counter (funnel/headline gap); scoped-drop exclusions under session/eligibility filters uncounted;
 gated_hit_rate shows 0.0 (not null) when eligible_class is unresolvable; ?bundle= 404s for retired
-bundles whose journal rows persist; session filter domain-unvalidated (typo -> all-zeros 200);
+bundles whose journal rows persist [FIXED as an EXEC P0 rider]; session filter domain-unvalidated
+(typo -> all-zeros 200) [FIXED as an EXEC P0 rider];
 _is_safe_bundle_id lacks the registry's Windows-drive-prefix check (cross-drive strategy.json read
 under a tampered row bundle_id); NaN in outcome numerics nulls means / order-dependent median with
 no anomaly flag; failed refresh leaves the stale report + noJournal panel rendered under new filter
@@ -1697,3 +1698,14 @@ labels; month cursor stays pinned to an empty month across filter changes; zero-
 1px green sliver below the axis; only-malformed-rows journal shows the "rows outside filters"
 empty-state with the data-quality strip hidden. Post-fix gates: TL backend **488 passed / 1
 skipped** + ruff clean; frontend **170 passed** + tsc + eslint clean.
+
+---
+
+#### REPORT pushed annotation (2026-07-10)
+
+The REPORT close record above recorded "CLOSED - local commit `8e54ad1`, not pushed" (majors fixed
+in `209f1d0`). The window has since been GREENLIT + PUSHED (REPORT_GREENLIGHT_REPORT.txt): TL
+`origin/platform-refactor` = `209f1d0` with **backend-ci run 29077742228 = success** (push event,
+branch platform-refactor); SC `origin/platform-refactor` = `17ee822` (docs only, this record + the
+verify record) with **ci run 29077759730 = success**. Pins unchanged at `1650327` (no
+consumer-facing SC change that window).
