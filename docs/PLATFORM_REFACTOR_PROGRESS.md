@@ -2008,3 +2008,96 @@ trade's path visits entry − MAE before entry + MFE).
 Current window: **PROP-SIM** — the barrier-options walker (QL `alpha_lab.propsim` module + CLI,
 OOS-writer per-row outcome columns, TopStep-50K preset, day-level block-bootstrap Monte Carlo,
 baseline evidence run; SC doc-ops only).
+
+---
+
+#### PROP-SIM — the barrier-options walker: pass-probability from equity paths (2026-07-10; QL window + SC doc-ops, CLOSED — LOCAL, not pushed)
+
+**Commits:** SC `53b9b34` (P0 doc-op above) + this close record (docs only — NO SC code). QL,
+base `76546b0`: `f247046` (ENV-FIX, pre-window — RIDES this greenlight) + `86654c7` (P1
+OOS-writer columns, D-038) + `dbf73d8` (P2 walker) + `1ef0ebe` (P4 verify fix). TL untouched.
+Pins UNCHANGED at `3d4193e` ×2 (no SC code this window; 9.6 convention).
+
+**P1 (QL OOS-writer columns, D-038):** `oos_predictions.parquet` gains per-row `max_mfe_pts` /
+`max_mae_pts` / `entry_price` / `resolution_type` on FRESH saves — threaded, not recomputed:
+MFE/MAE pass through from the training frame's engine `OutcomeResult` values (captured
+positionally at the fold seam alongside timestamps/sessions); `entry_price` is written into the
+dataset row by the stream builder via the SAME injected trade-price accessor at the SAME
+decision instant the engine used (`resolve_honest_outcome` computes-then-drops it; SC untouched
+— the accessor call is the one expression its contract documents); `resolution_type` is the
+ratified label mapping mirrored from TL serving (tradeable_reversal → tp_hit, trap/blowthrough
+→ sl_hit). Existing bundles NOT retrofitted; frames/caches predating a column degrade it to NaN
+(warm D-036 `7850272e` caches lack `entry_price` until a day rebuilds — the cache tag hashes
+config, not row schema, deliberately). Canonical-schema test updated 11 → 15 columns; small-train
+test asserts OOS values == the training frame's, plus a missing-columns degradation test.
+
+**P2 (the walker, `src/alpha_lab/propsim/` — pure module + CLI):** loaders normalize three
+sources to `TradePath{day, entry_ts, points_optimistic, points_conservative, mfe_pts, mae_pts,
+resolution}` — (a) TL executions closes ⋈ journal outcomes on `prediction_id` (18:00 ET
+trading-day roll mirrored from TL, trades dated by ENTRY), (a′) journal-outcomes EVIDENCE mode
+(every resolved outcome as a 1-lot trade; tracker-mirroring conservative fill model — added
+because the executions dir has zero fills on disk), (b) OOS parquet (post-P1 columns; pre-P1
+degrades unrealized mode to realized-only with a stated reason; idealized fills — conservative
+column EQUALS optimistic, stated). `Ruleset` dataclass exactly as ratified; preset registry
+keyed by name, presets are data — **topstep_50k** = 50_000 / 3_000 / 2_000
+`eod_floor_realtime_breach` / locks-at-start / 1_000 SOFT DLL / 50% consistency (best day ≤ pct
+× TOTAL) / no min-days / point_value 20.0. ENGINE: days in order, trades in intra-day order at
+1 contract; floor = max(prior EOD balances incl. start) − trail, EOD-ratcheted, never down,
+capped at start when locked, breach ≤ in real time; BOTH breach modes always computed and
+labeled — `realized_only` (closes + EOD) and `unrealized_adverse_first` (entry − MAE before
+entry + MFE; on the falling adverse leg the floor and the DLL level are BARRIERS — the higher
+one is touched FIRST: floor touch = bust, soft-DLL touch = force-close AT the DLL level, day
+halted, remaining trades skipped, not a bust; hard DLL = bust); PASS at EOD when total ≥ target
+∧ min-days ∧ best day ≤ pct × total (else keep walking — later days dilute). Outputs per run:
+verdict / days_to_outcome / bust_reason / best_day_ratio / min_floor_distance. MONTE CARLO:
+seeded day-level block bootstrap, whole days with replacement, walk-until-verdict with a
+max-days runaway guard (default 1000), N default 10_000 → P(pass) (+ Wilson 95% MC CI), P(bust),
+P(incomplete), days-to-pass median/p10/p90, days-to-bust median, bust-reason counts — per breach
+mode × fill column, plus the as-sequenced historical verdict. CLI
+`python -m alpha_lab.propsim` per the ratified form (`--source executions <dir> [--journal
+<dir>] | --source journal <dir> | --oos <parquet>`, `--preset/--column/--n/--seed/--json`,
+TP/SL resolve flags → bundle `strategy.json` `label_policy`). Oracle tests: floor lock at
+start; EOD floor never moves down; a within-day MAE excursion busting unrealized while realized
+survives THE SAME sequence; DLL soft halt skipping remaining trades without busting (+ the
+force-close-at-DLL-level excursion variant + hard-DLL bust + floor-beats-DLL barrier ordering);
+consistency blocking a pass until later days dilute; min-days; bootstrap seed determinism;
+empty/degraded inputs.
+
+**P3 (baseline, `PROPSIM_BASELINE.md` at the QL root, untracked — evidence, not a gate):**
+preset topstep_50k, both columns, N=10_000 seed 42. Data reality stated exactly: the spec's
+executions⋈journal leg has **0 trades** (all 93 execution rows are resets — every on-disk
+prediction is `is_eligible:false`, and the tracker only opens eligible predictions), so a
+journal-outcomes EVIDENCE run stands in: **49 deduped trades over 13 days** (80 outcomes − 31
+warm-restart duplicates), win 30/49 = 0.612 (binomial 95% CI 0.472..0.736) → P(pass) ≈
+0.989/0.990 optimistic, 0.973/0.981 conservative (unrealized/realized); as-sequenced: optimistic
+PASSES day 13 at $53,300, conservative ends INCOMPLETE at $52,960 — **$40 short of target: the
+tick-adverse fill model costs $340 over 49 trades and decides the sequence**. The 06-17 bundle
+OOS (42 rows / 15 days, pre-P1 → realized-only, stated): win 17/42 = 0.405 (binomial 95% CI
+0.270..0.555) → **P(bust) = 0.9984** every cell, as-sequenced BUST on day 6 — the walker turns
+the known negative W3 OOS edge into an evaluation verdict. Gated subset (3 trades / 2 days):
+P(bust) = 1.0, as-sequenced incomplete. Fidelity caveats recorded verbatim in the baseline: MFE/
+MAE order unknown → adverse-first is conservative; OOS lacks excursions pre-P1; 42 OOS rows =
+huge CI (binomial interval reported); no costs modeled; evidence-mode trades are all
+serving-ineligible and mix replay/live days as exchangeable bootstrap draws.
+
+**Verify (bounded close gate, 3 lenses × find + 1 adversarial refuter per finding):** engine
+math vs the ruleset spec — **ZERO findings**; loader joins + bootstrap statistics — 3 CONFIRMED
+/ 0 refuted, ALL FIXED in `1ef0ebe`: **PROPSIM-L1 (major)** journal evidence mode counted
+warm-restart duplicate outcomes of the same physical touch as independent trades (2026-06-16:
+36 outcomes = 8 touches ×10/×9/×9/×4; fresh uuids per restart defeat id-dedup) → touch-signature
+dedup, last-write-wins, drop count surfaced — the baseline was RE-RUN post-fix (80 → 49 trades;
+P(pass) 0.997 → 0.990 optimistic); PROPSIM-L2 (minor, latent) the same duplication class for
+executions files across replay re-runs (append-only, resets carry no epoch key) → fill-signature
+dedup + note; PS-1 (minor) a NaN `points` row crashed `format_human` past the win_rate-only
+guard → loaders reject non-finite numerics at the boundary + the report guards every formatted
+field. Wilson math, percentile conventions, seed determinism, uniform day draws, p_pass + p_bust
++ p_incomplete = 1, empty-pool paths: verified clean by the statistics lens (independent
+reference implementations run).
+
+**Gates (final trees):** QL suite **811 passed** (807 at the pre-fix tree = 766 + 41 window
+tests; +4 fix-regression tests) + `ruff check src tests` clean. SC docs-only; TL untouched.
+
+**Deliverables:** `PROPSIM_QL_DIFF.txt` (`76546b0..1ef0ebe` — includes `f247046`, which RIDES
+this greenlight) + `PROPSIM_BASELINE.md` at the QL root; `PROPSIM_SC_DIFF.txt` (`0e86cb5..tip`,
+docs only) at the SC root. **NOT pushed (work-order FULL STOP).** Pins: no bump required at
+greenlight — no consumer-facing SC change this window.
