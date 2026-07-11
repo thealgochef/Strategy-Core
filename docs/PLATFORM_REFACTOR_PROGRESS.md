@@ -2101,3 +2101,55 @@ tests; +4 fix-regression tests) + `ruff check src tests` clean. SC docs-only; TL
 this greenlight) + `PROPSIM_BASELINE.md` at the QL root; `PROPSIM_SC_DIFF.txt` (`0e86cb5..tip`,
 docs only) at the SC root. **NOT pushed (work-order FULL STOP).** Pins: no bump required at
 greenlight — no consumer-facing SC change this window.
+
+---
+
+#### PROP-SIM pushed annotation + PRESETS ratified parameters (2026-07-10; PRESETS P0 doc-op)
+
+**PROP-SIM GREENLIT + PUSHED** (PROPSIM_GREENLIGHT_REPORT.txt at the SC root). The PROP-SIM
+close record above recorded "CLOSED — LOCAL, not pushed"; the window has since been pushed:
+SC `origin/platform-refactor` = `d92eaf7` (push `0e86cb5..d92eaf7`, docs-only: P0 doc-op
+`53b9b34` + close record `d92eaf7`) with **ci run 29134311915 (#11) = success** (head
+`d92eaf7d0707…`, push-triggered, updated 2026-07-11T01:16:20Z); QL `origin/platform-refactor`
+= `1ef0ebe` (push `76546b0..1ef0ebe`: `f247046` ENV-FIX riding + `86654c7` P1 + `dbf73d8` P2 +
+`1ef0ebe` P4 fix) with **ci run 29134318835 (#10) = success** (head `1ef0ebe92c80…`,
+push-triggered, updated 2026-07-11T01:17:37Z). **Pin witness:** the QL cold-install log
+resolves `Strategy-Core.git to commit 3d4193e6bf3e…` — pins unchanged at `3d4193e` ×2 (no
+consumer-facing SC change; 9.6 convention). TL untouched — no run owed. Both CI ids
+re-witnessed via the REST API at this doc-op (run/head/conclusion match).
+
+**PRESETS parameters RATIFIED** (owner-confirmed checkout data, 2026-07-10 dashboard screens;
+recorded here as the ratified work order). Two new trail mechanics land in the QL walker
+engine (`alpha_lab.propsim`, models + engine — presets stay data):
+
+- `intraday_peak_trail` — the floor trails **PEAK equity including unrealized**: in the
+  unrealized breach modes each trade's favorable leg (entry + MFE observed) raises the peak
+  and floor = max(floor, peak − trail), still capped at the starting balance when the ruleset
+  locks; in `realized_only` the peak updates from realized equity at trade closes + EOD.
+- `static_floor` — the floor is FIXED at start − trail forever (never ratchets).
+- `Ruleset` gains `max_eval_days: int|None` → verdict **"expired"** (distinct from
+  `incomplete`) when the day budget runs out — expiry lands on day max+1, the first day the
+  eval is no longer allowed to trade; and `dll_hard: bool` (True = a DLL touch is a BUST, not
+  a halt) — supersedes the P2-era `dll_soft` flag (same semantics, inverted sign; one flag,
+  no contradictory states).
+
+**Ratified presets (data only, ⚠ = "verify at dashboard" note carried in the preset
+docstring — flip when confirmed, data-only change):**
+
+- `apex_50k_eod` = 50_000 / 3_000 / 2_000 `eod_floor_realtime_breach` / locks-at-start
+  ⚠verify-lock / DLL 1_000 **HARD** ⚠verify-soft-vs-hard / NO consistency in eval /
+  max_eval_days 30 / point_value 20.
+- `apex_50k_intraday` = same but `intraday_peak_trail`, DLL None, max_eval_days 30.
+- `tpt_50k_test` = 50_000 / 3_000 / 2_000 `eod_floor_realtime_breach` / locks-at-start /
+  DLL None / consistency 50% / min_days 5 / NO expiry.
+
+Oracle tests ratified with the mechanics: the separating case — an identical day sequence
+where a 20-pt MFE-then-retrace trade busts `intraday_peak_trail` while `eod_floor` survives
+it; the static floor never ratchets; expiry lands as `"expired"` on day max+1; hard-DLL busts
+where soft halts THE SAME sequence. Baseline appendix: the journal evidence pool + the 06-17
+OOS (ungated) re-run across ALL FOUR presets, both columns, N=10_000 seed 42 → cross-preset
+table appended to `PROPSIM_BASELINE.md` (the first firm-vs-firm comparison on identical
+paths).
+
+Current window: **PRESETS** — the remaining eval rulesets + two trail mechanics + expiry/
+hard-DLL semantics + the cross-preset baseline appendix (QL engine window; SC doc-ops only).
