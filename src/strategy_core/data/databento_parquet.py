@@ -839,7 +839,11 @@ class DatabentoParquetSource:
 
         if is_trade_schema:
             trade_rows = keep.copy()
-        elif is_mbp10:
+        elif is_mbp10 or (is_tob and "action" in columns):
+            # INGEST (D-P-17): action-bearing TOB schemas (mbp-1/tbbo) carry every
+            # trade print as an action='T' row — classify them exactly like mbp-10
+            # so mbp1.parquet store days are trade+quote first-class. bbo/cbbo files
+            # have no action column and keep their quotes-only behavior.
             import pyarrow as pa
 
             action_upper = self._upper_text(columns["action"])

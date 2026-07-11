@@ -62,6 +62,39 @@ def test_front_month_filter_drops_spreads_and_non_dominant_instruments(tmp_path:
     assert all(event.price_ticks == 68000 for event in events)
 
 
+def test_mbp1_action_trade_rows_emit_trades_like_mbp10(tmp_path: Path) -> None:
+    # D-P-17: action-bearing TOB schemas (mbp-1/tbbo) classify T rows as trades — the
+    # mbp-10 rule. The same row still emits its Quote iff level-0 state changed, with
+    # the row's Trade item before its Quote item.
+    base = datetime(2026, 3, 2, 14, tzinfo=UTC)
+    rows = [
+        {"ts_event": base, "action": "A", "price": 17000.0, "size": 1, "side": "B", "bid_px_00": 16999.75, "ask_px_00": 17000.25, "sequence": 1},
+        # trade with unchanged book -> Trade emitted, Quote suppressed by TOB dedup
+        {"ts_event": base.replace(minute=1), "action": "T", "price": 17000.25, "size": 2, "side": "B", "bid_px_00": 16999.75, "ask_px_00": 17000.25, "sequence": 2},
+        # trade that moves the book -> Trade then Quote from the same row
+        {"ts_event": base.replace(minute=2), "action": "T", "price": 17000.25, "size": 1, "side": "A", "bid_px_00": 17000.0, "ask_px_00": 17000.5, "sequence": 3},
+    ]
+    for filename, schema in (("mbp1.parquet", "mbp-1"), ("tbbo.parquet", "tbbo")):
+        path = _write(tmp_path / filename, rows)
+        events = list(DatabentoParquetSource(paths=(path,), requested_symbol="NQ.c.0", schema=schema).events())
+        assert [type(event).__name__ for event in events] == ["Quote", "Trade", "Trade", "Quote"]
+        trades = [event for event in events if isinstance(event, Trade)]
+        assert [(t.price_ticks, t.size, t.side) for t in trades] == [(68001, 2, "B"), (68001, 1, "A")]
+
+
+def test_tob_schema_without_action_column_stays_quotes_only(tmp_path: Path) -> None:
+    # D-P-17 guard: no action column (the bbo/cbbo shape) -> quotes-only, unchanged.
+    base = datetime(2026, 3, 2, 14, tzinfo=UTC)
+    rows = [
+        {"ts_event": base, "bid_px_00": 16999.75, "ask_px_00": 17000.25, "sequence": 1},
+        {"ts_event": base.replace(minute=1), "bid_px_00": 17000.0, "ask_px_00": 17000.5, "sequence": 2},
+    ]
+    for filename, schema in (("mbp1.parquet", "mbp-1"), ("bbo.parquet", "bbo")):
+        path = _write(tmp_path / filename, rows)
+        events = list(DatabentoParquetSource(paths=(path,), requested_symbol="NQ.c.0", schema=schema).events())
+        assert [type(event).__name__ for event in events] == ["Quote", "Quote"]
+
+
 def test_front_month_count_tie_breaks_to_larger_instrument_id(tmp_path: Path) -> None:
     path = _write(tmp_path / "tie.parquet", [
         {"ts_event": datetime(2026, 1, 6, 14, tzinfo=UTC), "price": 17000.0, "size": 9, "side": "B", "instrument_id": 1, "raw_symbol": "NQZ6", "sequence": 1},

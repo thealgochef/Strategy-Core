@@ -157,6 +157,27 @@ proven on a FRESH model, then soaked ≥7 trading days before any number is trus
   deterministic end-to-end. The un-re-gated remainder (38 of 73 days) is accepted
   risk, bounded by legs (1)+(2). References: D-P-15 (the identity-proof vectorization
   this adoption completes); PROGRESS §W3b CLOSE (the coverage table + run artifacts).
+- D-P-17 ADOPTED IN-WINDOW (2026-07-11) — INGEST: action-bearing TOB schemas emit
+  trades. `DatabentoParquetSource._decode_batch` classifies `action∈{T,TRADE}` rows as
+  Trade events for `is_tob` schemas (mbp-1/cmbp-1/tbbo) WHEN the file carries an
+  `action` column — exactly the mbp-10 rule (the same row still emits its Quote iff
+  L1 TOB changed; emission order trade-before-quote unchanged). bbo/cbbo files carry
+  no action column and keep quotes-only behavior. This AMENDS the D-P-15 proof
+  contract line "mbp-1/bbo/tbbo: every row -> Quote only", which was vacuous until
+  now: no mbp1/bbo/tbbo parquet file existed in any store, so no consumer sees a
+  behavior change on existing data (the live path is separate code). Why: the INGEST
+  window converts the MBP-1 batch download (2026-01-11..2026-07-10) into
+  `mbp1.parquet` store days under the honest-naming ruling; without trade
+  classification those days drain quotes-only, the D-036 per-day build (trade-bar
+  clock, `engine_decision.py` Trade-only drive) returns empty datasets, and PDH/PDL
+  prior-day extremes break — i.e. the window's own fresh-day gate (P4b) is
+  unsatisfiable. Scope deviation note: the INGEST work order scoped SC changes to
+  file discovery only (moot — `DAY_FILE_PRIORITY` has been mbp1-aware since W1);
+  this classification change is the minimal amendment that makes honestly-named
+  mbp-1 days first-class, taken in-window and flagged in the close record. Gated by:
+  oracle tests (mbp-1 fixture with T rows → Trade+Quote emission; bbo fixture →
+  quotes-only) + the full SC suite + the P4a overlap identity gate (mbp10 vs
+  converted mbp1 through the reader: trades AND deduped L1 quotes, event-by-event).
 
 ## How to add an entry
 New ruling in a design exchange → it gets the next D-P id, lands here in the same

@@ -165,3 +165,29 @@ def test_single_file_global_window_still_applies(tmp_path: Path) -> None:
     )
     prices = [trade.price_ticks / 4 for trade in _trades(list(source.events()))]
     assert prices == [17001.0]
+
+
+def test_day_file_priority_prefers_mbp10_over_mbp1(tmp_path: Path) -> None:
+    # INGEST: overlap days carry both files; mbp10.parquet keeps serving the day.
+    root = tmp_path / "NQ"
+    base = datetime(2026, 2, 18, 14, tzinfo=UTC)
+    _write(root / "2026-02-18" / "mbp10.parquet", [
+        {"ts_event": base, "action": "T", "price": 17000.0, "size": 1, "side": "B", "bid_px_00": 16999.75, "ask_px_00": 17000.25, "sequence": 1},
+    ])
+    _write(root / "2026-02-18" / "mbp1.parquet", [
+        {"ts_event": base, "action": "T", "price": 15000.0, "size": 1, "side": "B", "bid_px_00": 14999.75, "ask_px_00": 15000.25, "sequence": 1},
+    ])
+    source = DatabentoParquetSource.for_trading_day(root, date(2026, 2, 18))
+    assert source.schema == "mbp-10"
+    assert [t.price_ticks for t in _trades(list(source.events()))] == [68000]
+
+
+def test_day_file_priority_falls_back_to_mbp1_when_alone(tmp_path: Path) -> None:
+    root = tmp_path / "NQ"
+    base = datetime(2026, 3, 2, 14, tzinfo=UTC)
+    _write(root / "2026-03-02" / "mbp1.parquet", [
+        {"ts_event": base, "action": "T", "price": 17000.0, "size": 1, "side": "B", "bid_px_00": 16999.75, "ask_px_00": 17000.25, "sequence": 1},
+    ])
+    source = DatabentoParquetSource.for_trading_day(root, date(2026, 3, 2))
+    assert source.schema == "mbp-1"
+    assert [t.price_ticks for t in _trades(list(source.events()))] == [68000]
