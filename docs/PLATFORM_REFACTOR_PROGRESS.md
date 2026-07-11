@@ -2256,3 +2256,120 @@ Current window: **INGEST** — convert the batch download into first-class store
 original MBP-10 store through `DatabentoParquetSource`, fresh-day dataset build + route-seam
 check, then full conversion (QL converter window; SC touched ONLY if the reader's file
 discovery hardcodes `mbp10.parquet`).
+
+---
+
+#### INGEST — batch MBP-1 download → first-class store days (2026-07-11; QL converter window + SC D-P-17 deviation + TL catalog fix, CLOSED — LOCAL, not pushed)
+
+**Commits:** SC, base `1a58aa8`: `9692696` (P0 doc-op) → `7340b2d` (D-P-17 trade
+classification + discovery-precedence pins) → `b21316e` (close-verify: era-boundary
+schema-matching prior-day fallback + buy-trade ordering pin + D-P-17 wording) → this close
+record. QL, base `49c2f22`: `8f6f45e` (P2 converter + tests) → `6601dc7` (close-verify:
+schema-pin order-diff message + sanity docstring). TL, base `67e03e4`: `58a5a85`
+(close-verify: replay-catalog mbp-1 gate accepts level-00 TOB names). Pins UNCHANGED at
+`3d4193e` ×2 locally; **bump owed at greenlight** — D-P-17 + the boundary fallback are
+consumer-facing SC code (9.6 convention).
+
+**P1 recon verdicts (banked):** (a) zip = 156 daily `glbx-mdp3-YYYYMMDD.mbp-1.dbn.zst`
+(UTC-day split) + 3 job JSONs; NQ.FUT parent → instrument_id, so each file mixes NQ
+outrights (front + back months) with calendar spreads — same multi-instrument mix as the
+store; prices int64 1e-9; trades ride as action='T' rows (flags=0); per-instrument snapshot
+seed rows (flags=168) open each file. (b) SCHEMA DIFF VERDICT: `DBNStore.to_parquet`
+DEFAULTS in databento 0.81.0 ≡ the store schema exactly on all 20 shared columns (name,
+arrow type, order, semantics — float dollars, tz-aware ns, mapped symbol, ts_recv pandas
+index); only diff = the 54 level-01..09 columns, absent by nature of mbp-1. (c) discovery
+NOT hardcoded — `DAY_FILE_PRIORITY` has been mbp1-aware with mbp10 precedence since W1 →
+the literal P3 is SKIPPED. Reader never reads levels beyond 00 (`DECODE_SELECTED`
+column-pruned read; W3A-READER P2 contract, D-P-15/D-P-16). (d) reuse verdict:
+`process_batch_download.py` built the modern store era; its transform core
+(`DBNStore.from_file → to_df()` defaults → write-time spread filter → `df.to_parquet`) is
+adopted VERBATIM by the new converter. Store paths: ONE physical store (QL
+`data/databento/NQ`; Trade-Dashboard\data is a symlink onto it).
+
+**DEVIATION — D-P-17 (SC code beyond the work order's P3 scope, flagged):** the reader's
+documented contract had mbp-1 parquet = QUOTES-ONLY (no Trade events), and the D-036
+per-day build drives bars/levels/touches from Trade events only — so converted fresh days
+would produce EMPTY datasets and the window's own P4b gate was unsatisfiable; the
+mbp10-masquerade dodge is forbidden by the honest-naming ruling (below). Minimal amendment
+taken in-window: action-bearing TOB schemas (mbp-1/cmbp-1/tbbo) classify T rows as trades,
+exactly the mbp-10 rule; bbo/cbbo (no action column) unchanged. The contract line it amends
+was vacuous — no mbp1/bbo/tbbo parquet existed in any store, so no existing consumer sees
+different behavior. DECISIONS.md D-P-17 + oracle tests (incl. mbp-1 ≡ mbp-10 ordering
+parity on identical rows for both buy and sell trades).
+
+**HONEST-NAMING RULING (recorded):** store day files are named for the schema they contain
+— MBP-1 data lands as `mbp1.parquet`, never as a `mbp10.parquet` masquerade (which would
+have drained through the untouched reader but lied about depth). The reader was amended
+(D-P-17) so honestly-named files are first-class instead.
+
+**P2 (converter, QL `scripts/ingest_databento_batch.py`):** zip-or-dir →
+`NQ/<date>/mbp1.parquet`, the process_batch_download.py core verbatim + `--workers`
+(default 2), resume (exists-AND-loads), per-day `INGEST.log` lines (day, rows, seconds,
+MB, notes), fatal sanity gates (non-empty; ts_recv within the file's UTC day), a written
+**schema pin** against the store fingerprint (off-pin days are deleted, never left), and
+date-range filters. Spreads dropped at write (3,830,522 rows total), back-month outrights
+kept — front-month election stays read-time, matching the store.
+
+**P4 gate results (IDENTITY RESULTS):** (a) OVERLAP IDENTITY — 2026-01-12, 2026-02-12
+(dense), 2026-02-20: original mbp10 vs converted mbp1 through `DatabentoParquetSource`
+(single-file drains, full window, front-month): trade / quote / warning streams **EXACT
+event-by-event** — 35,677,893 events total, 1,163,904 trades bit-exact, 0 warnings; merged
+interleave exact except **7 ns-tied clusters** (2–3 events each, dense days only), every
+one permutation-verified with byte-identical underlying rows — root cause: the reader's
+per-batch sort granularity on differently-sized files (venue fill+cancel pairs share a
+sequence number; a 65,536-row batch boundary can split the cluster; first case: converted
+row 3,407,872 = 52×65,536 at 02-12 14:51:17). Not an ingest defect; log =
+`INGEST_IDENTITY.log` (QL root). (b) FRESH-DAY BUILD — 2026-03-02 through the D-036
+per-day build (tag `7850272e` exact): cache written, **5 rows** (Feb warmed-day range
+3–6), `prev_full_hl` seed exact via the 02-27 walk-back (Sunday 03-01 empty), 147 s /
+3.0 GB RSS. (c) ROUTE-SEAM — key present, run on 2026-03-02: trade_count delta **0**
+(441,575), tob_transitions delta **0** (12,625,748), first-event equal; the ±1 µs sampled
+ts diffs are the check's own float-µs serialization (`route_seam_check.py:55`), price/size
+identical at every sampled position; report `route_seam_report_ingest.json` (QL root).
+
+**Full conversion (COUNTS):** **156/156 days converted, 0 failed** (37 overlap alongside
+untouched mbp10.parquet — precedence keeps them serving the original — + 119 fresh
+2026-02-23..2026-07-10), 1,833,605,368 rows, 43.6 GB, ~39 min wall at workers=2 across the
+staged runs. 48 days carry a benign 1–2-row invalid-price WARN (far-from-market
+cancel-order prices on quote rows — the `price` field of non-trade rows is never consumed
+by the reader; the mbp10 originals carry the same rows). `INGEST.log` (QL root).
+
+**Close verify (3 find-lenses + adversarial refuters):** 7 CONFIRMED (3 major / 4 minor),
+6 refuted. All fixed in-window except one recorded debt:
+- **MAJOR (era boundary, found by two lenses):** `for_trading_day(2026-02-23)` degraded to
+  single-file (prior 02-22 resolves mbp10 ≠ mbp-1), silently dropping the Sunday
+  Globex-open hour (8,413 front-month trades) AND understating the 02-24 PDH seed by
+  19.75 pt vs the QL research carry — the research↔serving seed-drift class. **FIXED**
+  (`b21316e`): schema-MATCHING prior-day fallback before degrading; witnessed live
+  post-fix: two-file composition, zero warnings, first trade 23:00:00 UTC, 02-24 extremes
+  100239/98672 (true full-session values). Degrade-still-works pinned by test.
+- **MAJOR (TL):** replay-catalog mbp-1 live-column gate lacked the `bid_px_00/ask_px_00`
+  aliases the ingested files use → the ENTIRE new era was invisible to TL replay (0
+  sources ≥ 02-23). **FIXED** (`58a5a85`); witnessed post-fix: 156 mbp-1 sources, all 119
+  new-era days discoverable.
+- minor: D-P-17 wording claimed unconditional trade-before-quote (false for buy trades —
+  canonical-key-determined) → FIXED + mbp-1≡mbp-10 ordering parity test.
+- minor: converter schema-pin order-diff message inverted (pure order mismatch → empty
+  message) → FIXED + test.
+- minor: sanity docstring overclaimed PBD-check mirroring → FIXED (docstring; the
+  non-monotonic/dup-ts warns are intentionally dropped as always-firing noise).
+- minor **NAMED DEBT (not fixed):** QL dashboard `replay_client.py` (+ legacy backtest
+  scripts) are mbp10-hardcoded — mbp1-era days are invisible to the QL dashboard replay
+  surface. Off this window's critical path; owed to a future window.
+Refuted (6): converter resume/atomicity, NaT-blindness, duplicate-member race, identity
+permutation-tolerance over-breadth, day-class coverage gap, unfiltered back-month/spread
+divergence — refuter reasoning in the verify journal.
+
+**Gates (final committed trees):** SC suite **205 passed** (202 at D-P-17 + 3 close-verify
+tests; tests + validation, real-store validation harnesses included) + ruff clean (tracked
+dirs). QL suite **830 passed** (822 at PRESETS + 8 window tests) + `ruff check src tests
+scripts` clean. TL backend **511 passed / 1 skipped**. Era-boundary + catalog witnesses
+re-run live post-fix (above).
+
+**Deliverables:** `INGEST_SC_DIFF.txt` (`1a58aa8..tip`) / `INGEST_QL_DIFF.txt`
+(`49c2f22..6601dc7`) / `INGEST_TL_DIFF.txt` (`67e03e4..58a5a85`) at the repo roots;
+`INGEST_IDENTITY.log`, `INGEST.log`, `route_seam_report_ingest.json` at the QL root; the
+identity/P4b harnesses `scratch_ingest_identity.py` / `scratch_ingest_p4b.py` (QL root,
+untracked, re-runnable). **NOT pushed (work-order FULL STOP).** Pins: bump owed at
+greenlight (consumer-facing SC: D-P-17 + boundary fallback); TL/QL runs owed at greenlight
+witness the new pin.
