@@ -260,9 +260,12 @@ class DatabentoParquetSource:
         (``<symbol_dir>/<YYYY-MM-DD>/{mbp10,mbp1,trades}.parquet``), DST-aware via
         ``SESSION_TIMEZONE``. The two files are partitioned at UTC midnight of
         ``trading_day`` — the physical file boundary — so rows duplicated across
-        adjacent day files are never double-emitted. A missing (or schema-mismatched)
-        prior-day file degrades to a single-file scan and surfaces a
-        ``MISSING_PRIOR_DAY_FILE`` warning on the event stream.
+        adjacent day files are never double-emitted. When the priority-resolved
+        prior-day file's schema differs from the day's, a schema-MATCHING
+        prior-day file is preferred if present (schema-era boundary); only a
+        missing (or unmatchable-schema) prior-day file degrades to a
+        single-file scan with a ``MISSING_PRIOR_DAY_FILE`` warning on the
+        event stream.
         """
 
         root = Path(symbol_dir)
@@ -281,18 +284,35 @@ class DatabentoParquetSource:
         prev_resolved = cls._resolve_day_file(root, prev_day)
         warnings: list[DataQualityWarning] = []
         if prev_resolved is not None and prev_resolved[1] != day_schema:
-            warnings.append(
-                cls._warning(
-                    DataQualityCode.MISSING_PRIOR_DAY_FILE,
-                    "prior-day file schema differs; trading-day window served from a single file",
-                    str(day_path),
-                    trading_day=trading_day.isoformat(),
-                    prior_day=prev_day.isoformat(),
-                    prior_schema=prev_resolved[1],
-                    schema=day_schema,
-                )
+            # INGEST close-verify fix: at a schema-era boundary (e.g. the prior
+            # day resolves mbp10.parquet while the day is mbp-1-only), a
+            # schema-MATCHING prior-day file may still exist in the folder —
+            # prefer it over degrading, so the prior-evening hour is served and
+            # prior_full_day_extremes stays exact across the boundary.
+            matching = next(
+                (
+                    (root / prev_day.isoformat() / filename, schema)
+                    for filename, schema in DAY_FILE_PRIORITY
+                    if schema == day_schema
+                    and (root / prev_day.isoformat() / filename).exists()
+                ),
+                None,
             )
-            prev_resolved = None
+            if matching is not None:
+                prev_resolved = matching
+            else:
+                warnings.append(
+                    cls._warning(
+                        DataQualityCode.MISSING_PRIOR_DAY_FILE,
+                        "prior-day file schema differs; trading-day window served from a single file",
+                        str(day_path),
+                        trading_day=trading_day.isoformat(),
+                        prior_day=prev_day.isoformat(),
+                        prior_schema=prev_resolved[1],
+                        schema=day_schema,
+                    )
+                )
+                prev_resolved = None
         if prev_resolved is None:
             if not warnings:
                 warnings.append(

@@ -82,6 +82,24 @@ def test_mbp1_action_trade_rows_emit_trades_like_mbp10(tmp_path: Path) -> None:
         assert [(t.price_ticks, t.size, t.side) for t in trades] == [(68001, 2, "B"), (68001, 1, "A")]
 
 
+def test_mbp1_buy_trade_quote_ordering_matches_mbp10(tmp_path: Path) -> None:
+    # Close-verify pin: at equal (ts, seq) the canonical key orders a row's
+    # Quote item (ssp=0) BEFORE its BUY Trade item (ssp=+price) — for sells the
+    # Trade sorts first. The invariant is mbp-1 == mbp-10 on identical rows.
+    base = datetime(2026, 3, 2, 14, tzinfo=UTC)
+    rows = [
+        {"ts_event": base, "action": "A", "price": 17000.0, "size": 1, "side": "B", "bid_px_00": 16999.75, "ask_px_00": 17000.25, "sequence": 1},
+        # buy trade that moves the book: same row emits Quote BEFORE Trade
+        {"ts_event": base.replace(minute=1), "action": "T", "price": 17000.25, "size": 1, "side": "B", "bid_px_00": 17000.0, "ask_px_00": 17000.5, "sequence": 2},
+    ]
+    emitted = {}
+    for filename, schema in (("mbp1.parquet", "mbp-1"), ("mbp10.parquet", "mbp-10")):
+        path = _write(tmp_path / filename, rows)
+        events = list(DatabentoParquetSource(paths=(path,), requested_symbol="NQ.c.0", schema=schema).events())
+        emitted[schema] = [type(event).__name__ for event in events]
+    assert emitted["mbp-1"] == emitted["mbp-10"] == ["Quote", "Quote", "Trade"]
+
+
 def test_tob_schema_without_action_column_stays_quotes_only(tmp_path: Path) -> None:
     # D-P-17 guard: no action column (the bbo/cbbo shape) -> quotes-only, unchanged.
     base = datetime(2026, 3, 2, 14, tzinfo=UTC)

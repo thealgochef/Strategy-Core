@@ -161,8 +161,10 @@ proven on a FRESH model, then soaked ≥7 trading days before any number is trus
   trades. `DatabentoParquetSource._decode_batch` classifies `action∈{T,TRADE}` rows as
   Trade events for `is_tob` schemas (mbp-1/cmbp-1/tbbo) WHEN the file carries an
   `action` column — exactly the mbp-10 rule (the same row still emits its Quote iff
-  L1 TOB changed; emission order trade-before-quote unchanged). bbo/cbbo files carry
-  no action column and keep quotes-only behavior. This AMENDS the D-P-15 proof
+  L1 TOB changed; ordering follows the unchanged canonical key (ts, seq,
+  side-signed-price, size): a sell Trade sorts before its row's Quote, a buy Trade
+  after — identical to mbp-10 on identical rows, pinned by test). bbo/cbbo files
+  carry no action column and keep quotes-only behavior. This AMENDS the D-P-15 proof
   contract line "mbp-1/bbo/tbbo: every row -> Quote only", which was vacuous until
   now: no mbp1/bbo/tbbo parquet file existed in any store, so no consumer sees a
   behavior change on existing data (the live path is separate code). Why: the INGEST

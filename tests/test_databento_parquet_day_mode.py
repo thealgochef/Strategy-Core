@@ -191,3 +191,41 @@ def test_day_file_priority_falls_back_to_mbp1_when_alone(tmp_path: Path) -> None
     source = DatabentoParquetSource.for_trading_day(root, date(2026, 3, 2))
     assert source.schema == "mbp-1"
     assert [t.price_ticks for t in _trades(list(source.events()))] == [68000]
+
+
+def test_era_boundary_prior_day_falls_back_to_schema_matching_file(tmp_path: Path) -> None:
+    # INGEST close-verify fix: the prior day resolves mbp10.parquet by priority
+    # while the trading day is mbp1-only, but a schema-MATCHING prior mbp1.parquet
+    # exists -> two-file composition serves the prior-evening hour from IT, with
+    # no degrade warning. Distinct prices prove which prior file was read.
+    root = tmp_path / "NQ"
+    prev_evening = datetime(2026, 2, 22, 23, 30, tzinfo=UTC)  # inside [18:00 ET, midnight)
+    day_morning = datetime(2026, 2, 23, 14, tzinfo=UTC)
+
+    def mbp_row(ts: datetime, price: float, seq: int) -> dict:
+        return {"ts_event": ts, "action": "T", "price": price, "size": 1, "side": "B", "bid_px_00": price - 0.25, "ask_px_00": price + 0.25, "sequence": seq}
+
+    _write(root / "2026-02-22" / "mbp10.parquet", [mbp_row(prev_evening, 15000.0, 1)])
+    _write(root / "2026-02-22" / "mbp1.parquet", [mbp_row(prev_evening, 17000.0, 1)])
+    _write(root / "2026-02-23" / "mbp1.parquet", [mbp_row(day_morning, 17010.0, 2)])
+    source = DatabentoParquetSource.for_trading_day(root, date(2026, 2, 23))
+    assert source.schema == "mbp-1"
+    assert [p.name for p in source.paths] == ["mbp1.parquet", "mbp1.parquet"]
+    events = list(source.events())
+    assert not [e for e in events if isinstance(e, DataQualityWarning)]
+    assert [t.price_ticks / 4 for t in _trades(events)] == [17000.0, 17010.0]
+
+
+def test_era_boundary_without_matching_prior_file_still_degrades(tmp_path: Path) -> None:
+    root = tmp_path / "NQ"
+    _write(root / "2026-02-22" / "mbp10.parquet", [
+        {"ts_event": datetime(2026, 2, 22, 23, 30, tzinfo=UTC), "action": "T", "price": 15000.0, "size": 1, "side": "B", "bid_px_00": 14999.75, "ask_px_00": 15000.25, "sequence": 1},
+    ])
+    _write(root / "2026-02-23" / "mbp1.parquet", [
+        {"ts_event": datetime(2026, 2, 23, 14, tzinfo=UTC), "action": "T", "price": 17010.0, "size": 1, "side": "B", "bid_px_00": 17009.75, "ask_px_00": 17010.25, "sequence": 2},
+    ])
+    source = DatabentoParquetSource.for_trading_day(root, date(2026, 2, 23))
+    assert len(source.paths) == 1
+    codes = [w.code for w in source.pending_warnings]
+    assert DataQualityCode.MISSING_PRIOR_DAY_FILE in codes
+    assert [t.price_ticks / 4 for t in _trades(list(source.events()))] == [17010.0]
