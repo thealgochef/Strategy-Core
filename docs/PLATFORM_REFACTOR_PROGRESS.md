@@ -2153,3 +2153,79 @@ paths).
 
 Current window: **PRESETS** — the remaining eval rulesets + two trail mechanics + expiry/
 hard-DLL semantics + the cross-preset baseline appendix (QL engine window; SC doc-ops only).
+
+---
+
+#### PRESETS — remaining eval rulesets + two trail mechanics (2026-07-10; QL window + SC doc-ops, CLOSED — LOCAL, not pushed)
+
+**Commits:** SC `9ecd6c5` (P0 doc-op above) + this close record (docs only — NO SC code). QL,
+base `1ef0ebe`: `3c4417e` (P1 trail mechanics) + `49c2f22` (P2 presets, data only). TL
+untouched. Pins UNCHANGED at `3d4193e` ×2 (no SC code this window; 9.6 convention).
+
+**P1 (QL engine, `models.py` + `engine.py` + minimal `bootstrap.py`/`report.py` carry-through):**
+two new `trail_style` mechanics exactly as ratified — `intraday_peak_trail` (the floor trails
+PEAK equity including unrealized: the favorable leg entry + MFE raises the peak IN ORDER —
+adverse leg checked against the pre-favorable floor, the favorable ratchet lands BEFORE the same
+trade's settle so an MFE-then-retrace can bust its own settle; in `realized_only` the peak
+updates from closes + EOD; lock cap min(peak − trail, start) on every ratchet path) and
+`static_floor` (start − trail forever, never ratchets). `Ruleset` gains `max_eval_days:
+int|None` → verdict **"expired"** (distinct from `incomplete`): day max can still pass/bust,
+the ATTEMPT of day max+1 lands expired untraded (`days_to_outcome` = max+1, `days_walked` =
+max, nothing banked). **`dll_hard: bool` supersedes `dll_soft`** (rename, semantics inverted-
+preserved — one flag, no contradictory states; `topstep_50k` `dll_hard=False` ≡ old
+`dll_soft=True`) at BOTH DLL sites (adverse-leg force-close AT the level + settle). Carry-
+through: bootstrap counts `expired` runs (`p_expired`; incomplete = n − passes − busts −
+expired, Wilson CI still on passes) and the report prints `hard=`/`max_eval_days` in the
+ruleset line + a `P(exp)` column. Oracle tests, all four ratified separating cases hand-
+computed: the 20-pt MFE-then-retrace trade that busts `intraday_peak_trail` (floor 49,900 via
+the +MFE leg; settle 49,800) while `eod_floor` survives THE SAME sequence (floor 48,000 all
+day) and realized-only-intraday also survives (proves the UNREALIZED leg is load-bearing);
+static floor pinned at 48,000 through a new-high day while the EOD control busts; expiry lands
+`"expired"` on day max+1 with day-max pass/bust still landing; hard-DLL busts where soft halts
+THE SAME sequence (+ the intraday lock-cap witness; + bootstrap-level expired-vs-incomplete
+distinctness).
+
+**P2 (presets, data only):** `apex_50k_eod` = 50_000 / 3_000 / 2_000 eod floor / locks
+⚠verify-lock / DLL 1_000 HARD ⚠verify-soft-vs-hard / no consistency / max_eval_days 30;
+`apex_50k_intraday` = same but `intraday_peak_trail`, DLL None; `tpt_50k_test` = eod floor /
+locks / DLL None / consistency 50% / min_days 5 / no expiry. Both ⚠ parameters carry the
+"VERIFY AT DASHBOARD" note in the preset docstring AND inline at the exact fields (flip when
+confirmed = data-only change), pinned by a test.
+
+**P3 (cross-preset baseline appendix, `PROPSIM_BASELINE.md` at the QL root, untracked — the
+window's deliverable: the first firm-vs-firm comparison on identical paths):** journal evidence
+pool (49 trades / 13 days) + 06-17 OOS ungated (42 / 15, excursion-DEGRADED everywhere), all
+four presets × both columns, N=10_000 seed 42. **Regression witness: `topstep_50k` reproduces
+the PROP-SIM baseline EXACTLY** (journal 0.9900/0.9889/0.9813/0.9730; OOS P(bust) 0.9984; same
+as-sequenced verdicts). Headlines: the INTRADAY PEAK TRAIL is the binding firm difference —
+optimistic unrealized P(pass) 0.9889 (TopStep) → 0.9492 (Apex intraday), conservative 0.9730 →
+0.9076, bust counts ×3–×4 (111→455, 270→776 per 10k), and even realized-only it is tighter
+(ratchets on every close: 0.9900 → 0.9720); the Apex 30-day budget expires 0.5–2.6% of journal
+runs (slowest column hit hardest) and truncates the OOS pass-day median 22 → 16; the hard DLL
+NEVER fired on either pool (±15pt/trade cannot reach −$1,000 before the nearer floor — the ⚠
+soft-vs-hard question is numerically moot on these pools); `tpt_50k_test` ≈ `topstep_50k`
+(min_days 5 never binds). Ranking: TopStep ≈ TPT > Apex-EOD > Apex-intraday; on the negative-
+edge OOS pool every ruleset busts ≥ 0.982 — no ruleset launders a losing strategy. As-sequenced
+history is ruleset-INVARIANT per column on the journal pool (optimistic pass day 13 $53,300;
+conservative incomplete $52,960 — the fill model still decides that sequence).
+
+**Verify (bounded close gate, 3 find-lenses + adversarial refuters on any finding):** engine
+math vs the ratified spec — ZERO findings (25 hand-computed oracle checks + a 1,500-trial ×
+4-cell fuzz: old-`dll_soft` 1ef0ebe engine vs new engine FLOAT-EXACT on every per-day
+verdict/balance/floor for topstep semantics); presets + oracle-test arithmetic recomputed by
+hand — ZERO findings (rename hygiene: `git grep dll_soft` hits only two behavior-describing
+test names); appendix vs the 8 run JSONs — ZERO mismatches (640 programmatic cell/claim checks
++ 32-row human-table cross-check; p_pass+p_bust+p_expired+p_incomplete ≡ 1 in all 32 cells).
+No refuters needed. Two recorded non-defect boundaries: (1) a bootstrap `--max-days` ≤ the
+ruleset's `max_eval_days` would silently zero `p_expired` (expiry needs the day-max+1 attempt;
+default max_days 1000 always clears it) — flagged for a future guard/warning; (2) pre-existing
+`wilson_interval(0, n)` low bound is ~1.7e-18 float residue, harmless.
+
+**Gates (final trees):** QL suite **822 passed** (811 at PROP-SIM close + 11 window tests: 6
+engine oracles, 1 bootstrap expiry, 4 preset pins) + `ruff check src tests` clean, run on the
+committed tree. SC docs-only; TL untouched.
+
+**Deliverables:** `PRESETS_QL_DIFF.txt` (`1ef0ebe..49c2f22`) + the `PROPSIM_BASELINE.md`
+cross-preset appendix at the QL root; `PRESETS_SC_DIFF.txt` (`d92eaf7..tip`, docs only) at the
+SC root. **NOT pushed (work-order FULL STOP).** Pins: no bump required — no consumer-facing SC
+change this window.
