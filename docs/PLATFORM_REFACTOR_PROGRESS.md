@@ -2229,3 +2229,30 @@ committed tree. SC docs-only; TL untouched.
 cross-preset appendix at the QL root; `PRESETS_SC_DIFF.txt` (`d92eaf7..tip`, docs only) at the
 SC root. **NOT pushed (work-order FULL STOP).** Pins: no bump required — no consumer-facing SC
 change this window.
+
+**PRESETS — PUSHED annotation (recorded 2026-07-11, INGEST P0 doc-op):** the window has since
+been GREENLIT + PUSHED: SC `origin/platform-refactor` = `1a58aa8` (close record rides the
+greenlight) with **ci run 29136911173 (#12) = success**; QL `origin/platform-refactor` =
+`49c2f22` with **ci run 29136917345 (#11) = success**, cold-installing strategy-core resolving
+the pin `3d4193e` on a fresh runner (pin witness). Pins unchanged at `3d4193e` ×2 (no
+consumer-facing SC change; 9.6 convention). TL untouched — no run owed. Both CI ids banked
+here; no debt outstanding.
+
+---
+
+#### Databento batch download — provenance (recorded 2026-07-11, INGEST P0 doc-op)
+
+Portal **batch download** job `GLBX-20260711-EEDSMFU845` (Databento web portal, **$0 —
+plan-covered**, no metered cost): dataset GLBX.MDP3, schema **MBP-1**, encoding DBN +
+zstd, **split by day**, range **2026-01-11 .. 2026-07-10**. Delivered as one zip
+(`Claude-Quant-Lab/data/databento/GLBX-20260711-EEDSMFU845.zip`, ~38.7 GB): **156 daily
+files** `glbx-mdp3-YYYYMMDD.mbp-1.dbn.zst` + 3 job JSONs (`condition.json`,
+`metadata.json`, `manifest.json`). Purpose: extend the local NQ store past the MBP-10 era
+(store ends **2026-02-22**) — overlap 2026-01-11..2026-02-22 enables an identity gate
+against the existing `mbp10.parquet` days before the post-gap days become first-class.
+
+Current window: **INGEST** — convert the batch download into first-class store days
+(`NQ/<date>/mbp1.parquet`), prove L1-projection identity on overlap days against the
+original MBP-10 store through `DatabentoParquetSource`, fresh-day dataset build + route-seam
+check, then full conversion (QL converter window; SC touched ONLY if the reader's file
+discovery hardcodes `mbp10.parquet`).
