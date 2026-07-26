@@ -2410,3 +2410,38 @@ TL **`14ed624`** (2026-07-15, `feat: add readme` — `README.md`, `backend/READM
 `backend/.env.example`, `.claude/scheduled_tasks.lock`): owner-authored documentation/config,
 outside any window's scope, **no code change**; TL `backend-ci` run **29470434376 (#15) =
 success** on it. Recorded so the ledger accounts for every commit on `platform-refactor`.
+
+---
+
+#### TOOLPIN — linter floor pinned across all three repos; the CI gate restored (2026-07-25)
+
+The DOC-SYNC doc-op above pushed as SC **`3491363`**, and SC `ci` run **30180114922 (#14)
+= FAILURE** on it — at the `Lint (ruff, repo root — config-faithful)` step, 31 s, with the
+pytest step skipped. **The red is commit-independent and was proven so before any action
+was taken:** `pyproject.toml` declared an unpinned `ruff>=0.15` while CI cold-installs, and
+`>=0.15` now resolves to **ruff 0.16.0**, whose expanded DEFAULT rule set (SC sets no
+`[tool.ruff.lint] select`, so it rides the defaults) flags **113 findings** in the tracked
+engine source. Run against clean `git archive` exports in an isolated venv: ruff 0.16.0 vs
+the PRIOR tip `9d49353` — the tree CI #13 passed GREEN on 2026-07-11 — yields the
+**identical 113 findings, same per-rule breakdown**; ruff 0.15.2 vs the new tip `3491363`
+yields **0**. A docs-only markdown commit did not and could not cause it; the prior tip
+would red the same way if re-dispatched today. Evidence: `DOCSYNC_REPORT.txt` at the SC root.
+
+**TOOLPIN restores the gate** by adding a ceiling to each repo's dev extras — SC
+`ruff>=0.15,<0.16`, TL `ruff>=0.8,<0.16`, QL `ruff>=0.3,<0.16` (each repo's existing floor
+kept; only the ceiling is new). The range resolves to **ruff 0.15.22**, under which the SC
+tracked tree at `3491363` lints **clean**. Measured before pinning: **only SC was actually
+broken** — TL `backend` and QL both lint clean under 0.16.0 today, shielded by their
+explicit `lint.select` lists, so their ceilings are **prophylactic**, taken to keep all
+three repos on one linter across cold installs rather than to fix a present red.
+
+**NAMED FUTURE WINDOW — LINT-0.16:** the 113 findings are deferred, not dismissed. Headline
+breakdown: 24 RUF100 unused-noqa · 17 RUF046 unnecessary-cast-to-int · 15 BLE001
+blind-except · 15 I001 unsorted-imports · 13 RUF022 unsorted-dunder-all · 10 UP017
+datetime-timezone-utc · 3 C408 · 3 RUF059 · 2 DTZ001 · 2 FURB162 · 2 PLR1730 · 1 each B017,
+S110, SIM114, TRY004, UP031, UP037, UP047 (64 auto-fixable, 28 more behind
+`--unsafe-fixes`). That window lifts the ceiling and takes the findings under review; doing
+either mid-doc-op would have put unreviewed engine churn under a documentation commit,
+which D-P-11(c) forbids. **Standing lesson, the second instance in one month** (QL's
+pandas-3/pyarrow-25 fixture drift on 2026-07-11 was the first): an unpinned toolchain floor
+plus a cold install is a time bomb fused to the calendar, not to the diff.

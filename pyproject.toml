@@ -23,7 +23,11 @@ databento = ["databento>=0.79"]
 dev = [
     "pytest>=8",
     "pandas>=2.0",   # only the candle BATCH builder and its tests touch pandas
-    "ruff>=0.15",
+    # Ceiling, not preference: ruff 0.16.0 expanded the DEFAULT rule set (this repo sets
+    # no [tool.ruff.lint] select, so it rides the defaults) and the cold-install CI went
+    # red on an unchanged tree — 113 findings, identical on the prior green tip. Findings
+    # deferred to a scoped lint window; lift the ceiling there, not here.
+    "ruff>=0.15,<0.16",
 ]
 
 [tool.hatch.build.targets.wheel]
