@@ -28,6 +28,21 @@ proven on a FRESH model, then soaked ≥7 trading days before any number is trus
   plugin-owned wire vocabulary. Enforced W1 P2c/P4c: constant removed, plugin ships
   lowercase {"low":"long","high":"short"}, emitter sources it verbatim. (Supersedes the
   D-E3-e "cosmetic" classification — OVERTURNED, see PROGRESS POST-E3.)
+- 9.11 RATIFIED (2026-07-28) — TIME-bar construction convention: `Bar` carries a `kind`
+  discriminator (`BarKind`, appended last, default TICK — every pre-Phase-F construction
+  site unchanged); a TIME bar's `timeframe_ticks` is the interval in SECONDS because 0 is
+  an existing "unspecified" sentinel and `BarSpec.size` already declares the seconds
+  convention for TIME; bar ids are `<n>s:<trading_day>:<index>` (tick `<n>t:` unchanged);
+  NO empty bars (an empty bucket emits nothing); `bar_index` is DENSE over emitted bars
+  per (timeframe, trading_day); DERIVE ONCE, AGGREGATE UPWARD (60s built from trades
+  once, all higher timeframes aggregate the 60s bars); buckets are anchored at the
+  trading-day boundary's ABSOLUTE UTC instant (DST-correct by construction). Why: one
+  ratified construction so batch ≡ streaming by design, with completeness observable
+  without a wall clock. Enforced: SC `candles/time_streaming.py` + `candles/time_batch.py`
+  + `candles/_buckets.py`, parity lock `tests/test_time_bar_parity.py`, rule units
+  `tests/test_time_bars.py` (TIMEBAR window, commits `fc0881c..7992323`). AMENDMENT to
+  9.4 recorded here (original text untouched): 9.4 is PARTIALLY DISCHARGED — time-bar
+  CONSTRUCTION has landed; plugin delivery and multi-timeframe routing remain Phase F1.
 
 ## Convergence rulings (ratified 2026-06-10..13; ratification record: PROGRESS POST-E3)
 - D-P-01 RATIFIED — Tracer-dye: zero rehab of pre-convergence models; acceptance on a

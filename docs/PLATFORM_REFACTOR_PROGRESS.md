@@ -2445,3 +2445,85 @@ either mid-doc-op would have put unreviewed engine churn under a documentation c
 which D-P-11(c) forbids. **Standing lesson, the second instance in one month** (QL's
 pandas-3/pyarrow-25 fixture drift on 2026-07-11 was the first): an unpinned toolchain floor
 plus a cold install is a time bomb fused to the calendar, not to the diff.
+
+---
+
+#### TIMEBAR — SC time-bar construction alongside the tick path (2026-07-27→28; SC window, six reviewed commits + this doc commit) [ruling 9.11; 9.4 PARTIALLY DISCHARGED]
+
+**Scope:** TIME bar CONSTRUCTION added alongside the tick path in SC — and nothing else:
+no delivery, no plugin routing, no contract change, no TL change (TL tracked tree
+untouched at `7a911c0` throughout). Reviewed diff: 8 files, +1003/−17
+(`TIMEBAR_SC_DIFF.txt` at the SC root); `runtime/state.py` (`_bar()`),
+`contract/schema.py` and `validation/_fixtures/` appear in NO hunk.
+
+**The six commits, in order (pushed byte-identical to review):**
+
+- `fc0881c` feat(candles): Bar gains kind (BarKind, appended last, default TICK); make_bar_id branches TIME->'s' (TIMEBAR C1)
+- `228ce28` feat(candles): streaming TimeBarEngine — 60s base + aggregate-upward, day-anchored DST-correct buckets (TIMEBAR C2)
+- `1eca72f` feat(candles): vectorized build_time_bars_from_frame — one 60s aggregation, upward groupby per timeframe (TIMEBAR C3)
+- `20153a3` test(candles): time-bar batch<->streaming parity lock — 8 TFs, day roll, empty buckets, truncation, both DST days (TIMEBAR C4)
+- `48fdf60` test(candles): time-bar rule units — anchoring, exact bucket edge, DST 23h/25h, bar_id kinds, TICK default, dense index (TIMEBAR C5)
+- `7992323` test(candles): wall-clock ceiling on the 8-TF time-bar build — 1.0s vs ~0.085s observed (TIMEBAR C6)
+
+**Type surface:** `Bar` gained `kind: BarKind = BarKind.TICK` appended LAST and
+defaulted — every pre-existing construction site (positional or keyword) stays valid and
+every existing tick bar is unchanged. TIME bars carry `timeframe_ticks` as the interval
+in SECONDS (the `BarSpec.size` convention, `strategies/protocols.py`; 0 was unavailable
+as an existing "unspecified" sentinel — QL `engine_decision.py:129`, SC
+`tests/test_outcomes.py:53` / `test_honest_entry.py:59`). `bar_id` branches on kind:
+`<n>t:<day>:<idx>` (unchanged) / `<n>s:<day>:<idx>`. `BarKind` RELOCATED to
+`strategy_core.types` (so `Bar.kind` needs no strategies→types import cycle) and
+re-exported UNCHANGED from `strategies/protocols.py` — same class object, every existing
+import resolves.
+
+**Construction rules (ratified pre-window, implemented exactly):** buckets anchored at
+the trading-day boundary computed as the ABSOLUTE UTC instant of 18:00 ET on the
+calendar day preceding the trading day (`candles/_buckets.py`, shared by both builders)
+— DST-correct because elapsed time from an absolute instant is used, never wall-clock
+labels (23h/25h days pinned by test). NO empty bars — a bucket with no trades produces
+no bar; `bar_index` is DENSE over EMITTED bars per (timeframe, trading_day). DERIVE
+ONCE, AGGREGATE UPWARD — the 60s series is built from trades once; all seven higher
+timeframes (180/300/600/900/1800/3600/14400 s) aggregate the 60s bars; never a second
+pass over the trade stream. COMPLETE iff a LATER bucket in the same trading day and
+timeframe produced a bar; otherwise END_OF_DAY incomplete (day roll /
+`finalize_trading_day`) — observable identically in both paths, no clock reasoning.
+
+**Gates (all on the committed tree, editable install):** SC suite **219 passed, 0
+failed**; BOTH frozen digest fixtures unchanged — `test_b3_golive_plugin_regression` +
+`test_b3_multiday_reset_plugin_regression` green, fixtures untouched; tick parity
+(`test_candle_parity.py`) unchanged; time parity bit-exact (867 bars, `astuple`
+equality, all 8 TFs, day-roll, empty buckets, truncated final bucket, both DST days);
+repo-root ruff clean. Consumers against the editable SC: TL **511 passed / 1 skipped**,
+QL **830 passed**.
+
+**Environment deviation, found + fixed in-window:** the editable strategy-core install
+was ABSENT — `strategy_core` resolved to a pip VCS snapshot at `9d49353`
+(site-packages), i.e. the ENV-FIX editable arrangement had been flipped back (second
+occurrence; see the Cache-shape recon). Restored via `pip install -e . --no-deps`;
+`strategy_core.__file__` re-verified = SC `src/` working tree BEFORE any test ran. All
+gates and the census executed against the working tree.
+
+**FVG_CENSUS (QL-side, untracked scratch, read-only):** 20 store days ending
+2026-02-13 (5 warmup + 15 counted; window entirely outside the sealed range). Smoke:
+regular days build **1380/1440** 60s bars — the 60 absent are exactly the 17:00–18:00
+ET maintenance halt — and **6/6** 4H bars; the MLK early-close day 1140/1440. Root-tap
+frequency, three series NEVER summed: **6.33/day** (1H+4H FVG first touches, median 7)
+· **4.07/day** (key-level first touches, median 4) · **0.13/day** overlap (median 0;
+2/61 = 3.3% of level taps coincide with an FVG root at every tested tolerance ±0/4/8
+ticks). Full material: `Claude-Quant-Lab/FVG_CENSUS.md` + `scratch_root_census.py`.
+Census cost 19.1 min / 57.3 s per day (~98% reader decode).
+
+**ARCHITECT REVIEW — diff read hunk by hunk; three findings recorded, none blocking:**
+(i) the `_emit_base=False` path (a `TimeBarEngine` constructed WITHOUT 60 in its
+timeframes: the 60s accumulator runs internally but is not emitted) has no parity
+coverage; (ii) the streaming engine buckets in integer MICROSECONDS while the batch
+builder buckets in integer NANOSECONDS — synthetic parity cannot distinguish them
+(datetime inputs are µs-precision), so real-data parity depends on the reader's ns→µs
+conversion TRUNCATING rather than rounding, which is unverified; (iii) the C6 timing
+ceiling bounds the 550-trade synthetic path only, not a real ~400k-trade day (the
+census measured 0.5–0.9 s/day for all eight timeframes — recorded as the real-data
+figure, not a gate).
+
+**Open, carried forward:** NY session high/low are ABSENT from `StrategyLevelState`
+(the range map is `{"asia", "london"}` only — `runtime/levels.py:49`). Reported as a
+pre-flight finding, deliberately NOT added; a new level source is a separate window.
