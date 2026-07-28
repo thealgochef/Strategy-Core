@@ -2527,3 +2527,90 @@ figure, not a gate).
 **Open, carried forward:** NY session high/low are ABSENT from `StrategyLevelState`
 (the range map is `{"asia", "london"}` only — `runtime/levels.py:49`). Reported as a
 pre-flight finding, deliberately NOT added; a new level source is a separate window.
+
+---
+
+#### TIMEBAR-FIX — pandas-3 resolution bug repaired + verified on both majors (2026-07-28; SC-only, five reviewed commits + this greenlight docs commit) [GREENLIT + PUSHED — CI ids in the greenlight annotation at the end of this record; pins 1eca72f → fcff9f0 ×2]
+
+**Scope:** SC-only; repairs the pandas-3 resolution bug that turned SC `ci` run
+**30331205481 (#16)** red on tip `8ec6906` (the four new time-bar tests; every
+pre-existing test including both frozen digests stayed green). No contract change, no TL
+change, no plugin routing. Reviewed diff: 4 files, +119/−6 (`TIMEBAR_FIX_SC_DIFF.txt`).
+
+**The five reviewed commits, in order (pushed byte-identical), plus this record's commit:**
+
+- `95570df` refactor(candles): extract ns-integer helpers in the time batch builder (TIMEBAR-FIX P1)
+- `95df548` test(candles): version-independent guard — ns-integer extraction must not inherit a non-ns dtype unit (TIMEBAR-FIX P2)
+- `fcff9f0` fix(candles): unit-explicit ns extraction — .asi8/.value return the dtype's own unit, which pandas 3 no longer renormalizes (TIMEBAR-FIX P3)
+- `a8fc22b` fix(candles): remaining pandas-resolution assumptions + stale pandas-import rule (TIMEBAR-FIX P4)
+- `719190b` test(candles): time-bar parity with the 60s base excluded (TIMEBAR-FIX P5)
+
+**ROOT CAUSE:** pandas 3.0.5 preserves a source datetime unit through DataFrame
+construction where pandas 2 renormalized to ns; `.asi8` / `.value` return integers in the
+dtype's OWN unit; the batch bucket divisor was nanoseconds, so every bucket index
+collapsed ×1000 (~16.6 h into bucket 0). The streaming engine is pure-Python and was
+unaffected; the batch↔stream parity lock caught it — exactly the drift class it exists
+to catch.
+
+**FIX:** unit-explicit extraction at the two datetime→integer sites in
+`candles/time_batch.py` (`_index_to_ns`, `_timestamp_to_ns`), forcing `as_unit("ns")`
+and asserting the forced unit loudly so a future pandas change fails with a named unit
+rather than rescaling silently. The helpers live in `time_batch.py`, NOT `_buckets.py`,
+which must stay pandas-free because `time_streaming.py` imports it.
+
+**REPRODUCTION:** the first attempt, through the module's PUBLIC input, PASSED on
+pandas 2 — the internal `to_numpy()` → DataFrame round-trip renormalizes to ns there, so
+no caller-forced dtype can express the bug. CC stopped and reported rather than working
+around it. The guard was retargeted at the extraction helpers directly with an
+`as_unit`-forced index and failed pre-fix on ALL THREE units on host pandas 2.3.1
+(us delta 60,000,000 · ms 60,000 · s 60, against the required 60,000,000,000). The red
+test is its own commit (`95df548`), so the history evidences that the guard guards.
+
+**GATES, host pandas 2.3.1:** SC **224 passed / 0 failed**; BOTH frozen digest fixtures
+explicitly green and unchanged (`test_b3_golive_plugin_regression`,
+`test_b3_multiday_reset_plugin_regression`); tick parity 3/3 unchanged; TL **511 passed /
+1 skipped**; QL **830 passed**.
+
+**GATES, pandas 3.0.5** in a throwaway venv at `C:\Users\gonza\Documents\_pandas3_check\`
+(outside all three repos): per-file parity 7 / time-bar units 12 / tick parity 3, all
+passed; full SC suite **221 passed / 3 skipped / 0 failed**. The 3 skips are environment
+guards, not pandas findings — duckdb absent (×2: `test_duckdb_streaming_parity`,
+`test_production_pair_parity`) and QL-src/store wiring absent (×1: `test_decision_diff`).
+SCOPE CAVEAT: those three are the harnesses that run against real store data, so the
+pandas-3 result is proven on the synthetic suite and untested on the real-data paths.
+
+**NO-OP PROOF:** the entire 20-day census results JSON is identical to the pre-fix run
+excluding wall-clock timing fields — the fix changes no number the census produces on
+pandas 2.
+
+**FINDING (ii) CLOSED:** the store column is `timestamp[ns, tz=UTC]` and real timestamps
+carry sub-microsecond components; the reader PRESERVES them
+(`data/databento_parquet.py:618`, `:624-625` — the `raw // 1000` at `:621` feeds only
+window masks); the truncation is ENGINE-side, in the streaming engine's
+`Timedelta.days/seconds/microseconds` decomposition which discards `.nanoseconds`.
+Floor-composition therefore holds end to end and batch-in-ns == stream-in-us is VERIFIED
+on real data. The UNIT NOTE docstring as first written attributed the truncation to the
+reader; corrected in this greenlight's commit.
+
+**FINDING (i) PAID:** parity now covers `TimeBarEngine._emit_base == False` — timeframe
+sets excluding the 60s derivation base (`719190b`).
+
+**OPEN, carried forward:** the emitted `open_ts_utc` / `close_ts_utc` are not proven
+equal across the two builders on real data — streaming assigns the ns-precision
+`pd.Timestamp`, batch emits stdlib `datetime` at µs via `.dt.to_pydatetime()`.
+Pre-existing and identical in structure on the tick path
+(`candles/streaming.py` vs `candles/batch.py`). Answerable only by running the streaming
+engine against real store trades, which nothing has yet done.
+
+**TOOLCHAIN POSTURE:** no pandas ceiling was added in any repo. This is the third
+cold-runner drift instance (QL pandas-3 fixture types 2026-07-11; ruff 0.16 at TOOLPIN
+2026-07-25; this). A linter ceiling was right at TOOLPIN; a correctness bug in our own
+code is fixed in the code, and the runner stays unpinned so it goes on surfacing the
+next one.
+
+**PIN:** target moves `1eca72f` → `fcff9f0`. Of the five, only `95570df` and `fcff9f0`
+touch executable consumer-facing code; `95df548` and `719190b` are tests and `a8fc22b`
+is docstrings. Rationale recorded: leaving the pin at `1eca72f` would have both
+consumers cold-installing a `time_batch.py` carrying the bug on runners that resolve
+pandas 3 — dormant while neither imports it, live the moment QL research uses the
+builders.

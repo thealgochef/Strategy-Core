@@ -27,12 +27,28 @@ in integer MICROSECONDS, and the two are provably equivalent: for positive integ
 ``floor(x / (a*b)) == floor(floor(x / a) / b)``, so flooring a nanosecond timestamp
 to microseconds (a=1000) and then to buckets (b=interval*1e6 us) lands in the same
 bucket as flooring the nanoseconds directly by interval*1e9 — PROVIDED the ns->us
-step is a TRUNCATION (floor), not a rounding. The streaming engine consumes Python
-``datetime`` objects (us precision), so its inputs are the ns timestamps already
-truncated to us by whatever produced them; the READER-side ns->us conversion being a
-truncation is therefore the unverified premise of real-data batch==stream parity —
-see the TIMEBAR-FIX Part 8 finding (TIMEBAR_FIX_REPORT.md) and the TIMEBAR window
-review finding (ii) in docs/PLATFORM_REFACTOR_PROGRESS.md.
+step is a TRUNCATION (floor), not a rounding.
+That truncation is ENGINE-side, not reader-side. The reader PRESERVES full
+nanosecond precision: ``event_ts_utc`` is a ns-unit ``pd.Timestamp``
+(``data/databento_parquet.py:618``, ``:624-625``; the ``raw // 1000`` at ``:621``
+feeds only the window masks, never the event objects), and real store timestamps
+DO carry sub-microsecond components. The truncation happens in
+``candles/time_streaming.py``, whose bucket arithmetic decomposes
+``event_ts_utc - day_start`` via ``Timedelta.days/seconds/microseconds`` and
+DISCARDS ``.nanoseconds``. Floor-composition therefore applies end to end and
+batch-in-ns == stream-in-us holds on real ns-precision store data — VERIFIED at
+TIMEBAR-FIX Part 8b (probes: +60s+999ns -> bucket 1 on both paths;
++59.999999999s -> bucket 0 on both paths).
+
+BUCKET ASSIGNMENT ONLY. The emitted ``open_ts_utc`` / ``close_ts_utc`` are NOT
+proven equal across the two paths on real data: the streaming engine assigns the
+ns-precision ``pd.Timestamp`` straight onto the bar, while this module emits
+stdlib ``datetime`` at us precision via ``.dt.to_pydatetime()``. On a trade
+carrying nonzero sub-microsecond nanoseconds those values differ. The parity
+harness cannot see it — its synthetic streams are built from stdlib ``datetime``
+(zero ns). The tick path has the same structure and the same exposure
+(``candles/streaming.py`` vs ``candles/batch.py``), so this is pre-existing, not
+introduced here. OPEN — TIMEBAR-FIX architect review finding.
 """
 
 from __future__ import annotations
