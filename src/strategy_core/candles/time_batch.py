@@ -20,6 +20,18 @@ mirroring ``build_tick_bars_from_frame``'s signature shape and input contract
 The parity test (``tests/test_time_bar_parity.py``) locks this against the
 streaming engine. Like ``candles/batch.py``, this module may import pandas (the
 research / warm-up fast path, run off the event loop).
+
+UNIT NOTE — batch buckets in integer NANOSECONDS while the streaming engine buckets
+in integer MICROSECONDS, and the two are provably equivalent: for positive integers
+``floor(x / (a*b)) == floor(floor(x / a) / b)``, so flooring a nanosecond timestamp
+to microseconds (a=1000) and then to buckets (b=interval*1e6 us) lands in the same
+bucket as flooring the nanoseconds directly by interval*1e9 — PROVIDED the ns->us
+step is a TRUNCATION (floor), not a rounding. The streaming engine consumes Python
+``datetime`` objects (us precision), so its inputs are the ns timestamps already
+truncated to us by whatever produced them; the READER-side ns->us conversion being a
+truncation is therefore the unverified premise of real-data batch==stream parity —
+see the TIMEBAR-FIX Part 8 finding (TIMEBAR_FIX_REPORT.md) and the TIMEBAR window
+review finding (ii) in docs/PLATFORM_REFACTOR_PROGRESS.md.
 """
 
 from __future__ import annotations
@@ -47,20 +59,39 @@ def _seconds_of(t: time) -> int:
 
 
 def _index_to_ns(values):
-    """Int64 epoch integers for a datetime Series/Index — the ONE place the batch
+    """Int64 epoch NANOSECONDS for a datetime Series/Index — the ONE place the batch
     path turns the timestamp column into integers. Lives here (not ``_buckets.py``)
-    because ``_buckets`` must stay pandas-free for the streaming engine."""
+    because ``_buckets`` must stay pandas-free for the streaming engine.
+
+    Unit-explicit: ``.asi8`` returns integers in the dtype's OWN unit, and pandas 3
+    no longer renormalizes source units to ns (the SC ci 30331205481 red), so the
+    index is forced to nanosecond resolution first and the forced unit is verified
+    loudly — a future pandas change fails with a named unit, never a silent rescale.
+    """
     import pandas as pd
 
-    return pd.DatetimeIndex(values).asi8
+    index = pd.DatetimeIndex(values).as_unit("ns")
+    if index.unit != "ns":
+        raise ValueError(
+            f"ns extraction expected datetime64[ns] after as_unit('ns'); observed "
+            f"unit {index.unit!r} (dtype {index.dtype})"
+        )
+    return index.asi8
 
 
 def _timestamp_to_ns(ts) -> int:
-    """Epoch integer for a single timestamp — the ONE place the per-day anchor
-    becomes an integer."""
+    """Epoch NANOSECONDS for a single timestamp — the ONE place the per-day anchor
+    becomes an integer. Unit-explicit for the same reason as ``_index_to_ns``:
+    ``.value`` is the underlying integer in the Timestamp's OWN unit."""
     import pandas as pd
 
-    return int(pd.Timestamp(ts).value)
+    stamp = pd.Timestamp(ts).as_unit("ns")
+    if stamp.unit != "ns":
+        raise ValueError(
+            f"ns extraction expected a ns-unit Timestamp after as_unit('ns'); "
+            f"observed unit {stamp.unit!r}"
+        )
+    return int(stamp.value)
 
 
 def build_time_bars_from_frame(
