@@ -1,0 +1,66 @@
+COCKPIT-FIX GREENLIGHT REPORT
+Date: 2026-07-10
+Window: COCKPIT-FIX (four owner-replay frontend defects; frontend-only, backend untouched)
+
+== STEP 1 — PUSH ==
+Reviewed tip : TL 67e03e48c4b745a46c3c1f60bfeed79fac1da289
+Pushed       : Trade-Lab platform-refactor  b23cc57..67e03e4
+Post-push    : origin/platform-refactor == 67e03e48c4b745a46c3c1f60bfeed79fac1da289  -> MATCH (nothing else rode)
+Ancestor     : `git merge-base --is-ancestor 67e03e4 HEAD` -> exit 0 (ANCESTOR OK); HEAD == 67e03e4 exactly, parent b23cc57 (prior pushed COCKPIT tip)
+Amend check  : reviewed commit pushed byte-identical; never amended.
+
+== STEP 2 — PINS (verbatim, NO bump; no SC change this window) ==
+TL  backend/pyproject.toml:18 @ 67e03e4:
+  "strategy-core @ git+https://github.com/thealgochef/Strategy-Core.git@3d4193e6bf3e22caa23ad4246cffed153caede8f",
+QL  pyproject.toml:36 @ 76546b0 (QL tip, local == origin/platform-refactor):
+    "strategy-core @ git+https://github.com/thealgochef/Strategy-Core.git@3d4193e6bf3e22caa23ad4246cffed153caede8f",
+Pinned sha resolves in SC working repo: 3d4193e6bf3e22caa23ad4246cffed153caede8f (3d4193e "feat(streaming): OpenSetupView accessor - open_setups() read-only projection (EXEC P1)").
+
+== STEP 3 — CI WITNESS ==
+TL backend-ci run 29121846588 (#13)
+  trigger    : push (auto — backend-ci.yml push trigger covers platform-refactor; no workflow_dispatch needed)
+  head_sha   : 67e03e48c4b745a46c3c1f60bfeed79fac1da289
+  conclusion : success
+  url        : https://github.com/thealgochef/Trade-Lab/actions/runs/29121846588
+Backend untouched this window; the run is the standing cold-install/pin witness.
+Frontend gates ran locally on the committed tree per the close: tsc --noEmit clean, eslint clean, vitest 261/261 (25 files).
+
+== WINDOW CONTENT (reviewed commit 67e03e4, 13 files +491/-32; deliverable TL/COCKPIT_FIX_TL_DIFF.txt) ==
+F1 chart/sidebar decoupling: --workspace-h: max(420px, 58vh) (viewport-only), .workspace-grid align-items:start,
+   sidebar max-height calc(var(--workspace-h) + 76px) + per-section .intel-section-body internal scroll; stylesheet-contract test.
+F2 tape retention per category: addBlotterEvent enforces 60 predictions / 60 executions / 40 drops / 60 untyped
+   via shared tapeCategory classifier (matchesTapeFilter delegates; chip semantics unchanged); typed rows survive 500 untyped events (test).
+F3 predictions pane: 340px internal scroll, newest first (component test).
+F4 display-only CT axis: chart coordinate is SYNTHETIC (trading-day midnight UTC + bar_index; chart/viewModels.ts chartTimestamp).
+   New chart/axisTime.ts resolves each tick/crosshair time to its bar's real wall-clock open (map synthetic->epoch) and formats via
+   Intl formatToParts in America/Chicago; tickMarkFormatter + localization.timeFormatter installed at createChart via ref; out-of-range -> '';
+   "CT" badge once (pointer-events:none). Tests: CST(Jan)+CDT(Jul) DST pins, day-boundary date tick (incl. 03:00Z -> previous Chicago day),
+   synthetic-index->bar mapping, out-of-range empty. Pre-existing coordinate/marker/session-shading tests pass UNMODIFIED.
+
+== ADVERSARIAL VERIFY (pre-commit; multi-agent, 4 dimensions + refuters) ==
+5 confirmed / 0 refuted; all fixed inside the reviewed commit:
+- MAJOR: lightweight-charts memoizes tick labels by (weight, time-key), flushed only by applyOptions — never setData; synthetic keys
+  collide across timeframes, so a timeframe switch showed the previous TF's wall clock. Fix: axisIndexInvalidated(prev,next) on
+  remap/removal -> timeScale.applyOptions({}) (pure appends never flush); wiring + unit tests added.
+- minor: .intel-section-body scroll container clipped .level-row.nearest -6px bleed -> body carries padding:0 6px; margin:0 -6px.
+- minor: CT badge wheel dead zone over the axis corner -> pointer-events:none.
+- minor: tall-viewport (~>1850px) dead band under the chart -> clamp ceiling dropped for max(420px, 58vh); residual band inherent
+  to content-independent height (accepted, recorded below).
+- minor: TimeWithSeconds ticks rendered minutes-only -> seconds kept on seconds-granularity ticks (deviation below).
+
+== DEVIATIONS ==
+1. Axis format: TimeWithSeconds-granularity ticks render h:mm:ss am/pm (spec said 12-hour h:mm am/pm for intraday ticks) —
+   otherwise adjacent same-minute tick bars all render identical labels. Standard intraday ticks are h:mm am/pm as specified.
+2. F1 residual: viewports taller than ~1850px show a background band between the chart bottom and the Executions panel —
+   unavoidable consequence of a content-independent viewport-relative height; mitigated by removing the 940px ceiling.
+3. Test-infra adaptations (retention semantics changed by F2, spec-sanctioned): stores.test.ts single-200-bound test superseded by
+   per-category tests; EventBlotter render-bound test reseeded (50 typed + 40 untyped = 90 retained) to keep exercising the 80-row
+   render cap. F4-protected test files (chart/viewModels, sessionShading, overlayManager, pre-existing TradingChart tests) unmodified
+   (TradingChart mock wiring gained applyOptions on the mocked timeScale; test bodies untouched).
+4. src/test/node.d.ts added: minimal node:fs/node:path/process shims for the stylesheet-contract test (repo ships no @types/node;
+   vitest stubs .css?raw imports to '' under default css:false, so the test reads styles.css via node:fs).
+
+== LEDGER ==
+TL tip 67e03e4 (pushed, CI green) · QL tip 76546b0 (unchanged) · SC tip 0e86cb5 (unchanged) · pins 3d4193e x2 (unchanged).
+PROGRESS close note (COCKPIT-FIX + owed COCKPIT ids + this CI id) rides the next SC doc-op.
+FULL STOP.

@@ -1,0 +1,63 @@
+EXEC GREENLIGHT REPORT — 2026-07-10
+Window: EXEC (paper execution layer: OpenSetupView accessor + observer tracker + execution surface)
+Reviewed tips: SC 3d4193e · TL 009889e. Reviewed commits NOT amended.
+
+STEP 1 — SC PUSH (Strategy-Core, branch platform-refactor)
+  local tip:  f2f0d1652edd9eb8d0495096f26478ec546891af
+  origin tip: f2f0d1652edd9eb8d0495096f26478ec546891af   -> MATCH
+  push: 17ee822..f2f0d16  platform-refactor -> platform-refactor
+  (tip = f2f0d16, the docs-only EXEC close record atop the reviewed 3d4193e; standing pattern)
+  ancestor assertions (git merge-base --is-ancestor <sha> HEAD):
+    c81982e (docs: REPORT pushed annotation, EXEC P0 doc-op): True
+    3d4193e (feat(streaming): OpenSetupView accessor, EXEC P1): True
+
+STEP 2 — TL PUSH + PIN CHORE (Trade-Lab, branch platform-refactor)
+  pin chore: c9a06d5 "chore: pin strategy-core @ EXEC land - 1650327 -> 3d4193e (OpenSetupView accessor)"
+  local tip:  c9a06d5f2452646d50c96f3b51a0034bac838b34
+  origin tip: c9a06d5f2452646d50c96f3b51a0034bac838b34   -> MATCH
+  push: 209f1d0..c9a06d5  platform-refactor -> platform-refactor
+  ancestor assertions (git merge-base --is-ancestor <sha> HEAD):
+    4411347 (fix(report): EXEC P0 riders): True
+    a31e357 (feat(exec): paper execution tracker P2): True
+    e7bb6fa (feat(exec): execution surface P3): True
+    009889e (fix(exec): adversarial-verify major P4): True
+    c9a06d5 (pin chore): True
+
+STEP 3 — QL PUSH + PIN CHORE (Quant-Lab, branch platform-refactor)
+  pin chore: 76546b0 "chore: pin strategy-core @ EXEC land - 1650327 -> 3d4193e (OpenSetupView accessor)"
+  local tip:  76546b0a71810f0b0a48159bcd49d45e51a881a8
+  origin tip: 76546b0a71810f0b0a48159bcd49d45e51a881a8   -> MATCH
+  push: 75f83dc..76546b0  platform-refactor -> platform-refactor
+  ancestor assertions (git merge-base --is-ancestor <sha> HEAD):
+    75f83dc (SEED pin chore — the prior lineage tip): True
+    76546b0 (pin chore): True
+
+PIN LINES (verified verbatim post-commit)
+  Trade-Lab backend/pyproject.toml:18
+    "strategy-core @ git+https://github.com/thealgochef/Strategy-Core.git@3d4193e6bf3e22caa23ad4246cffed153caede8f",
+  Claude-Quant-Lab pyproject.toml:36
+    "strategy-core @ git+https://github.com/thealgochef/Strategy-Core.git@3d4193e6bf3e22caa23ad4246cffed153caede8f",
+  Both consumers moved together: 1650327 -> 3d4193e (consumer-facing: TL
+  runtime.open_setup_views() requires StreamingHonestResolver.open_setups()).
+
+STEP 4 — CI ON THE PUSHED TIPS (all three green; push triggers fired, no workflow_dispatch needed)
+  SC ci:         run id 29101442670 (#9),  trigger push, head f2f0d1652edd9eb8d0495096f26478ec546891af,
+    conclusion success (completed 2026-07-10T14:52:19Z)
+  TL backend-ci: run id 29101483167 (#11), trigger push, head c9a06d5f2452646d50c96f3b51a0034bac838b34,
+    conclusion success (completed 2026-07-10T14:53:27Z)
+  QL ci:         run id 29101530109 (#9),  trigger push, head 76546b0a71810f0b0a48159bcd49d45e51a881a8,
+    conclusion success (completed 2026-07-10T14:54:37Z)
+  PIN-RESOLUTION WITNESS (cold-install raw logs, both consumers):
+    TL "0_backend (cold install + ruff + pytest).txt":
+      Resolved https://github.com/thealgochef/Strategy-Core.git to commit 3d4193e6bf3e22caa23ad4246cffed153caede8f
+    QL "0_quant-lab (cold install + ruff + pytest).txt":
+      Resolved https://github.com/thealgochef/Strategy-Core.git to commit 3d4193e6bf3e22caa23ad4246cffed153caede8f
+
+DEVIATIONS
+  none. Notes for the record: (a) the SC push carried one docs-only commit (f2f0d16, the EXEC
+  close record) atop the reviewed 3d4193e — reviewed commits unmodified, per the standing
+  close-record-rides-the-greenlight pattern; (b) all three CI runs fired on the push event, so
+  the workflow_dispatch fallback in the work order was not needed; (c) gh CLI absent on this box
+  — CI reads and log greps went through the GitHub REST API with the git-credential-fill token.
+
+FULL STOP.

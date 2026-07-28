@@ -1,0 +1,64 @@
+W3A-READER P3a IDENTITY PROOF — row-wise vs vectorized DatabentoParquetSource
+run: 2026-06-12T19:55:19  SC HEAD: 332ad3e
+env: python 3.13.1  pyarrow 20.0.0  numpy 2.3.1  pandas 2.3.1
+store: C:\Users\gonza\Documents\Claude-Quant-Lab\data\databento\NQ
+
+PROOF COVERAGE (the P1 semantic contract this compare must hold over):
+ 1. L1 projection: mbp-10 row -> Trade iff upper(action) in {T, TRADE}; the SAME row
+    also -> Quote iff any of the 8 TOB price-alias cells is non-null. trades schema:
+    every row -> Trade only. mbp-1/bbo/tbbo: every row -> Quote only.
+ 2. TOB-change dedup: a Quote is emitted iff its (bid_ticks, ask_ticks, bid_size,
+    ask_size) differs from the previous quote's in merged-stream order (state carries
+    across files); first quote always emits. Trades never touch the state.
+ 3. Order: per batch (65,536 rows, same row groups), events stable-sorted by
+    (ts_event, sequence, side_signed_price_ticks, size); equal keys keep row order
+    with a row's Trade item before its Quote item; ts ns-precise for ns-unit columns.
+    sequence falsiness chain: null OR ZERO 'sequence' falls through to 'seq', then 0.
+    side-signed: +price_ticks iff upper(side) == 'B' else -price_ticks (None -> sell).
+    Day-mode two-file composition = concatenation (disjoint [start,split)/[split,end)).
+    Warnings yield in row order BEFORE their batch's events.
+ 4. Timestamps: timestamp[ns,tz] -> ns-precision pd.Timestamp (pyarrow as_py + pandas
+    present), NO truncation; timestamp[us/ms/s,tz] -> exact datetime; tz-naive column
+    -> every row INVALID_TIMESTAMP; integer column -> epoch + value//1000 us.
+ 5. Prices: Decimal(str(value))/0.25 exact-grid rule == 'value/0.25 integral in
+    float64' for finite doubles (division by 0.25 exact); off-grid/null/NaN ->
+    INVALID_PRICE warn-and-skip row.
+ 6. Sizes: trade size strictly int (bool never) and > 0 else INVALID_RECORD (carries
+    event ts); quote depths: first non-null alias, _optional_int-or-0 (floats truncate
+    toward zero, non-finite/bool -> 0).
+ 7. Day window: [prev-day 18:00 ET, day 18:00 ET) DST-aware, files split at UTC
+    midnight; event kept iff start <= ts < end at full event precision (floor-us
+    compare == ns compare for whole-us bounds); invalid rows warn regardless of window.
+ 8. Symbol filter (front_month_only): spread symbols (raw_symbol-or-symbol contains
+    '-', empty raw_symbol falls through) always dropped; dominant instrument by
+    TRADE-row count over scanned row groups, ties -> larger id; null instrument_id
+    dropped when an id was resolved. Dropped rows never warn.
+ 9. Warnings: identical code/message/severity/source(file-name-only)/event_ts/metadata,
+    identical stream positions (clean-file day-mode: composition warnings first,
+    row warnings inline per batch).
+KNOWN INTENTIONAL EDGE DIVERGENCES (unreachable on real store data, documented in
+DECISIONS.md D-P-15): inf-price / out-of-datetime-range-timestamp / uint64-overflow
+cells now warn-and-skip the ROW where the row-wise path aborted the FILE (or, for
+|price/0.25| > 2^62, emitted a wrapped value); none occur on the proof days, asserted
+by the zero-warning tallies below.
+
+== 2022-02-15 ==================================================
+  files: ['mbp10.parquet @ 2022-02-14', 'mbp10.parquet @ 2022-02-15']
+  composition warnings: []
+  compare pass: 250.1s (cold cache; warms both drains)
+  RESULT: IDENTICAL — 5,218,914 events (trades 378,369 / quotes 4,840,545 / warnings 0), order + every field + ns-exact ts equal
+  timed drains (both warm): NEW 17.5s  OLD 227.1s  speedup x13.0  (3.36 vs 43.51 us/event)
+
+== 2026-02-18 ==================================================
+  files: ['mbp10.parquet @ 2026-02-17', 'mbp10.parquet @ 2026-02-18']
+  composition warnings: []
+  compare pass: 424.5s (cold cache; warms both drains)
+  RESULT: IDENTICAL — 10,720,798 events (trades 353,681 / quotes 10,367,117 / warnings 0), order + every field + ns-exact ts equal
+  timed drains (both warm): NEW 30.8s  OLD 383.7s  speedup x12.5  (2.87 vs 35.79 us/event)
+
+== BUILD PROJECTION ===============================================
+  anchors (W3a P2 gate, 2026-02-12): pipeline 1447.1s/day, old drain 513.4s / 15,303,125 events, 2 reader passes/day
+  new drain projected on that day: 3.36 us/event x 15,303,125 = 51.4s
+  projected per-day pipeline: 1447.1 - 2 x (513.4 - 51.4) = 523.0s
+  x60 build projection: 31381s = 8.72h (was 24.1h at the stop-gate)
+  assumption: non-reader pipeline cost (~420s/day: runtime drive, labeling, features) unchanged; per-day ml_utility caches make reruns instant.

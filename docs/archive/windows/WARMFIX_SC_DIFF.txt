@@ -1,0 +1,154 @@
+diff --git a/docs/BACKLOG.md b/docs/BACKLOG.md
+index 7ac8c65..57c6f19 100644
+--- a/docs/BACKLOG.md
++++ b/docs/BACKLOG.md
+@@ -17,6 +17,12 @@ they land in PROGRESS. Doc-only; commits ride the next greenlight.
+   holiday keys (weekday-only `prior_trading_day` + skip-on-empty-fetch, no backward walk;
+   e.g. 2025-12-26 keys empty 12-25) is papered over only by the 2-day warm-start's organic
+   banking — verify against the carry in this audit (SEED_PARITY_RECON §2).
++  Rider (2026-07-07, WARM-FIX window): the wedge fix upgraded the live host SDK
++  databento 0.71.0 → 0.81.0 (databento_dbn 0.49.0 → 0.62.0) and TL declared the floor
++  `databento>=0.79` (first release with the `Live.start()` thread-marshaling fix;
++  `subscribe()` is still caller-thread as of 0.81.0, so TL's facade marshals it — see the
++  2026-07-07 PROGRESS wedge record). This audit must therefore run against the NEW SDK's
++  live record shapes, not the 0.71-era ones the June sessions used.
+ - **Counter-vs-QL equality test for the Finding-1 asymmetry reconciler.** The
+   `classify_serving_only` reconciler (the deliberate `<5-interaction-print` serving asymmetry)
+   needs a test asserting its counter matches QL's, owed to a fully-green W3b.
+@@ -39,6 +45,15 @@ they land in PROGRESS. Doc-only; commits ride the next greenlight.
+ 
+ ## Tier 3 — Near-term (queued behind W3b)
+ 
++- **TL 8000-bar shared closed-bar cap — midday-restart eviction (chart-only,
++  WARM_PERF_RECON §5, 2026-07-07).** `recent_closed_bar_limit=8_000` (TL `app.py`) is ONE
++  list shared across all three timeframes (SC `state.py` — not per-timeframe). Two full July
++  warm days ≈ 6,267 bars, so a live restart from ~midday onward on average-or-heavier days
++  pushes past the cap and silently evicts the oldest warm bars (worst measured Feb case
++  ≈ 10,212 → ~2,212 evicted); the "never truncated" comment at the cap site holds only for
++  early-session restarts. Chart/display only — the honest resolver and features do not read
++  this list. Fix candidates: per-timeframe caps (matching the frontend's per-timeframe 8k)
++  or a day-aware cap.
+ - **TL live-insight surfaces UI.** Surface the serving stack's live insight as first-class UI
+   panels — predictions/probabilities with gate state, level/touch context, drop reasons, and
+   the prediction-journal history; today the chart markers + hover tooltip are the only surface.
+diff --git a/docs/PLATFORM_REFACTOR_PROGRESS.md b/docs/PLATFORM_REFACTOR_PROGRESS.md
+index 90c593f..0a4fafb 100644
+--- a/docs/PLATFORM_REFACTOR_PROGRESS.md
++++ b/docs/PLATFORM_REFACTOR_PROGRESS.md
+@@ -1517,7 +1517,7 @@ Phases A–E3: COMPLETE. W1: COMPLETE (pushed; pins bumped; CI witnessed). W2: C
+ 
+ ---
+ 
+-#### SEED — dashboard replays get the training-parity PDH/PDL seed; QL cache-stamp churn fixed (2026-07-06; cross-repo, LOCAL — NOT pushed)
++#### SEED — dashboard replays get the training-parity PDH/PDL seed; QL cache-stamp churn fixed (2026-07-06; cross-repo, PUSHED)
+ 
+ **Scope (evidence base `SEED_PARITY_RECON.md` at the TL root; its §5 probe values are this window's test oracles):** SC gains ONE additive module — `strategy_core/data/prior_day.py`: `PriorDayExtremes` + `prior_full_day_extremes(symbol_dir, trading_day, *, requested_symbol=None, max_walk_days=10)` — the recon §5 ground-truth computation verbatim (dated store dirs strictly before the day, descending, <= max_walk_days candidates; drain the canonical `for_trading_day` reader per candidate accumulating max/min `Trade.price_ticks`; first candidate with >=1 front-month trade wins; empty dirs/dayless dirs/trade-less windows skipped like QL's carry-through; exhausted -> None). NO engine-path change; frozen digests untouched by construction (the full-suite pass, incl. validation/, is the check). TL `HistoricalReplayService.start` seeds day-mode replays: AFTER `runtime.reset` (the rebuilt SC service would wipe an earlier seed) and BEFORE the core replay task starts (the summary is banked before the first event), via `asyncio.to_thread`; found -> `runtime.levels.load_prior_day_summary(extremes.source_day, ...)` keyed by the WALKED day (SC emission is most-recent-banked-below-D, so any key < D emits identically to QL's calendar-D-1 key — recon §4) + "seeded PDH/PDL from <source_day>" in the loading feed status; walk miss -> warning + proceed unseeded (QL cold-start equivalent); ANY seed exception -> warning + proceed (a seed problem never kills a replay); non-day-mode (synthetic) replays unchanged. The `requested_symbol` threaded into the walk is `ReplayConfig.requested_symbol` (the same value the runtime reset and the day-mode scan already use). QL `build_utility_dataset` now stamps each day-D cache with the seed ENTERING D (`entering_seed` captured before the carry reassignment) — the value the trust check compares against on the next run and the warmer's convention; pre-fix the builder stamped the post-update carry (day D's OWN H/L), so every builder-written cache self-invalidated on the next run (recon §3(d) rebuild churn; content was never wrong — rebuilds used the correct seed).
+ 
+@@ -1527,8 +1527,106 @@ Phases A–E3: COMPLETE. W1: COMPLETE (pushed; pins bumped; CI witnessed). W2: C
+ 
+ **w3b harness interaction (recorded):** `headless_replay.py` passes `trading_day`/`symbol_dir`, so gate replays now ALSO get the service seed; its `_SeedingSource` still seeds during `scan()` — after the service seed — under key calendar D-1 >= the walked key, so on every day with a non-None QL carry the harness's entry wins the most-recent-banked lookup — with values proven tick-identical on every recon-probed day (7/7; the front-month election difference — reader trade-count vs TickStore all-row — did not bite on any probe but is unproven on roll-week days, recon §5): banked gate evidence unchanged. The one divergence is a window's FIRST day (e.g. 2025-11-21 in D-036): its cache was built with a cold None seed, but a re-gated replay now banks 11-19 extremes from the all-store walk — re-gating that day requires regenerating its cache under the all-store seed (or accounting for the delta). With seed values proven identical on every recon-probed day (and the roll-week election caveat above), dashboard replays are the w3b harness-equivalent on the proven surface, and the W3b gate evidence transfers to dashboard replays on that basis.
+ 
+-**Gates (pre-verify trees):** SC **190 passed** (incl. the 5 new prior_day tests; validation/ digests green) + ruff clean (src/tests/scripts). TL backend **444 passed / 1 skipped** (incl. the 3 new seed tests) + ruff clean. QL **764 passed** (763 + the new stamp test) + ruff clean. `verify-prior-session-levels`: **CLOSED** (verification half by the recon, build half by this window; BACKLOG entry graduated). **Pins:** bump to the new SC tip at the greenlight (consumer-facing: TL imports `strategy_core.data.prior_day`). **NOT pushed (work-order FULL STOP).**
++**Gates (pre-verify trees):** SC **190 passed** (incl. the 5 new prior_day tests; validation/ digests green) + ruff clean (src/tests/scripts). TL backend **444 passed / 1 skipped** (incl. the 3 new seed tests) + ruff clean. QL **764 passed** (763 + the new stamp test) + ruff clean. `verify-prior-session-levels`: **CLOSED** (verification half by the recon, build half by this window; BACKLOG entry graduated). **Pins:** bump to the new SC tip at the greenlight (consumer-facing: TL imports `strategy_core.data.prior_day`).
++
++**Pushed (2026-07-06, greenlight):** SC `1650327` · TL `c92f13b` (pin bumped f9a1f63 → 1650327) · QL `75f83dc`. CI ×3 green with pin resolution witnessed: SC ci **28839878234** #6 success on 1650327 · TL backend-ci **28839902876** #8 success on c92f13b · QL ci **28839925480** #8 success on 75f83dc; both consumers' cold installs resolved strategy-core @ 1650327.
+ 
+ **Adversarial verify (mandatory close gate, 2026-07-06):** read-only 25-agent workflow (5 lenses x find, then per-finding adversarial refutation) against the exact window commits — 20 findings, **18 CONFIRMED / 2 REFUTED**. Fixed in-window: TL `91e4537` — the 5-35 s seed drain had turned three previously-instantaneous `start()` gaps into real races (concurrent second start passed the `_task` guard; `status()` reported the PREVIOUS run's stale COMPLETED for the whole drain, which also punched through the app-level live/replay 409 exclusion; a mid-drain `stop()` was silently overwritten) — closed with an in-flight `_starting` flag, dropping the stale core handle first, and honoring `_stop_requested` post-drain; the seed try now also covers the banking call (the "ANY seed exception" claim is literally true) — all four pinned by new tests. SC `a4969a0` — non-positive `max_walk_days` walked all-but-|n| candidates (slice semantics; now walks nothing), lenient `date.fromisoformat` dir names consumed walk slots (now strict `YYYY-MM-DD` round-trip), docstring parity claim scoped to the recon-probed surface; the carry-through skip branch is now CI-runnable synthetically (out-of-window-rows + quotes-only candidates). Doc corrections in THIS commit: the two close-record overclaims ("guaranteed by the recon proof" scoped to the 7/7-probed surface with the roll-week election caveat; the cost figures re-attributed to this session's probe timings), the stale Tier-3 QL-Training-UI BACKLOG item removed (delivered by QL-UI-PARITY), and the warmer stamp-test gap filed as Tier-2. Report-only residue: QL empty-output days write no cache and rebuild each run (pre-existing, known-accepted warmer behavior); TL `ReplayStatus` counters during LOADING read from the internal fields (post-fix truthful). **Gates (final trees, post-fix):** SC **194 passed** + ruff clean · TL backend **447 passed / 1 skipped** + ruff clean · QL **764 passed** + ruff clean (unchanged).
+ 
+ ---
++
++#### Live post-drain wedge — root cause banked (2026-07-07; doc-op, opens the TL WARM-FIX window)
++
++The silent post-drain live stall (first observed as WARM_PERF_RECON's anomaly: 45+ min of
++`warm_start_state:"warming"`, counters frozen at the warm total, feed "connected", zero live events, no
++error) was captured and **reproduced deterministically (2/2)** under DEBUG instrumentation — evidence
++`WEDGE_CAPTURE.md` at the TL root. Root cause has three blind layers:
++
++1. **Cross-thread transport writes in databento-python.** `Live.subscribe()`/`Live.start()` execute the
++   gateway writes on the CALLING thread (`session.subscribe` → `protocol.subscribe` →
++   `transport.writelines`; same for `start`'s `transport.write` pre-0.79), while the transport belongs to
++   the SDK's private `databento_live` event loop — asyncio transports are not thread-safe. TL's
++   post-drain `_connect` (`databento.py:362`) runs on the uvicorn MainThread, so all six post-auth writes
++   raced the loop thread's auth-completion callback (~1 ms window). The capture shows CRAM auth succeed
++   (its writes run ON the loop thread) and then **zero inbound bytes ever** — no records and no
++   heartbeats despite the negotiated 30 s interval — i.e. the gateway never received subscribe/start.
++   The SDK's thread-safe paths (`stop()`, `call_soon_threadsafe(transport.close)`) worked instantly
++   mid-wedge, isolating the unsynchronized writes as the failing pair.
++2. **SDK watchdog blind at `math.inf`.** The SDK's own gateway-timeout monitor computes
++   `gap = loop.time() − _last_msg_loop_time`, but `_last_msg_loop_time` initializes to `math.inf` and is
++   only set by `received_record` — a session that never receives its FIRST record has gap = −inf
++   forever: no timeout, no reconnect, no exception. The SDK cannot self-heal exactly this failure.
++3. **TL status blind by construction.** FeedStatus CONNECTED is asserted before any live byte arrives,
++   `warm_start_state` flips only on a post-anchor event (which never comes), and nothing compares
++   last-event age to wall clock — the operator surface stays green over a dead feed.
++
++Upstream verdict: databento **0.79.0** (2026-06-02) fixed the `Live.start()`/`terminate()` half
++("thread-unsafe behavior … which would call methods from the client's event loop in the main thread");
++`subscribe()` writes **remain caller-thread as of 0.81.0** (verified from source). The TL WARM-FIX window
++takes: SDK floor >=0.79 with host install 0.81.0, facade-level marshaling of subscribe/start onto the
++SDK session loop (fail-loud if the loop handle is unreachable), a TL liveness watchdog (D-P-06
++single-retry), the warm inference gate, the schema-scoped warm fetch, and a real backend logging config
++(the wedge was also invisible because the deployment had none — WEDGE_CAPTURE §A.2).
++
++---
++
++#### WARM-FIX — live wedge fixed + warm gated + fetch scoped + logging (2026-07-08; TL window, CLOSED — LOCAL, not pushed)
++
++**Commits (TL, ordered, base c92f13b):** `4d0eb81` P1 wedge fix → `6019bef` P2 watchdog → `e69937f` P3
++warm gate → `0fcffa2` P4 scoped fetch → `850e361` P5 logging → `5a661ea` P6 verify fixes. SC: `7001f0c`
++(window-open doc-op) + this close record. Work order: WARM_PERF_RECON.md + WEDGE_CAPTURE.md at the TL root.
++
++**P1 (wedge fix + SDK verdict):** host SDK upgraded databento 0.71.0 → **0.81.0** (databento_dbn 0.49.0 →
++0.62.0); upstream **0.79.0** fixed the `Live.start()`/`terminate()` half of the cross-thread write bug,
++`subscribe()` still writes caller-thread as of 0.81.0 (verified from source) — so the TL facade now
++force-connects with zero subscription writes (guarded private-handle access, LOUD failure if the SDK
++shape moved) and marshals every subscribe/start onto the SDK session loop via call_soon_threadsafe with
++a bounded wait. Floor declared as the new pyproject extra `[live] databento>=0.79` (SDK stays optional).
++**P2 (watchdog):** post-drain silence beyond `TRADE_LAB_LIVE_WATCHDOG_SECONDS` (default 120) → loud
++wedge-signature error + DEGRADED + the D-P-06 single-attempt reconnect; second silent episode → FAILED.
++Disarms on the warm→live flip; liveness evidence includes the feed's provider-callback stamp (see verify
++fix 1). **P3 (warm gate):** runtime suppresses predict+resolver-register+journal atomically for
++observations whose ORIGINATING TOUCH predates the warm anchor (anchor-based after the verify pass);
++everything else builds unchanged; default off (replay/tests keep predict-on-completion). Kills the
++restart-duplicate mode="live" journal rows (WARM_PERF_RECON §2, measured up to ×10). **P4 (scoped
++fetch):** trades keep the full 2-prior-trading-day span; mbp-1 starts at now − (max(contract-driven
++buffer retention, settings baseline) + 10 min slack), read at fetch time (hot-swap staleness caveat in
++the docstring); per-schema end<=start guard + availability clamp; both spans logged at INFO. **P5
++(logging):** root→stderr with UTC timestamps at `TRADE_LAB_LOG_LEVEL` (default INFO), uvicorn.access
++capped WARNING (uvicorn launched with `log_config=None` so its dictConfig can't undo the cap — verify
++fix 5), databento at INFO / DEBUG when env DEBUG.
++
++**Live smoke (2026-07-08 03:55-04:03Z, Globex open, NQU6, real gateway, new SDK):** POST→200 in
++**19.8 s** (was 2 m 57 s); drain 966,315 warm events in ~116 s; **warm total 2 m 15 s vs ~20 min
++pre-fix** (recon projected ~1.5-2 min / ~0.96M — both hit); **warming→live flip observed** (the exact
++transition that wedged 2/2 pre-fix) with **20,789 live events** in the 5-min observation window,
++last-event lag sub-second; the INFO span line read "trades from 2026-07-05T22:00Z, quotes from
++2026-07-08T03:00:26Z (retention 45m + 10m slack)"; **zero journal rows** added (no model active — the
++gate's zero-rows proof is the P3 test set); clean stop ("connection closed" in 1 ms).
++
++**Adversarial verify (mandatory close gate):** read-only 35-agent workflow (5 lenses × find → 2
++adversarial refuters per finding) against the exact commits — 15 findings, **10 CONFIRMED / 2 PLAUSIBLE
++/ 3 REFUTED** (dedup → 6 distinct). Fixed in-window (TL `5a661ea`): (1) MAJOR heartbeat-blind watchdog —
++the adapter drops gateway SystemMsg heartbeats below the liveness stamp, so a healthy quiet-market start
++(weekend/halt) would double-strike into terminal FAILED; the feed now stamps
++`last_provider_activity_utc` on every provider callback and the watchdog folds it in (the
++WEDGE_CAPTURE §C.4 healthy-vs-wedge discriminator); (2) MAJOR reconnect-vs-replay collision — the
++internal auto-reconnect could reset the shared runtime + arm the gate under a replay started during the
++reconnect delay; it now checks the injected `_replay_is_active` predicate (audit #NN-2 extended to the
++internal path); (3) watchdog strikes reset on operator start (stale-strike leak denied a fresh session
++its retry); (4) gate seam-tail leak — warm touches whose windows cross the drain's end journaled
++duplicates post-flip; the gate became anchor/origin-based; (5) uvicorn.access cap was silently undone by
++uvicorn's default dictConfig (it names that logger); `log_config=None` now; (6) diverging per-schema
++availability ends (>60 s) now warn instead of hiding inside the max-based seam stamp. Upheld-plausible
++recorded: the P1 docstring's loop-block quantification corrected (~1-2 s connect+auth dominated).
++**Report-only residue (pre-existing):** `replay.stop()` on an IDLE never-started service stamps the
++shared runtime's feed status mode="replay", mislabeling subsequent live journal rows — filed here, not
++window-introduced.
++
++**Gates (final trees):** TL backend **466 passed / 1 skipped** + ruff clean; frontend tsc clean +
++vitest **154 passed** (16 files). SC untouched by code (docs only). Deliverables at the TL root:
++`WARMFIX_TL_DIFF.txt` (c92f13b..5a661ea), `WARMFIX_SC_DIFF.txt` (1650327..tip, docs only). **NOT pushed
++(work-order FULL STOP).** Pins unchanged (no SC code change; TL pyproject gained only the optional
++`[live]` extra).
++
++---

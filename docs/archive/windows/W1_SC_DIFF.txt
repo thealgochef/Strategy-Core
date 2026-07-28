@@ -1,0 +1,936 @@
+diff --git a/src/strategy_core/constants.py b/src/strategy_core/constants.py
+index c21f534..fde610a 100644
+--- a/src/strategy_core/constants.py
++++ b/src/strategy_core/constants.py
+@@ -16,7 +16,7 @@ from __future__ import annotations
+ 
+ from datetime import time
+ 
+-from strategy_core.types import Direction, SessionScheme, SessionWindow, Side
++from strategy_core.types import SessionScheme, SessionWindow
+ 
+ # ── Instrument ──────────────────────────────────────────────────────────────
+ #: NQ trade-price grid. Production tick bars are TRADE-PRICE tick bars (a "tick" is
+@@ -61,12 +61,10 @@ POINT_VALUE: dict[str, float] = {"NQ": 20.0, "ES": 50.0}
+ #: Merge levels whose prices are within this many points into one zone.
+ #: (dashboard_utility_builder.py:54  _ZONE_PROXIMITY = 3.0)
+ ZONE_PROXIMITY_PTS = 3.0
+-#: Side -> trade direction. low touch -> long, high touch -> short.
+-#: (dashboard_utility_builder.py:431)
+-DIRECTION_FROM_SIDE: dict[Side, Direction] = {
+-    Side.LOW: Direction.LONG,
+-    Side.HIGH: Direction.SHORT,
+-}
++#: Ratified §3 (W1 P2c): the side->direction map is plugin-owned, not a platform
++#: constant. The typed engine default lives in ``decisions/touch.py``
++#: (``DEFAULT_DIRECTION_FROM_SIDE``); the lowercase WIRE vocabulary is emitted by
++#: ``default_touch_reversal_section()`` and sourced verbatim by the QL emitter.
+ 
+ # ── Feature windows / thresholds ────────────────────────────────────────────
+ #: Half-width (points) of the within-band dwell feature ``int_time_within_2pts``.
+@@ -305,7 +303,6 @@ __all__ = [
+     "TRADE_BAR_ORDER",
+     "POINT_VALUE",
+     "ZONE_PROXIMITY_PTS",
+-    "DIRECTION_FROM_SIDE",
+     "WITHIN_BAND_PTS",
+     "LEVEL_PROXIMITY_PTS",
+     "LARGE_TRADE_THRESHOLD",
+diff --git a/src/strategy_core/data/databento_parquet.py b/src/strategy_core/data/databento_parquet.py
+index 1f4e0a6..a60466b 100644
+--- a/src/strategy_core/data/databento_parquet.py
++++ b/src/strategy_core/data/databento_parquet.py
+@@ -4,14 +4,20 @@ from __future__ import annotations
+ 
+ from collections.abc import Iterator
+ from dataclasses import dataclass
+-from datetime import UTC, datetime, timedelta
++from datetime import UTC, date, datetime, timedelta
+ from decimal import Decimal, InvalidOperation
+ from heapq import heappop, heappush
+ from itertools import count
+ from pathlib import Path
+ from typing import Any
++from zoneinfo import ZoneInfo
+ 
+-from strategy_core.constants import BUY_AGGRESSOR_SIDE, DEFAULT_TICK_SIZE
++from strategy_core.constants import (
++    BUY_AGGRESSOR_SIDE,
++    DEFAULT_TICK_SIZE,
++    SESSION_TIMEZONE,
++    TRADING_DAY_BOUNDARY,
++)
+ from strategy_core.data.events import (
+     DataQualityCode,
+     DataQualitySeverity,
+@@ -60,6 +66,14 @@ TRADE_SELECTED = (
+ SortKey = tuple[datetime, int, int, int]
+ SourceItem = tuple[SortKey, Trade | Quote] | DataQualityWarning
+ 
++#: Per-date file resolution priority for trading-day composition (mirrors the
++#: research store convention: best book depth available wins).
++DAY_FILE_PRIORITY = (
++    ("mbp10.parquet", "mbp-10"),
++    ("mbp1.parquet", "mbp-1"),
++    ("trades.parquet", "trades"),
++)
++
+ 
+ @dataclass(frozen=True, slots=True)
+ class DatabentoParquetSource:
+@@ -70,9 +84,116 @@ class DatabentoParquetSource:
+     end_ts_utc: datetime | None = None
+     front_month_only: bool = False
+     batch_size: int = 65_536
++    #: Optional per-path [start, end) UTC windows; when set, overrides the global
++    #: start/end for that path. Length must match ``paths``.
++    path_windows: tuple[tuple[datetime | None, datetime | None], ...] | None = None
++    #: Warnings produced at composition time (e.g. missing prior-day file); yielded
++    #: on the event stream before any market data.
++    pending_warnings: tuple[DataQualityWarning, ...] = ()
++
++    def __post_init__(self) -> None:
++        if self.path_windows is not None and len(self.path_windows) != len(self.paths):
++            raise ValueError("path_windows must match paths length")
++
++    @classmethod
++    def for_trading_day(
++        cls,
++        symbol_dir: Path | str,
++        trading_day: date,
++        *,
++        requested_symbol: str | None = None,
++        front_month_only: bool = True,
++        batch_size: int = 65_536,
++    ) -> DatabentoParquetSource:
++        """Canonical trading-day stream: [prev-day 18:00 ET, trading-day 18:00 ET).
++
++        Composes the window from the two per-date files under ``symbol_dir``
++        (``<symbol_dir>/<YYYY-MM-DD>/{mbp10,mbp1,trades}.parquet``), DST-aware via
++        ``SESSION_TIMEZONE``. The two files are partitioned at UTC midnight of
++        ``trading_day`` — the physical file boundary — so rows duplicated across
++        adjacent day files are never double-emitted. A missing (or schema-mismatched)
++        prior-day file degrades to a single-file scan and surfaces a
++        ``MISSING_PRIOR_DAY_FILE`` warning on the event stream.
++        """
++
++        root = Path(symbol_dir)
++        symbol = requested_symbol or root.name
++        day_resolved = cls._resolve_day_file(root, trading_day)
++        if day_resolved is None:
++            raise FileNotFoundError(
++                f"no parquet day file for {symbol} {trading_day.isoformat()}"
++            )
++        day_path, day_schema = day_resolved
++        prev_day = trading_day - timedelta(days=1)
++        tz = ZoneInfo(SESSION_TIMEZONE)
++        start = datetime.combine(prev_day, TRADING_DAY_BOUNDARY, tzinfo=tz).astimezone(UTC)
++        end = datetime.combine(trading_day, TRADING_DAY_BOUNDARY, tzinfo=tz).astimezone(UTC)
++        split = datetime(trading_day.year, trading_day.month, trading_day.day, tzinfo=UTC)
++        prev_resolved = cls._resolve_day_file(root, prev_day)
++        warnings: list[DataQualityWarning] = []
++        if prev_resolved is not None and prev_resolved[1] != day_schema:
++            warnings.append(
++                cls._warning(
++                    DataQualityCode.MISSING_PRIOR_DAY_FILE,
++                    "prior-day file schema differs; trading-day window served from a single file",
++                    str(day_path),
++                    trading_day=trading_day.isoformat(),
++                    prior_day=prev_day.isoformat(),
++                    prior_schema=prev_resolved[1],
++                    schema=day_schema,
++                )
++            )
++            prev_resolved = None
++        if prev_resolved is None:
++            if not warnings:
++                warnings.append(
++                    cls._warning(
++                        DataQualityCode.MISSING_PRIOR_DAY_FILE,
++                        "prior-day file missing; trading-day window served from a single file",
++                        str(day_path),
++                        trading_day=trading_day.isoformat(),
++                        prior_day=prev_day.isoformat(),
++                    )
++                )
++            return cls(
++                paths=(day_path,),
++                requested_symbol=symbol,
++                schema=day_schema,
++                front_month_only=front_month_only,
++                batch_size=batch_size,
++                path_windows=((start, end),),
++                pending_warnings=tuple(warnings),
++            )
++        return cls(
++            paths=(prev_resolved[0], day_path),
++            requested_symbol=symbol,
++            schema=day_schema,
++            front_month_only=front_month_only,
++            batch_size=batch_size,
++            path_windows=((start, split), (split, end)),
++            pending_warnings=tuple(warnings),
++        )
++
++    @staticmethod
++    def _resolve_day_file(root: Path, day: date) -> tuple[Path, str] | None:
++        folder = root / day.isoformat()
++        for filename, schema in DAY_FILE_PRIORITY:
++            candidate = folder / filename
++            if candidate.exists():
++                return candidate, schema
++        return None
++
++    def _window_for(self, index: int) -> tuple[datetime | None, datetime | None]:
++        if self.path_windows is not None:
++            return self.path_windows[index]
++        return (self.start_ts_utc, self.end_ts_utc)
+ 
+     def events(self) -> Iterator[Trade | Quote | DataQualityWarning]:
+-        streams = [iter(self._scan_file(Path(path))) for path in self.paths]
++        yield from self.pending_warnings
++        streams = [
++            iter(self._scan_file(Path(path), self._window_for(index)))
++            for index, path in enumerate(self.paths)
++        ]
+         if not streams:
+             return
+         heap: list[tuple[SortKey, int, int, Trade | Quote]] = []
+@@ -112,9 +233,24 @@ class DatabentoParquetSource:
+             if not progressed:
+                 break
+ 
++        # L1 dedup: a Quote is emitted only when level-0 state (bid/ask price or
++        # size) changes from the previously *emitted* top-of-book state. Applies
++        # across the whole merged stream, so it holds for multi-file day windows.
++        last_tob: tuple[int, int, int, int] | None = None
+         while heap:
+             _, _, stream_index, event = heappop(heap)
+-            yield event
++            if isinstance(event, Quote):
++                tob = (
++                    event.bid_price_ticks,
++                    event.ask_price_ticks,
++                    event.bid_size,
++                    event.ask_size,
++                )
++                if tob != last_tob:
++                    last_tob = tob
++                    yield event
++            else:
++                yield event
+             primed[stream_index] = False
+             for warning in prime(stream_index):
+                 yield warning
+@@ -127,7 +263,9 @@ class DatabentoParquetSource:
+                 else:
+                     break
+ 
+-    def _scan_file(self, path: Path) -> Iterator[SourceItem]:
++    def _scan_file(
++        self, path: Path, window: tuple[datetime | None, datetime | None]
++    ) -> Iterator[SourceItem]:
+         import pyarrow.parquet as pq
+ 
+         source = safe_source(str(path)) or "historical-parquet"
+@@ -164,10 +302,22 @@ class DatabentoParquetSource:
+         # of aborting the k-way merge. Per-row warn/skip behavior is unchanged: row
+         # warnings are still yielded inline below; only decode failures land here.
+         try:
+-            front_month_id = self._front_month_instrument_id(parquet, selected) if self.front_month_only else None
+-            start = self.start_ts_utc.astimezone(UTC) if self.start_ts_utc is not None else None
+-            end = self.end_ts_utc.astimezone(UTC) if self.end_ts_utc is not None else None
+-            for batch in parquet.iter_batches(columns=selected, batch_size=self.batch_size):
++            window_start, window_end = window
++            start = window_start.astimezone(UTC) if window_start is not None else None
++            end = window_end.astimezone(UTC) if window_end is not None else None
++            # W1 P1: prune row groups by ts_event statistics so a narrow window
++            # (e.g. the prior-day hour of a trading-day composition) never decodes
++            # the whole file. Conservative: groups without usable stats are kept;
++            # the exact per-row window filter below is unchanged.
++            row_groups = self._window_row_groups(parquet, start, end)
++            front_month_id = (
++                self._front_month_instrument_id(parquet, selected, row_groups)
++                if self.front_month_only
++                else None
++            )
++            for batch in parquet.iter_batches(
++                columns=selected, batch_size=self.batch_size, row_groups=row_groups
++            ):
+                 events: list[tuple[SortKey, Trade | Quote]] = []
+                 for row in batch.to_pylist():
+                     if self.front_month_only and self._is_off_front_month(row, front_month_id):
+@@ -206,7 +356,8 @@ class DatabentoParquetSource:
+         size = row.get("size")
+         if not isinstance(size, int) or isinstance(size, bool) or size <= 0:
+             return self._warning(DataQualityCode.INVALID_RECORD, "invalid historical parquet record", source, event_ts_utc=ts)
+-        side = None if row.get("side") is None else str(row.get("side")).upper()
++        side_text = self._as_text(row.get("side"))
++        side = None if side_text is None else side_text.upper()
+         trade = Trade(event_ts_utc=ts, price_ticks=price_ticks, size=size, side=side)
+         sequence = self._optional_int(row.get("sequence")) or self._optional_int(row.get("seq")) or 0
+         key = (ts, sequence, side_signed_price_ticks(trade, buy_side=BUY_AGGRESSOR_SIDE), size)
+@@ -233,20 +384,105 @@ class DatabentoParquetSource:
+         sequence = self._optional_int(row.get("sequence")) or self._optional_int(row.get("seq")) or 0
+         return (ts, sequence, 0, 0), quote
+ 
+-    def _front_month_instrument_id(self, parquet: Any, selected: list[str]) -> int | None:
+-        counts: dict[int, int] = {}
++    @staticmethod
++    def _window_row_groups(
++        parquet: Any, start: datetime | None, end: datetime | None
++    ) -> list[int] | None:
++        """Row groups whose ts_event range can intersect [start, end); None = all.
++
++        Conservative by construction: any group whose statistics are absent or
++        unreadable is kept. Returning ``None`` keeps the default full scan.
++        """
++
++        if start is None and end is None:
++            return None
++        try:
++            ts_index = parquet.schema_arrow.names.index("ts_event")
++        except ValueError:
++            return None
++        metadata = parquet.metadata
++        groups: list[int] = []
++        for group_index in range(metadata.num_row_groups):
++            try:
++                stats = metadata.row_group(group_index).column(ts_index).statistics
++            except Exception:
++                groups.append(group_index)
++                continue
++            if stats is None or not stats.has_min_max:
++                groups.append(group_index)
++                continue
++            group_min, group_max = stats.min, stats.max
++            if not isinstance(group_min, datetime) or not isinstance(group_max, datetime):
++                groups.append(group_index)
++                continue
++            if group_min.tzinfo is None or group_max.tzinfo is None:
++                groups.append(group_index)
++                continue
++            if start is not None and group_max < start:
++                continue
++            if end is not None and group_min >= end:
++                continue
++            groups.append(group_index)
++        return groups
++
++    def _front_month_instrument_id(
++        self, parquet: Any, selected: list[str], row_groups: list[int] | None
++    ) -> int | None:
++        """Dominant non-spread instrument by TRADE-row count (ties -> larger id).
++
++        Matches the Trade-Lab/Quant-Lab front-month rule: spread symbols (containing
++        ``-``) are excluded, only trade rows are counted (every row counts for
++        schemas without an ``action`` column), and ties break toward the larger
++        instrument id. Vectorized (pyarrow compute) and restricted to the scanned
++        row groups so the prescan never decodes more than the window does.
++        """
++
+         if "instrument_id" not in selected:
+             return None
+-        for batch in parquet.iter_batches(columns=selected, batch_size=self.batch_size):
+-            for row in batch.to_pylist():
+-                if self._is_spread_symbol(row.get("raw_symbol") or row.get("symbol")):
+-                    continue
+-                instrument_id = self._optional_int(row.get("instrument_id"))
+-                if instrument_id is None:
+-                    continue
+-                size = self._optional_int(row.get("size")) or 1
+-                counts[instrument_id] = counts.get(instrument_id, 0) + max(size, 1)
+-        return max(counts.items(), key=lambda item: item[1])[0] if counts else None
++        import pyarrow as pa
++        import pyarrow.compute as pc
++
++        columns = [
++            name
++            for name in ("action", "instrument_id", "raw_symbol", "symbol")
++            if name in selected
++        ]
++        if row_groups is None:
++            table = parquet.read(columns=columns)
++        elif not row_groups:
++            return None
++        else:
++            table = parquet.read_row_groups(row_groups, columns=columns)
++        if table.num_rows == 0:
++            return None
++        mask = None
++        if "action" in columns:
++            action = pc.utf8_lower(pc.cast(table["action"], pa.string()))
++            mask = pc.is_in(action, value_set=pa.array(["t", "trade"]))
++        for symbol_column in ("raw_symbol", "symbol"):
++            if symbol_column in columns:
++                not_spread = pc.invert(
++                    pc.match_substring(pc.cast(table[symbol_column], pa.string()), "-")
++                )
++                not_spread = pc.fill_null(not_spread, True)
++                mask = not_spread if mask is None else pc.and_kleene(mask, not_spread)
++        instruments = table["instrument_id"]
++        if mask is not None:
++            instruments = instruments.filter(pc.fill_null(mask, False))
++        instruments = instruments.drop_null().combine_chunks()
++        if len(instruments) == 0:
++            return None
++        value_counts = pc.value_counts(instruments)
++        ranked = [
++            (count.as_py(), value.as_py())
++            for value, count in zip(
++                value_counts.field("values"), value_counts.field("counts"), strict=True
++            )
++            if value.as_py() is not None
++        ]
++        if not ranked:
++            return None
++        return max(ranked)[1]
+ 
+     def _is_off_front_month(self, row: dict[str, Any], front_month_id: int | None) -> bool:
+         if self._is_spread_symbol(row.get("raw_symbol") or row.get("symbol")):
+@@ -255,13 +491,25 @@ class DatabentoParquetSource:
+             return False
+         return self._optional_int(row.get("instrument_id")) != front_month_id
+ 
++    @staticmethod
++    def _as_text(value: Any) -> str | None:
++        """Decode parquet string-ish cells; mixed columns surface as bytes."""
++
++        if value is None:
++            return None
++        if isinstance(value, bytes):
++            return value.decode("utf-8", errors="replace")
++        return str(value)
++
+     @staticmethod
+     def _is_spread_symbol(value: Any) -> bool:
+-        return isinstance(value, str) and "-" in value
++        text = DatabentoParquetSource._as_text(value)
++        return text is not None and "-" in text
+ 
+     @staticmethod
+     def _is_trade_action(value: Any) -> bool:
+-        return str(value).upper() in {"T", "TRADE"}
++        text = DatabentoParquetSource._as_text(value)
++        return text is not None and text.upper() in {"T", "TRADE"}
+ 
+     @staticmethod
+     def _has_top_of_book(row: dict[str, Any]) -> bool:
+diff --git a/src/strategy_core/data/events.py b/src/strategy_core/data/events.py
+index 41b8c56..14ff69d 100644
+--- a/src/strategy_core/data/events.py
++++ b/src/strategy_core/data/events.py
+@@ -40,6 +40,7 @@ class DataQualityCode(StrEnum):
+     TIMESTAMP_REGRESSION = "timestamp_regression"
+     BACKPRESSURE_DROP = "backpressure_drop"
+     PROVIDER_ERROR = "provider_error"
++    MISSING_PRIOR_DAY_FILE = "missing_prior_day_file"
+ 
+ 
+ _WINDOWS_PATH_RE = re.compile(r"[A-Za-z]:\\[^\s,;]+")
+diff --git a/src/strategy_core/decisions/honest_entry.py b/src/strategy_core/decisions/honest_entry.py
+index 2118273..2c63512 100644
+--- a/src/strategy_core/decisions/honest_entry.py
++++ b/src/strategy_core/decisions/honest_entry.py
+@@ -112,7 +112,8 @@ def resolve_honest_outcome(
+             ``resolve_outcome``.
+         decision_offset_minutes: Minutes after the touch close the decision fires
+             (default the engine constant == the interaction window).
+-        flatten_time: ET wall-clock at/after which a decision is never traded.
++        flatten_time: ET wall-clock ON ``touch.trading_day`` at/after which a
++            decision is never traded (same-day anchored, like the cutoff).
+         rth_end: ET wall-clock RTH cutoff (forward-window upper bound + cutoff drop).
+         timezone: IANA tz for the ET conversions (default the engine session tz).
+ 
+@@ -123,19 +124,22 @@ def resolve_honest_outcome(
+     tz = ZoneInfo(timezone)
+ 
+     # (a) decision instant = touch close + decision_offset (== interaction window).
+-    # Timedelta addition on the absolute instant; ET is for the wall-clock checks.
+     decision_ts_utc = touch.bar_ts_utc + timedelta(minutes=decision_offset_minutes)
+-    decision_ts_et = decision_ts_utc.astimezone(tz)
+ 
+     # The touch-date forward cutoff (ET) = the ny-session close (engine v3: rth_end ==
+     # 17:00 ET; was 16:15). touch.trading_day is the processing date the cutoff is
+     # built from; 17:00 ET is never DST-ambiguous (DST flips at 02:00 ET).
+     rth_cutoff_et = datetime.combine(touch.trading_day, rth_end, tzinfo=tz)
++    # W1 P2a: flatten is anchored to the SAME trading day as the cutoff (an absolute
++    # instant, not a bare wall-clock compare), so evening touches — which belong to
++    # the NEXT trading day whose cutoff is ~21h away — are no longer embargoed by a
++    # time-of-day comparison against the prior session's flatten.
++    flatten_cutoff_et = datetime.combine(touch.trading_day, flatten_time, tzinfo=tz)
+ 
+     # (b) executor no-entry rule: drop a decision at/after the flatten (non-strict,
+-    # ``t >= flatten``) or at/after the RTH cutoff (non-strict, ``>= cutoff``). The
+-    # cutoff compare is on absolute instants (equivalent to the copies' ET compare).
+-    if decision_ts_et.time() >= flatten_time:
++    # ``t >= flatten``) or at/after the RTH cutoff (non-strict, ``>= cutoff``). Both
++    # compares are on absolute instants anchored to ``touch.trading_day``.
++    if decision_ts_utc >= flatten_cutoff_et:
+         return HonestEntryDrop(reason="flatten", decision_ts_utc=decision_ts_utc)
+     if decision_ts_utc >= rth_cutoff_et:
+         return HonestEntryDrop(reason="cutoff", decision_ts_utc=decision_ts_utc)
+diff --git a/src/strategy_core/decisions/streaming.py b/src/strategy_core/decisions/streaming.py
+index 308ac1a..3309798 100644
+--- a/src/strategy_core/decisions/streaming.py
++++ b/src/strategy_core/decisions/streaming.py
+@@ -210,10 +210,12 @@ class StreamingHonestResolver:
+         barrier resolves it or its cutoff passes).
+         """
+         decision_ts_utc = touch_bar_ts_utc + self._decision_offset
+-        decision_ts_et = decision_ts_utc.astimezone(self._tz)
+         rth_cutoff = datetime.combine(trading_day, self._rth_end, tzinfo=self._tz)
++        # W1 P2a: flatten anchored to the setup's trading day (absolute instant),
++        # mirroring honest_entry — evening next-trading-day setups are not embargoed.
++        flatten_cutoff = datetime.combine(trading_day, self._flatten_time, tzinfo=self._tz)
+ 
+-        if decision_ts_et.time() >= self._flatten_time:
++        if decision_ts_utc >= flatten_cutoff:
+             return StreamDrop(reason="flatten", key=key, decision_ts_utc=decision_ts_utc)
+         if decision_ts_utc >= rth_cutoff:
+             return StreamDrop(reason="cutoff", key=key, decision_ts_utc=decision_ts_utc)
+diff --git a/src/strategy_core/decisions/touch.py b/src/strategy_core/decisions/touch.py
+index a52755d..7926fb0 100644
+--- a/src/strategy_core/decisions/touch.py
++++ b/src/strategy_core/decisions/touch.py
+@@ -25,10 +25,18 @@ from __future__ import annotations
+ from collections.abc import Mapping, Sequence
+ from datetime import date
+ 
+-from strategy_core.constants import DIRECTION_FROM_SIDE
+ from strategy_core.types import Bar, Direction, Side, Touch, Zone
+ 
+-__all__ = ["is_touch", "detect_touches"]
++__all__ = ["DEFAULT_DIRECTION_FROM_SIDE", "is_touch", "detect_touches"]
++
++#: Engine default: low touch -> long, high touch -> short (the touch-reversal rule).
++#: Ratified §3 (W1 P2c): this typed map is engine-internal; the lowercase WIRE
++#: vocabulary ({"low": "long", "high": "short"}) is plugin-owned and emitted by
++#: ``default_touch_reversal_section()``.
++DEFAULT_DIRECTION_FROM_SIDE: Mapping[Side, Direction] = {
++    Side.LOW: Direction.LONG,
++    Side.HIGH: Direction.SHORT,
++}
+ 
+ 
+ def is_touch(bar_low_points: float, bar_high_points: float, zone_rep_points: float) -> bool:
+@@ -50,7 +58,7 @@ def detect_touches(
+     *,
+     tick_size: float,
+     trading_day: date,
+-    direction_from_side: Mapping[Side, Direction] = DIRECTION_FROM_SIDE,
++    direction_from_side: Mapping[Side, Direction] = DEFAULT_DIRECTION_FROM_SIDE,
+ ) -> list[Touch]:
+     """Detect first-touch events over ``bars`` in order.
+ 
+diff --git a/src/strategy_core/runtime/levels.py b/src/strategy_core/runtime/levels.py
+index 7af9971..d54aa03 100644
+--- a/src/strategy_core/runtime/levels.py
++++ b/src/strategy_core/runtime/levels.py
+@@ -68,6 +68,17 @@ class StrategyLevelState:
+         if info.trading_day is None:
+             return self.levels()
+         if self._trading_day != info.trading_day:
++            # W1 P2b: bank the completed day's extremes BEFORE resetting so pdh/pdl
++            # emit organically on multi-day streams. An explicit load_prior_day_summary
++            # for the same day stays authoritative (the external seed is never
++            # overwritten by the organic roll; a later explicit load overwrites).
++            if (
++                self._trading_day is not None
++                and self._day_high is not None
++                and self._day_low is not None
++                and self._trading_day not in self._summaries
++            ):
++                self._summaries[self._trading_day] = _DaySummary(self._day_high, self._day_low)
+             self._trading_day = info.trading_day
+             self._day_high = None
+             self._day_low = None
+diff --git a/src/strategy_core/strategies/touch_reversal/section.py b/src/strategy_core/strategies/touch_reversal/section.py
+index 6e4b9e0..0bbec05 100644
+--- a/src/strategy_core/strategies/touch_reversal/section.py
++++ b/src/strategy_core/strategies/touch_reversal/section.py
+@@ -36,7 +36,6 @@ from strategy_core.constants import (
+     DEFAULT_APPROACH_WINDOW_MINUTES,
+     DEFAULT_INTERACTION_WINDOW_MINUTES,
+     DEFAULT_TICK_COUNT,
+-    DIRECTION_FROM_SIDE,
+     INTERACTION_FEATURES,
+     LEVEL_AVAILABLE_FROM_GUARD,
+     LARGE_TRADE_THRESHOLD,
+@@ -189,9 +188,9 @@ def default_touch_reversal_section() -> TouchReversalSection:
+             zone_proximity_pts=ZONE_PROXIMITY_PTS,
+             zone_representative_price=ZONE_REPRESENTATIVE_PRICE,
+             scope=TOUCH_SCOPE,
+-            direction_from_side={
+-                side.value: direction.value for side, direction in DIRECTION_FROM_SIDE.items()
+-            },
++            # Ratified §3 (W1 P2c): the plugin OWNS the wire vocabulary — lowercase,
++            # emitted verbatim into contracts and read directly by Trade-Lab.
++            direction_from_side={"low": "long", "high": "short"},
+         ),
+         feature_windows=FeatureWindows(
+             interaction_window_minutes=DEFAULT_INTERACTION_WINDOW_MINUTES,
+diff --git a/tests/test_contract.py b/tests/test_contract.py
+index 6d58a67..36bb191 100644
+--- a/tests/test_contract.py
++++ b/tests/test_contract.py
+@@ -131,7 +131,7 @@ def _valid_contract_dict() -> dict[str, Any]:
+                 "zone_proximity_pts": 3.0,
+                 "zone_representative_price": "mean",
+                 "scope": "trading_day",
+-                "direction_from_side": {"LOW": "LONG", "HIGH": "SHORT"},
++                "direction_from_side": {"low": "long", "high": "short"},
+             },
+             "feature_windows": {
+                 "interaction_window_minutes": 5,
+diff --git a/tests/test_databento_parquet_day_mode.py b/tests/test_databento_parquet_day_mode.py
+new file mode 100644
+index 0000000..0724cbc
+--- /dev/null
++++ b/tests/test_databento_parquet_day_mode.py
+@@ -0,0 +1,167 @@
++"""W1 Part 1: trading-day composition, TOB dedup, tie-break, naive-ts rejection."""
++
++from datetime import UTC, date, datetime
++from pathlib import Path
++
++import pyarrow as pa
++import pyarrow.parquet as pq
++import pytest
++
++from strategy_core.data.databento_parquet import DatabentoParquetSource
++from strategy_core.data.events import DataQualityCode, DataQualityWarning
++from strategy_core.types import Quote, Trade
++
++
++def _write(path: Path, rows: list[dict]) -> Path:
++    path.parent.mkdir(parents=True, exist_ok=True)
++    pq.write_table(pa.Table.from_pylist(rows), path)
++    return path
++
++
++def _trade_row(ts: datetime, price: float, *, size: int = 1, side: str = "B", seq: int = 0) -> dict:
++    return {"ts_event": ts, "price": price, "size": size, "side": side, "sequence": seq}
++
++
++def _trades(events: list) -> list[Trade]:
++    return [event for event in events if isinstance(event, Trade)]
++
++
++def _quotes(events: list) -> list[Quote]:
++    return [event for event in events if isinstance(event, Quote)]
++
++
++def test_tob_dedup_emits_quotes_only_on_level0_change(tmp_path: Path) -> None:
++    base = datetime(2026, 1, 6, 14, tzinfo=UTC)
++    rows = [
++        {"ts_event": base, "action": "A", "price": 17000.0, "size": 1, "side": "B", "bid_px_00": 17000.0, "ask_px_00": 17000.5, "bid_sz_00": 5, "ask_sz_00": 5, "sequence": 1},
++        # identical level-0 state -> suppressed
++        {"ts_event": base.replace(second=1), "action": "A", "price": 17000.0, "size": 1, "side": "B", "bid_px_00": 17000.0, "ask_px_00": 17000.5, "bid_sz_00": 5, "ask_sz_00": 5, "sequence": 2},
++        # size-only change -> emitted
++        {"ts_event": base.replace(second=2), "action": "A", "price": 17000.0, "size": 1, "side": "B", "bid_px_00": 17000.0, "ask_px_00": 17000.5, "bid_sz_00": 6, "ask_sz_00": 5, "sequence": 3},
++        # trade row with unchanged book -> Trade emitted, Quote suppressed
++        {"ts_event": base.replace(second=3), "action": "T", "price": 17000.5, "size": 2, "side": "B", "bid_px_00": 17000.0, "ask_px_00": 17000.5, "bid_sz_00": 6, "ask_sz_00": 5, "sequence": 4},
++        # price change -> emitted
++        {"ts_event": base.replace(second=4), "action": "A", "price": 17000.25, "size": 1, "side": "B", "bid_px_00": 17000.25, "ask_px_00": 17000.5, "bid_sz_00": 6, "ask_sz_00": 5, "sequence": 5},
++    ]
++    path = _write(tmp_path / "mbp10.parquet", rows)
++    events = list(DatabentoParquetSource(paths=(path,), requested_symbol="NQ", schema="mbp-10").events())
++    assert len(_trades(events)) == 1
++    assert len(_quotes(events)) == 3
++
++
++def test_day_mode_two_file_window_and_midnight_partition(tmp_path: Path) -> None:
++    # Trading day 2026-02-18 (EST): window [2026-02-17 23:00 UTC, 2026-02-18 23:00 UTC),
++    # files partitioned at UTC midnight 2026-02-18.
++    root = tmp_path / "NQ"
++    duplicated = _trade_row(datetime(2026, 2, 18, 0, 0, 1, tzinfo=UTC), 17001.0, seq=10)
++    _write(root / "2026-02-17" / "trades.parquet", [
++        _trade_row(datetime(2026, 2, 17, 22, 59, 59, tzinfo=UTC), 16990.0, seq=1),  # before window
++        _trade_row(datetime(2026, 2, 17, 23, 0, tzinfo=UTC), 16991.0, seq=2),       # window start (incl)
++        _trade_row(datetime(2026, 2, 17, 23, 30, tzinfo=UTC), 16992.0, seq=3),
++        duplicated,  # after split -> dropped from prev file
++    ])
++    _write(root / "2026-02-18" / "trades.parquet", [
++        _trade_row(datetime(2026, 2, 17, 23, 59, 59, tzinfo=UTC), 16993.0, seq=9),  # stray pre-midnight row -> dropped
++        duplicated,  # same row in its proper file -> emitted exactly once overall
++        _trade_row(datetime(2026, 2, 18, 22, 59, 59, tzinfo=UTC), 17002.0, seq=11),  # last in window
++        _trade_row(datetime(2026, 2, 18, 23, 0, tzinfo=UTC), 17003.0, seq=12),       # window end (excl)
++    ])
++    source = DatabentoParquetSource.for_trading_day(root, date(2026, 2, 18))
++    events = list(source.events())
++    assert not [e for e in events if isinstance(e, DataQualityWarning)]
++    prices = [trade.price_ticks / 4 for trade in _trades(events)]
++    assert prices == [16991.0, 16992.0, 17001.0, 17002.0]
++
++
++def test_day_mode_dst_transition_window(tmp_path: Path) -> None:
++    # US spring-forward 2026-03-08. Trading day 2026-03-09: 18:00 ET is EDT (UTC-4)
++    # on BOTH ends -> window [2026-03-08 22:00 UTC, 2026-03-09 22:00 UTC).
++    root = tmp_path / "NQ"
++    _write(root / "2026-03-08" / "trades.parquet", [
++        _trade_row(datetime(2026, 3, 8, 21, 59, 59, tzinfo=UTC), 17000.0, seq=1),  # 17:59:59 EDT -> out
++        _trade_row(datetime(2026, 3, 8, 22, 0, tzinfo=UTC), 17001.0, seq=2),       # 18:00 EDT -> in
++    ])
++    _write(root / "2026-03-09" / "trades.parquet", [
++        _trade_row(datetime(2026, 3, 9, 21, 59, 59, tzinfo=UTC), 17002.0, seq=3),  # in
++        _trade_row(datetime(2026, 3, 9, 22, 0, tzinfo=UTC), 17003.0, seq=4),       # 18:00 EDT next day -> out
++    ])
++    events = list(DatabentoParquetSource.for_trading_day(root, date(2026, 3, 9)).events())
++    prices = [trade.price_ticks / 4 for trade in _trades(events)]
++    assert prices == [17001.0, 17002.0]
++
++
++def test_day_mode_missing_prior_day_warns_and_serves_single_file(tmp_path: Path) -> None:
++    root = tmp_path / "NQ"
++    _write(root / "2026-02-18" / "trades.parquet", [
++        _trade_row(datetime(2026, 2, 17, 23, 30, tzinfo=UTC), 17000.0, seq=1),
++        _trade_row(datetime(2026, 2, 18, 23, 30, tzinfo=UTC), 17001.0, seq=2),  # past window end -> out
++    ])
++    events = list(DatabentoParquetSource.for_trading_day(root, date(2026, 2, 18)).events())
++    assert isinstance(events[0], DataQualityWarning)
++    assert events[0].code is DataQualityCode.MISSING_PRIOR_DAY_FILE
++    prices = [trade.price_ticks / 4 for trade in _trades(events)]
++    assert prices == [17000.0]
++
++
++def test_day_mode_missing_day_file_raises(tmp_path: Path) -> None:
++    with pytest.raises(FileNotFoundError):
++        DatabentoParquetSource.for_trading_day(tmp_path / "NQ", date(2026, 2, 18))
++
++
++def test_merge_tie_break_is_side_signed_deterministic(tmp_path: Path) -> None:
++    ts = datetime(2026, 1, 6, 14, tzinfo=UTC)
++    # Same ts+sequence across two files: sell-aggressor sweeps sort descending by
++    # price (side-signed negative), buy-aggressor ascending.
++    p1 = _write(tmp_path / "a.parquet", [
++        _trade_row(ts, 17000.25, side="A", seq=7),
++        _trade_row(ts.replace(minute=1), 17000.25, side="B", seq=8),
++    ])
++    p2 = _write(tmp_path / "b.parquet", [
++        _trade_row(ts, 17000.75, side="A", seq=7),
++        _trade_row(ts.replace(minute=1), 17000.75, side="B", seq=8),
++    ])
++    events = _trades(list(DatabentoParquetSource(paths=(p1, p2), requested_symbol="NQ", schema="trades").events()))
++    prices = [trade.price_ticks / 4 for trade in events]
++    assert prices == [17000.75, 17000.25, 17000.25, 17000.75]
++
++
++def test_bytes_action_and_side_cells_are_decoded(tmp_path: Path) -> None:
++    """Mixed-type parquet columns surface as bytes; action/side/symbol decode must
++    tolerate them (the TL catalog fixtures and some real dumps carry them)."""
++    path = _write(tmp_path / "mbp10.parquet", [
++        {"ts_event": datetime(2026, 1, 6, 14, tzinfo=UTC), "action": b"T", "price": 17000.0, "size": 1, "side": b"B", "bid_px_00": None, "ask_px_00": None, "sequence": 1},
++        {"ts_event": datetime(2026, 1, 6, 14, 1, tzinfo=UTC), "action": b"A", "price": 17000.25, "size": 1, "side": b"B", "bid_px_00": 17000.0, "ask_px_00": 17000.5, "sequence": 2},
++    ])
++    events = list(DatabentoParquetSource(paths=(path,), requested_symbol="NQ", schema="mbp-10").events())
++    trades = _trades(events)
++    assert len(trades) == 1
++    assert trades[0].side == "B"
++    assert len(_quotes(events)) == 1
++
++
++def test_naive_timestamp_rejected_with_warning(tmp_path: Path) -> None:
++    path = _write(tmp_path / "trades.parquet", [
++        {"ts_event": datetime(2026, 1, 6, 14), "price": 17000.0, "size": 1, "side": "B", "sequence": 1},
++    ])
++    events = list(DatabentoParquetSource(paths=(path,), requested_symbol="NQ", schema="trades").events())
++    assert not _trades(events)
++    warnings = [event for event in events if isinstance(event, DataQualityWarning)]
++    assert warnings
++    assert warnings[0].code is DataQualityCode.INVALID_TIMESTAMP
++
++
++def test_single_file_global_window_still_applies(tmp_path: Path) -> None:
++    path = _write(tmp_path / "trades.parquet", [
++        _trade_row(datetime(2026, 1, 6, 13, tzinfo=UTC), 17000.0, seq=1),
++        _trade_row(datetime(2026, 1, 6, 14, tzinfo=UTC), 17001.0, seq=2),
++        _trade_row(datetime(2026, 1, 6, 15, tzinfo=UTC), 17002.0, seq=3),
++    ])
++    source = DatabentoParquetSource(
++        paths=(path,),
++        requested_symbol="NQ",
++        schema="trades",
++        start_ts_utc=datetime(2026, 1, 6, 14, tzinfo=UTC),
++        end_ts_utc=datetime(2026, 1, 6, 15, tzinfo=UTC),
++    )
++    prices = [trade.price_ticks / 4 for trade in _trades(list(source.events()))]
++    assert prices == [17001.0]
+diff --git a/tests/test_databento_parquet_source.py b/tests/test_databento_parquet_source.py
+index f9bf796..4433650 100644
+--- a/tests/test_databento_parquet_source.py
++++ b/tests/test_databento_parquet_source.py
+@@ -49,11 +49,24 @@ def test_invalid_rows_produce_path_safe_warning(tmp_path: Path) -> None:
+ 
+ 
+ def test_front_month_filter_drops_spreads_and_non_dominant_instruments(tmp_path: Path) -> None:
++    # Dominance is by TRADE-ROW COUNT (the TL/QL rule), not summed size: id 1 has two
++    # rows and wins despite id 3's larger single trade.
+     path = _write(tmp_path / "mixed.parquet", [
+-        {"ts_event": datetime(2026, 1, 6, 14, tzinfo=UTC), "price": 17000.0, "size": 10, "side": "B", "instrument_id": 1, "raw_symbol": "NQZ6", "sequence": 1},
+-        {"ts_event": datetime(2026, 1, 6, 14, 1, tzinfo=UTC), "price": 17000.25, "size": 1, "side": "B", "instrument_id": 2, "raw_symbol": "NQZ6-NQH7", "sequence": 2},
+-        {"ts_event": datetime(2026, 1, 6, 14, 2, tzinfo=UTC), "price": 17000.50, "size": 1, "side": "B", "instrument_id": 3, "raw_symbol": "NQH7", "sequence": 3},
++        {"ts_event": datetime(2026, 1, 6, 14, tzinfo=UTC), "price": 17000.0, "size": 1, "side": "B", "instrument_id": 1, "raw_symbol": "NQZ6", "sequence": 1},
++        {"ts_event": datetime(2026, 1, 6, 14, 1, tzinfo=UTC), "price": 17000.0, "size": 1, "side": "B", "instrument_id": 1, "raw_symbol": "NQZ6", "sequence": 2},
++        {"ts_event": datetime(2026, 1, 6, 14, 2, tzinfo=UTC), "price": 17000.25, "size": 50, "side": "B", "instrument_id": 2, "raw_symbol": "NQZ6-NQH7", "sequence": 3},
++        {"ts_event": datetime(2026, 1, 6, 14, 3, tzinfo=UTC), "price": 17000.50, "size": 50, "side": "B", "instrument_id": 3, "raw_symbol": "NQH7", "sequence": 4},
++    ])
++    events = [event for event in DatabentoParquetSource(paths=(path,), requested_symbol="NQ.c.0", schema="trades", front_month_only=True).events() if isinstance(event, Trade)]
++    assert len(events) == 2
++    assert all(event.price_ticks == 68000 for event in events)
++
++
++def test_front_month_count_tie_breaks_to_larger_instrument_id(tmp_path: Path) -> None:
++    path = _write(tmp_path / "tie.parquet", [
++        {"ts_event": datetime(2026, 1, 6, 14, tzinfo=UTC), "price": 17000.0, "size": 9, "side": "B", "instrument_id": 1, "raw_symbol": "NQZ6", "sequence": 1},
++        {"ts_event": datetime(2026, 1, 6, 14, 1, tzinfo=UTC), "price": 17000.50, "size": 1, "side": "B", "instrument_id": 3, "raw_symbol": "NQH7", "sequence": 2},
+     ])
+     events = [event for event in DatabentoParquetSource(paths=(path,), requested_symbol="NQ.c.0", schema="trades", front_month_only=True).events() if isinstance(event, Trade)]
+     assert len(events) == 1
+-    assert events[0].price_ticks == 68000
++    assert events[0].price_ticks == 68002
+diff --git a/tests/test_honest_entry.py b/tests/test_honest_entry.py
+index 61d4e17..893b1f4 100644
+--- a/tests/test_honest_entry.py
++++ b/tests/test_honest_entry.py
+@@ -173,6 +173,32 @@ def test_flatten_boundary_is_non_strict():
+     assert out.reason == "flatten"
+ 
+ 
++# ── W1 P2a: flatten is trading-day anchored, not a bare wall-clock compare ────
++def test_evening_touch_of_next_trading_day_is_not_flattened():
++    """A 20:00 ET touch belongs to the NEXT trading day (rolls at 18:00 ET); its
++    decision must NOT drop at the prior session's flatten and resolves against its
++    OWN trading day's cutoff (~21h away)."""
++    touch_close = datetime(2025, 7, 14, 20, 0, tzinfo=_ET).astimezone(timezone.utc)
++    fwd = _bar(touch_close + timedelta(minutes=6), high_pts=116.0, low_pts=100.0)
++
++    out = _resolve(_touch(touch_close), [fwd], price=100.0)
++
++    assert isinstance(out, OutcomeResult)
++    assert out.label == TRADEABLE_REVERSAL
++
++
++def test_evening_decision_still_drops_at_its_own_days_flatten():
++    """The same-trading-day 16:40 anchor still applies: a decision landing at/after
++    16:40 ET ON the touch's trading day drops as flatten."""
++    touch_close = _et(16, 36)  # decision 16:41 ET on 2025-07-15 >= 16:40 that day
++    fwd = _bar(touch_close + timedelta(minutes=6), high_pts=200.0, low_pts=50.0)
++
++    out = _resolve(_touch(touch_close), [fwd], price=100.0)
++
++    assert isinstance(out, HonestEntryDrop)
++    assert out.reason == "flatten"
++
++
+ # ── defaults are single-sourced from the engine constants ────────────────────
+ def test_defaults_pull_from_constants():
+     """With no override, a touch right before the flatten survives; one at the
+diff --git a/tests/test_runtime_levels.py b/tests/test_runtime_levels.py
+index 2b0e866..de3cf99 100644
+--- a/tests/test_runtime_levels.py
++++ b/tests/test_runtime_levels.py
+@@ -1,13 +1,22 @@
+ from datetime import UTC, datetime
++from zoneinfo import ZoneInfo
+ 
++from strategy_core.runtime.levels import StrategyLevelState
+ from strategy_core.runtime.state import StrategyRuntime
+ from strategy_core.types import Side, Trade
+ 
++_ET = ZoneInfo("US/Eastern")
++
+ 
+ def _ts(hour: int, minute: int = 0) -> datetime:
+     return datetime(2026, 1, 6, hour, minute, tzinfo=UTC)
+ 
+ 
++def _et_trade(year: int, month: int, day: int, hour: int, minute: int, price_ticks: int) -> Trade:
++    ts = datetime(year, month, day, hour, minute, tzinfo=_ET).astimezone(UTC)
++    return Trade(ts, price_ticks, 1, "B")
++
++
+ def test_prior_day_summary_loads_pdh_pdl_with_start_availability() -> None:
+     runtime = StrategyRuntime(timeframes=(2,), requested_symbol="NQ.c.0")
+     runtime.load_prior_day_summary(datetime(2026, 1, 5, tzinfo=UTC).date(), high_ticks=68100, low_ticks=67900)
+@@ -18,6 +27,35 @@ def test_prior_day_summary_loads_pdh_pdl_with_start_availability() -> None:
+     assert levels["pdh"].available_from is not None
+ 
+ 
++def test_two_day_stream_banks_pdh_pdl_organically() -> None:
++    """W1 P2b: the trading-day roll banks the completed day's extremes; day 2 emits
++    pdh/pdl with no external seed."""
++    state = StrategyLevelState()
++    # Trading day 2025-07-15 (rolls at 18:00 ET on 7/14): high 68400, low 68000.
++    state.process_trade(_et_trade(2025, 7, 14, 19, 0, 68400))
++    state.process_trade(_et_trade(2025, 7, 15, 10, 0, 68000))
++    assert {level.name for level in state.levels()}.isdisjoint({"pdh", "pdl"})
++    # First trade after 18:00 ET on 7/15 rolls to trading day 2025-07-16.
++    levels = {level.name: level for level in state.process_trade(_et_trade(2025, 7, 15, 19, 30, 68200))}
++    assert levels["pdh"].price == 68400 * 0.25
++    assert levels["pdl"].price == 68000 * 0.25
++    assert levels["pdh"].side is Side.HIGH
++    assert levels["pdl"].side is Side.LOW
++
++
++def test_explicit_prior_day_load_wins_over_organic_banking() -> None:
++    """W1 P2b: an external seed for the same completed day is never overwritten by
++    the roll — the explicitly loaded extremes win."""
++    state = StrategyLevelState()
++    state.process_trade(_et_trade(2025, 7, 14, 19, 0, 68400))
++    state.load_prior_day_summary(
++        datetime(2025, 7, 15, tzinfo=UTC).date(), high_ticks=70000, low_ticks=60000
++    )
++    levels = {level.name: level for level in state.process_trade(_et_trade(2025, 7, 15, 19, 30, 68200))}
++    assert levels["pdh"].price == 70000 * 0.25
++    assert levels["pdl"].price == 60000 * 0.25
++
++
+ def test_asia_and_london_ranges_use_strategy_core_sessions_not_chicago_closed_window() -> None:
+     runtime = StrategyRuntime(timeframes=(2,), requested_symbol="NQ.c.0")
+     runtime.process_event(Trade(datetime(2026, 1, 6, 0, 30, tzinfo=UTC), 68000, 1, "B"))  # Asia ET
+diff --git a/tests/test_streaming_resolver.py b/tests/test_streaming_resolver.py
+index 93de34e..2b3fc88 100644
+--- a/tests/test_streaming_resolver.py
++++ b/tests/test_streaming_resolver.py
+@@ -93,6 +93,27 @@ def test_registration_flatten_drop_at_exact_1640_et_boundary() -> None:
+     assert drop.decision_ts_utc == _et(16, 40)
+ 
+ 
++def test_registration_evening_touch_of_next_trading_day_not_flattened() -> None:
++    """W1 P2a: flatten is anchored to the setup's trading day. A 20:00 ET touch the
++    prior evening (trading day _DAY, which rolls at 18:00 ET) registers live and
++    resolves against _DAY's cutoff."""
++    resolver = _resolver()
++    prev_evening = datetime(2025, 7, 14, 20, 0, tzinfo=_ET).astimezone(UTC)
++    assert (
++        resolver.register(
++            "k", touch_bar_ts_utc=prev_evening, trading_day=_DAY, direction="long"
++        )
++        is None
++    )
++    assert resolver.open_count == 1
++    # A next-morning bar (inside _DAY's RTH, before the 17:00 ET cutoff) advances the
++    # setup: +16 pts off the 23000.0 entry -> TP for the long.
++    emitted = resolver.on_bar(_bar(_et(10, 0), 23016.0, 23000.0))
++    assert len(emitted) == 1
++    assert isinstance(emitted[0], StreamResolution)
++    assert resolver.open_count == 0
++
++
+ def test_registration_no_fill_when_no_qualifying_print() -> None:
+     resolver = _resolver(trade_price_at=lambda ts: None)
+     drop = resolver.register(
+diff --git a/tests/test_touch_reversal_plugin.py b/tests/test_touch_reversal_plugin.py
+index 29ee6aa..5a9dfc3 100644
+--- a/tests/test_touch_reversal_plugin.py
++++ b/tests/test_touch_reversal_plugin.py
+@@ -89,7 +89,7 @@ def _section() -> TouchReversalSection:
+             zone_proximity_pts=ZONE_PROXIMITY_PTS,
+             zone_representative_price="mean_of_constituent_levels",
+             scope="first_touch_per_zone_per_day",
+-            direction_from_side={"LOW": "LONG", "HIGH": "SHORT"},
++            direction_from_side={"low": "long", "high": "short"},
+         ),
+         feature_windows=FeatureWindows(
+             interaction_window_minutes=5,

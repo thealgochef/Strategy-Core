@@ -1,0 +1,53 @@
+COCKPIT GREENLIGHT REPORT — 2026-07-10
+Window: COCKPIT (trader-facing UI pass: strip, decision surfaces, chart cockpit, trade tape;
+ONE+1 display-only backend DTO additions; SC doc-ops only)
+Reviewed tips: TL b23cc57 · SC 0e86cb5 (the close-record commit atop a36b858).
+Reviewed commits NOT amended.
+
+STEP 1 — TL PUSH (Trade-Lab, branch platform-refactor)
+  local tip:  b23cc57e0d085cc6f9754429dbb7c189b214c670
+  origin tip: b23cc57e0d085cc6f9754429dbb7c189b214c670   -> MATCH
+  push: c9a06d5..b23cc57  platform-refactor -> platform-refactor
+  ancestor assertions (git merge-base --is-ancestor <sha> HEAD):
+    07586d9 (feat(api): model-status serving-gate params, COCKPIT P1): True
+    30bc5b5 (feat(strip): trader strip + collapsed ops panels, COCKPIT P2): True
+    b2f5172 (feat(intel): decision surfaces, COCKPIT P3): True
+    dbc8bed (feat(chart): TP/SL lines, session shading, re-anchor, badge, COCKPIT P4): True
+    b23cc57 (feat(blotter): trade tape, COCKPIT P5): True
+
+STEP 2 — SC PUSH (Strategy-Core, branch platform-refactor)
+  local tip:  0e86cb55867bbe67bfb7cac2e4f65b56f63d3407
+  origin tip: 0e86cb55867bbe67bfb7cac2e4f65b56f63d3407   -> MATCH
+  push: f2f0d16..0e86cb5  platform-refactor -> platform-refactor
+  ancestor assertions (git merge-base --is-ancestor <sha> HEAD):
+    a36b858 (docs: EXEC pushed annotation + COCKPIT status line, P0 doc-op): True
+    0e86cb5 (docs: COCKPIT close record — the tip): True
+  DOCS-ONLY CONFIRMED: git diff --name-only f2f0d16..HEAD =
+    docs/PLATFORM_REFACTOR_PROGRESS.md
+  (zero files under src/strategy_core)
+
+STEP 3 — PINS (verified verbatim, NO bump — SC docs-only this window)
+  Trade-Lab backend/pyproject.toml:18
+    "strategy-core @ git+https://github.com/thealgochef/Strategy-Core.git@3d4193e6bf3e22caa23ad4246cffed153caede8f",
+  Claude-Quant-Lab pyproject.toml:36
+    "strategy-core @ git+https://github.com/thealgochef/Strategy-Core.git@3d4193e6bf3e22caa23ad4246cffed153caede8f",
+  Both consumers still pin 3d4193e (the EXEC-land tip); no consumer-facing SC change in
+  COCKPIT, so per the 9.6 convention the pin does not move.
+
+STEP 4 — CI ON THE PUSHED TIPS (both green; push triggers fired, no workflow_dispatch needed)
+  TL backend-ci: run id 29109919564 (#12), trigger push, branch platform-refactor,
+    head b23cc57e0d085cc6f9754429dbb7c189b214c670,
+    conclusion success (completed 2026-07-10T17:09:24Z)
+  SC ci:         run id 29109952671 (#10), trigger push, branch platform-refactor,
+    head 0e86cb55867bbe67bfb7cac2e4f65b56f63d3407,
+    conclusion success (completed 2026-07-10T17:09:31Z)
+  QL untouched this window — no run owed.
+
+DEVIATIONS
+  none. Notes for the record: (a) gh CLI absent on this box — CI reads went through the
+  GitHub REST API with the git-credential-fill token (the standing recipe); (b) the SC push
+  carried only the two doc commits (P0 annotation + close record) — no code, pin unmoved;
+  (c) greenlight CI ids to be banked in PROGRESS via a pushed annotation at the next doc op,
+  per the standing pattern.
+
+FULL STOP.

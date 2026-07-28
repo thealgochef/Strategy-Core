@@ -1,0 +1,43 @@
+REPORT GREENLIGHT REPORT — 2026-07-10
+Window: REPORT (performance surface: journal aggregator + read-only endpoint + Performance page)
+Reviewed tips: TL 209f1d0 · SC 17ee822. Reviewed commits NOT amended.
+
+STEP 1 — TL PUSH (Trade-Lab, branch platform-refactor)
+  local tip:  209f1d0d0fb365ceb8d35081bd4335118289c48a
+  origin tip: 209f1d0d0fb365ceb8d35081bd4335118289c48a   -> MATCH
+  push: 5a661ea..209f1d0  platform-refactor -> platform-refactor
+  ancestor assertions (git merge-base --is-ancestor <sha> HEAD):
+    8e54ad1 (feat(report): performance surface P2-P4): True
+    209f1d0 (fix(report): adversarial-verify major fixes P5): True
+
+STEP 2 — SC PUSH (Strategy-Core, branch platform-refactor)
+  local tip:  17ee8221a6c0b3d1f2463e146a032397742485e9
+  origin tip: 17ee8221a6c0b3d1f2463e146a032397742485e9   -> MATCH
+  push: 6e94091..17ee822  platform-refactor -> platform-refactor
+  ancestor assertions (git merge-base --is-ancestor <sha> HEAD):
+    ad129b2 (docs: REPORT window record + WARM-FIX pushed annotation): True
+    17ee822 (docs: REPORT verify record): True
+  docs-only confirmation (git diff --name-only 6e94091..17ee822):
+    docs/PLATFORM_REFACTOR_PROGRESS.md
+    files under src/strategy_core: 0
+
+STEP 3 — PINS (verified verbatim, NO bump — SC change is docs-only)
+  Trade-Lab backend/pyproject.toml:18
+    "strategy-core @ git+https://github.com/thealgochef/Strategy-Core.git@16503279dc560eebeed3673b27599ca9dce14848",
+  Claude-Quant-Lab pyproject.toml:36
+    "strategy-core @ git+https://github.com/thealgochef/Strategy-Core.git@16503279dc560eebeed3673b27599ca9dce14848",
+  Both pin strategy-core @ 1650327 (16503279dc560eebeed3673b27599ca9dce14848). Unchanged.
+
+STEP 4 — CI ON THE PUSHED TIPS (both green; push triggers fired, no workflow_dispatch needed)
+  TL backend-ci: run id 29077742228, trigger push, head 209f1d0d0fb365ceb8d35081bd4335118289c48a,
+    conclusion success (completed 02:49:08 local)
+  SC ci:         run id 29077759730, trigger push, head 17ee8221a6c0b3d1f2463e146a032397742485e9,
+    conclusion success
+
+DEVIATIONS
+  none. Notes for the record: (a) both CI runs fired on the push event, so the workflow_dispatch
+  fallback in the work order was not needed; (b) the QL grep for the pin also matched two lines in
+  QL's historical LAND_QL_DIFF.txt artifact (old 256020c -> f9a1f63 bump); those are diff-export
+  history, not live pins — the live QL pin is the pyproject.toml:36 line quoted above.
+
+FULL STOP.

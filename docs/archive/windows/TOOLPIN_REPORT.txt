@@ -1,0 +1,237 @@
+TOOLPIN REPORT — pin the linter floor across all three repos; restore the CI gate
+Generated 2026-07-26 (UTC).  Scope: dev-extras ruff specifier in each repo + one SC
+PROGRESS paragraph.
+
+BOTTOM LINE
+  Gate RESTORED.  CI x3 GREEN on the pushed tips, every step executed (no skips):
+    SC ci         30180495919 (#15) success   on 4740ecd
+    TL backend-ci 30180496656 (#16) success   on 7a911c0
+    QL ci         30180497425 (#14) success   on 27cdfd6
+  SC #15 SUPERSEDES the red #14 (30180114922) from the DOC-SYNC push.
+  Pins to strategy-core UNCHANGED at 9d49353 in both consumers; both cold installs
+  resolved it (Install step green — see the CAVEAT on log quoting below).
+  Measured, not assumed: only SC was actually broken.  TL and QL lint clean under
+  ruff 0.16.0 today; their ceilings are PROPHYLACTIC.
+
+
+================================================================================
+STEP 1 — THE THREE COMMITS
+================================================================================
+
+  All three share the subject:
+    "chore: pin ruff <0.16 (0.16.0 default-rule drift reds cold installs; findings
+     deferred to a scoped lint window)"
+  and the trailer  Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>
+
+  SC  4740ecdd460caf4ed2c8038fc37c23b2b1d17788   parent 3491363
+      docs/PLATFORM_REFACTOR_PROGRESS.md | 35 ++++++++++++++++++++++++++++++
+      pyproject.toml                     |  6 +++++-
+      2 files changed, 40 insertions(+), 1 deletion(-)
+      pyproject.toml:26   "ruff>=0.15",  ->  "ruff>=0.15,<0.16",   (+ 4 comment lines)
+
+  TL  7a911c0ce0ae5d9e2c97339b7d897377a37a3647   parent 14ed624
+      backend/pyproject.toml | 5 ++++-
+      1 file changed, 4 insertions(+), 1 deletion(-)
+      backend/pyproject.toml:39   "ruff>=0.8",  ->  "ruff>=0.8,<0.16",  (+ 3 comment lines)
+
+  QL  27cdfd6630898c7b31559fbe57f009701f8ed931   parent 5ab6da9
+      pyproject.toml | 5 ++++-
+      1 file changed, 4 insertions(+), 1 deletion(-)
+      pyproject.toml:44   "ruff>=0.3",  ->  "ruff>=0.3,<0.16",   (+ 3 comment lines)
+
+  Each repo's EXISTING floor was preserved; only the ceiling is new.  The three floors
+  differed (0.15 / 0.8 / 0.3) and were deliberately left as they were — this window adds
+  a ceiling, it does not renegotiate floors.  All three ranges converge on the same
+  resolved linter (0.15.22), so the repos now share one linter across cold installs.
+
+  SC PROGRESS paragraph (appended as "#### TOOLPIN — linter floor pinned across all three
+  repos; the CI gate restored (2026-07-25)") records: DOC-SYNC pushed as 3491363 with SC
+  ci #14 RED on it; that the red is commit-independent, PROVEN by identical 113 findings
+  on the prior green tip 9d49353 under ruff 0.16.0 vs 0 findings under 0.15.2 on the new
+  tip; that TOOLPIN restores the gate and what each ceiling is (curative for SC,
+  prophylactic for TL/QL); and names the deferred work as a future window LINT-0.16 with
+  the full 18-rule breakdown of the 113 findings.
+
+  No source, test, workflow, or contract file was touched in any repo.
+  strategy-core SHA pins were NOT moved.
+
+
+================================================================================
+ROOT CAUSE AND THE MEASUREMENT BEHIND THE PIN
+================================================================================
+
+  Cause: unpinned linter floor + cold install.
+    SC .github/workflows/ci.yml:35   pip install -e ".[dev]"
+    SC .github/workflows/ci.yml:38   ruff check .
+    SC pyproject.toml:26 (before)    "ruff>=0.15"      <- floating
+  `>=0.15` resolves today to ruff 0.16.0, whose expanded DEFAULT rule set flags 113
+  findings in SC's tracked engine source.  SC declares no [tool.ruff.lint] select, so it
+  rides ruff's defaults and takes the full blast.
+
+  Exposure measured per repo BEFORE pinning — clean `git archive` exports of each pushed
+  tip (tracked tree only, no untracked scratch), linted in an isolated scratchpad venv
+  with each repo's own CI command:
+
+    repo  cmd                    ruff 0.16.0        ruff 0.15.2      verdict
+    ----  ---------------------  -----------------  ---------------  --------------------
+    SC    ruff check .           113 errors, exit 1  0 errors, exit 0  BROKEN — curative
+    TL    ruff check src tests     0 errors, exit 0  0 errors, exit 0  clean — prophylactic
+    QL    ruff check src tests     0 errors, exit 0  0 errors, exit 0  clean — prophylactic
+
+  TL and QL are shielded by explicit `[tool.ruff.lint] select` lists (TL: E,F,I,UP,B,SIM,
+  RUF with RUF022 ignored; QL: E,F,I,N,W,UP,B,SIM), so 0.16.0's default-set expansion
+  never reaches them.  Their ceilings were still taken, as instructed, to keep all three
+  repos on one linter — but this report does not claim they fixed a present red, because
+  they did not.
+
+  Pin verified to WORK before it was committed:
+    pip install "ruff>=0.15,<0.16"  ->  resolved ruff 0.15.22 (newest 0.15.x)
+    ruff 0.15.22 vs SC tracked tree @ 3491363  ->  "All checks passed!", exit 0
+  So the ceiling restores the gate at the TOP of the allowed range, not merely at the
+  older 0.15.2 that happened to be on this host.
+
+  Deferred, NOT dismissed — the 113 findings (64 auto-fixable, 28 more behind
+  --unsafe-fixes), named in PROGRESS as the future LINT-0.16 window:
+    24 RUF100 unused-noqa            17 RUF046 unnecessary-cast-to-int
+    15 BLE001 blind-except           15 I001   unsorted-imports
+    13 RUF022 unsorted-dunder-all    10 UP017  datetime-timezone-utc
+     3 C408 · 3 RUF059 · 2 DTZ001 · 2 FURB162 · 2 PLR1730
+     1 each B017, S110, SIM114, TRY004, UP031, UP037, UP047
+
+
+================================================================================
+STEP 2 — PUSHES, ANCESTOR ASSERTIONS, TIP MATCH
+================================================================================
+
+  SC   git push origin platform-refactor
+         3491363..4740ecd  platform-refactor -> platform-refactor
+       ANCESTOR  merge-base --is-ancestor 3491363 HEAD  ->  PASS
+       local     4740ecdd460caf4ed2c8038fc37c23b2b1d17788
+       origin    4740ecdd460caf4ed2c8038fc37c23b2b1d17788
+       MATCH     YES
+
+  TL   git push origin platform-refactor
+         14ed624..7a911c0  platform-refactor -> platform-refactor
+       ANCESTOR  merge-base --is-ancestor 14ed624 HEAD  ->  PASS
+       local     7a911c0ce0ae5d9e2c97339b7d897377a37a3647
+       origin    7a911c0ce0ae5d9e2c97339b7d897377a37a3647
+       MATCH     YES
+
+  QL   git push origin platform-refactor
+         5ab6da9..27cdfd6  platform-refactor -> platform-refactor
+       ANCESTOR  merge-base --is-ancestor 5ab6da9 HEAD  ->  PASS
+       local     27cdfd6630898c7b31559fbe57f009701f8ed931
+       origin    27cdfd6630898c7b31559fbe57f009701f8ed931
+       MATCH     YES
+
+  All three fast-forward.  No history rewritten, no reviewed commit amended.
+
+
+================================================================================
+STEP 3 — CI x3 ON THE PUSHED TIPS
+================================================================================
+
+  All three AUTO-TRIGGERED on push.  No workflow_dispatch was needed anywhere.
+
+  SC  workflow ci · run 30180495919 · #15 · head 4740ecd · push · CONCLUSION SUCCESS
+      created 2026-07-26T00:03:23Z   completed 00:03:47Z  (22 s)
+      job "strategy-core (cold install + ruff + pytest)" — every step success, none skipped:
+        1 Set up job          success   00:03:25 -> 00:03:26
+        2 Checkout            success   00:03:26 -> 00:03:27
+        3 Set up Python 3.13  success   00:03:27 -> 00:03:27
+        4 Install (cold)      success   00:03:27 -> 00:03:43   (16 s)
+        5 Lint (ruff)         success   00:03:43 -> 00:03:43   <- the step that red #14
+        6 Test (pytest)       success   00:03:43 -> 00:03:46   <- RAN; #14 skipped it
+        7-9 post/complete     success
+      SUPERSEDES run 30180114922 (#14, head 3491363) = FAILURE at step 5.
+      Step-level check was deliberate: a green conclusion with a skipped test step would
+      have been a hollow green.  It is not — pytest executed and passed.
+
+  TL  workflow backend-ci · run 30180496656 · #16 · head 7a911c0 · push · SUCCESS
+      created 2026-07-26T00:03:24Z   completed 00:04:25Z  (58 s)
+        1 Set up job          success
+        2 Checkout            success
+        3 Set up Python 3.13  success
+        4 Install (cold)      success   00:03:30 -> 00:04:07   (37 s — the git-SHA
+                                        strategy-core resolution lives here)
+        5 Lint (ruff)         success
+        6 Test (pytest)       success   00:04:07 -> 00:04:22   (15 s)
+        7-9 post/complete     success
+
+  QL  workflow ci · run 30180497425 · #14 · head 27cdfd6 · push · SUCCESS
+      created 2026-07-26T00:03:26Z   completed 00:05:02Z  (96 s)
+        1 Set up job          success
+        2 Checkout            success
+        3 Set up Python 3.13  success
+        4 Install (cold)      success   00:03:32 -> 00:04:25   (53 s — the git-SHA
+                                        strategy-core resolution lives here)
+        5 Lint (ruff)         success
+        6 Test (pytest)       success   -> 00:04:59
+        post/complete         success
+
+  RUFF VERSION EACH RUN RESOLVED
+    SC #14 (RED, pre-pin)   spec "ruff>=0.15"        -> ruff 0.16.0   lint FAILED
+    SC #15 (GREEN, pinned)  spec "ruff>=0.15,<0.16"  -> ruff 0.15.x   lint passed
+    TL #16 (GREEN, pinned)  spec "ruff>=0.8,<0.16"   -> ruff 0.15.x   lint passed
+    QL #14 (GREEN, pinned)  spec "ruff>=0.3,<0.16"   -> ruff 0.15.x   lint passed
+
+    HONESTY NOTE on those version strings: the exact resolved build number is NOT quoted
+    from the runners, because the Actions logs API returns HTTP 403 without a token
+    (verified twice this session: .../actions/jobs/89735137572/logs and
+    .../actions/runs/30180495919/logs).  What IS established: (a) each run's spec is the
+    committed line above; (b) locally, `pip install "ruff>=0.15,<0.16"` resolves 0.15.22
+    and SC's tree lints clean under it; (c) the specs are what pip solved against on the
+    runners, and every lint step passed.  The pre-pin `>=0.15` -> 0.16.0 identification is
+    likewise inference from the reproduction, not a quoted runner line — but it is a
+    strong one: 0.16.0 is the current PyPI latest, it reproduces the failure exactly, and
+    0.15.x reproduces the pass exactly.
+
+  PIN-RESOLUTION (strategy-core, still 9d49353) — CAVEAT, READ THIS
+    The work order asked for pin-resolution lines QUOTED from the TL/QL cold-install logs.
+    I could not obtain them: the raw-log endpoint is 403 without a token, and no gh CLI or
+    GitHub token is available in this environment.  I am not going to paraphrase a log
+    line I could not read.  What is verified instead, and is sufficient to establish the
+    fact:
+      - The committed, pushed trees still carry the unchanged pin:
+          TL backend/pyproject.toml:
+            "strategy-core @ git+https://github.com/thealgochef/Strategy-Core.git@9d4935346bf42c5d19916e05dbe21dd67c46875c",
+          QL pyproject.toml:
+            "strategy-core @ git+https://github.com/thealgochef/Strategy-Core.git@9d4935346bf42c5d19916e05dbe21dd67c46875c",
+        (confirmed by `git show HEAD:<path>` on both pushed tips — TOOLPIN did not move them)
+      - Both "Install (cold)" steps SUCCEEDED on fresh runners (TL 37 s, QL 53 s — the
+        duration is the git clone/build of that pinned SHA).  `pip install -e ".[dev]"`
+        cannot succeed if the pinned SHA fails to resolve; an unresolvable pin fails the
+        install step, which is exactly how this gate is designed to catch pin rot.
+      - Both suites then passed against the code that install produced.
+    So: pin resolution at 9d49353 is WITNESSED BY GREEN COLD INSTALLS on both consumers,
+    not by a quoted log line.  If a quoted line is required for the record, it needs a
+    token (or the browser-download route that produced tl_ci_logs.zip / ql_ci_logs.zip at
+    the TL root previously).
+
+
+================================================================================
+STEP 4 — LEDGER
+================================================================================
+  Step 1  three commits, floors kept + <0.16 ceiling added ....... DONE
+          SC 4740ecd (2 files) · TL 7a911c0 (1 file) · QL 27cdfd6 (1 file)
+          SC PROGRESS paragraph banked (DOC-SYNC red, proof, TOOLPIN, LINT-0.16)
+  Step 2  three pushes, 3/3 ancestor assertions PASS, 3/3 MATCH .. DONE
+  Step 3  CI x3 all SUCCESS on the pushed tips, no skipped steps . DONE
+          SC #15 supersedes the red #14
+          ruff version per run: recorded above WITH the inference caveat
+          strategy-core pin still 9d49353: witnessed by green cold installs,
+          NOT by quoted log lines (403 without a token) — caveat stated above
+  Step 4  this report ............................................ DONE
+
+  STATE AFTER THIS WINDOW
+    SC  origin/platform-refactor = 4740ecd   ci #15 green
+    TL  origin/platform-refactor = 7a911c0   backend-ci #16 green
+    QL  origin/platform-refactor = 27cdfd6   ci #14 green
+    Pins: strategy-core 9d49353 x2, unmoved.
+    Working trees: no tracked changes pending in any repo.  Untracked evidence only —
+    SC: DOCSYNC_REPORT.txt, TOOLPIN_REPORT.txt (+ the standing diff/report scratch);
+    QL: 5AB6DA9_QL_DIFF.txt.
+    Open, named, deliberately deferred: LINT-0.16 — 113 ruff-0.16 findings in SC source;
+    that window lifts the ceiling and takes the findings under review.
+
+FULL STOP.

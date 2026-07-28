@@ -1,0 +1,158 @@
+WARM-FIX GREENLIGHT REPORT
+Generated: 2026-07-10T06:13:54Z  (untracked file at the Strategy-Core repo root)
+Operator: Claude session, per the WARM-FIX GREENLIGHT work order.
+Scope: push TL + SC docs, assert ancestry, verify pins unchanged, witness CI x2.
+No commits were amended. No commits were created by this step.
+
+================================================================================
+STEP 1 - TL PUSH (thealgochef/Trade-Lab, branch platform-refactor)
+================================================================================
+Push result            : c92f13b..5a661ea  platform-refactor -> platform-refactor
+local  platform-refactor = 5a661ea7c6108fff36975d6e817096a724f29a15
+origin/platform-refactor = 5a661ea7c6108fff36975d6e817096a724f29a15
+TIP MATCH              : YES (local == origin, verified after `git fetch origin`)
+
+Ancestor assertions (git merge-base --is-ancestor <commit> origin/platform-refactor):
+  PASS  4d0eb81  fix(live): marshal SDK subscribe/start onto the session loop (wedge fix, P1)
+  PASS  6019bef  feat(live): post-drain liveness watchdog - DEGRADED + single-retry, then FAILED (P2)
+  PASS  e69937f  feat(live): gate inference during the warm-start drain (P3)
+  PASS  0fcffa2  perf(live): schema-scoped warm fetch - quotes only retention + slack (P4)
+  PASS  850e361  feat(api): backend logging config - root stderr + env level + databento (P5)
+  PASS  5a661ea  fix(review): adversarial-verify fixes - heartbeat-aware watchdog, anchor gate, replay guard, access-log cap (P6)
+  6 of 6 PASS, 0 FAIL.
+
+================================================================================
+STEP 2 - SC PUSH (thealgochef/Strategy-Core, branch platform-refactor)
+================================================================================
+Push result            : 1650327..6e94091  platform-refactor -> platform-refactor
+local  platform-refactor = 6e9409188e2eadbc18ead3a0f4bcbec9b75407bd
+origin/platform-refactor = 6e9409188e2eadbc18ead3a0f4bcbec9b75407bd
+TIP MATCH              : YES (local == origin, verified after `git fetch origin`)
+
+Ancestor assertions (git merge-base --is-ancestor <commit> origin/platform-refactor):
+  PASS  7001f0c  docs: SEED pushed record + CI ids; wedge root-cause banked; BACKLOG riders
+  PASS  6e94091  docs: WARM-FIX close record - wedge fixed, smoke 2m15s, verify 10/2/3   [close-record tip]
+  2 of 2 PASS, 0 FAIL.
+
+Docs-only confirmation (git diff --name-only 1650327..6e94091):
+  docs/BACKLOG.md
+  docs/PLATFORM_REFACTOR_PROGRESS.md
+  -> zero files under src/strategy_core. The SC WARM-FIX commits cannot change
+     consumer behavior, which is why the pins below must NOT move.
+
+================================================================================
+STEP 3 - PINS (must still be strategy-core @ 1650327; NO bump)
+================================================================================
+TL  backend/pyproject.toml:18 (verbatim):
+  "strategy-core @ git+https://github.com/thealgochef/Strategy-Core.git@16503279dc560eebeed3673b27599ca9dce14848",
+
+QL  pyproject.toml:36 (verbatim):
+    "strategy-core @ git+https://github.com/thealgochef/Strategy-Core.git@16503279dc560eebeed3673b27599ca9dce14848",
+
+  Pinned SHA 16503279dc560eebeed3673b27599ca9dce14848 = 1650327
+             "docs: SEED adversarial-verify record - 18/20 confirmed, majors fixed in-window"
+  VERDICT: BOTH PINS UNCHANGED AT 1650327. No bump performed. CORRECT.
+
+Evidence the TL pin line was never touched this window:
+  git diff c92f13b..5a661ea -- backend/pyproject.toml
+    -> backend/pyproject.toml | 9 +++++++++   (1 file changed, 9 insertions(+), 0 deletions)
+    -> grep for any +/- line containing "strategy-core": NO MATCH (pin untouched)
+  The 9 inserted lines are the TL-local optional dependency declaration:
+    [project.optional-dependencies] live = [ "databento>=0.79" ]
+  This is a TL-local dependency declaration, not an SC pin, and is not consumer-facing.
+
+QL: untouched this window. local == origin == 75f83dc5c5e5c9343ca03fa026e8f59359a5e635.
+    No new commits, therefore no CI run owed (per work order).
+
+================================================================================
+STEP 4 - CI WITNESS x2 (both on the pushed reviewed tips)
+================================================================================
+Both runs were triggered automatically by the pushes in STEP 1/STEP 2 on the exact
+reviewed head SHAs, so no workflow_dispatch was required.
+
+RUN 1 - Trade-Lab "backend-ci"
+  repo         : thealgochef/Trade-Lab
+  run id       : 29073049585
+  run number   : #9  (attempt 1)
+  workflow     : backend-ci  (.github/workflows/backend-ci.yml)
+  event/trigger: push
+  branch       : platform-refactor
+  head_sha     : 5a661ea7c6108fff36975d6e817096a724f29a15   [== reviewed TL tip]
+  status       : completed
+  conclusion   : success
+  created_at   : 2026-07-10T06:08:09Z
+  updated_at   : 2026-07-10T06:09:13Z
+  url          : https://github.com/thealgochef/Trade-Lab/actions/runs/29073049585
+  job          : backend (cold install + ruff + pytest)  completed/success
+  test summary : 463 passed, 4 skipped in 13.22s
+  PIN RESOLUTION WITNESSED in the cold-install log (verbatim token found):
+    Strategy-Core.git@16503279dc560eebeed3673b27599ca9dce14848
+    -> the cold install resolved strategy-core @ 1650327, confirming STEP 3 end-to-end.
+
+RUN 2 - Strategy-Core "ci"
+  repo         : thealgochef/Strategy-Core
+  run id       : 29073067597
+  run number   : #7  (attempt 1)
+  workflow     : ci  (.github/workflows/ci.yml)
+  event/trigger: push
+  branch       : platform-refactor
+  head_sha     : 6e9409188e2eadbc18ead3a0f4bcbec9b75407bd   [== reviewed SC tip]
+  status       : completed
+  conclusion   : success
+  created_at   : 2026-07-10T06:08:35Z
+  updated_at   : 2026-07-10T06:09:05Z
+  url          : https://github.com/thealgochef/Strategy-Core/actions/runs/29073067597
+  job          : strategy-core (cold install + ruff + pytest)  completed/success
+
+BOTH GREEN. 2 of 2 required CI witnesses satisfied. QL: none owed.
+
+================================================================================
+DEVIATIONS / NOTES (nothing blocking)
+================================================================================
+1. CI vs LOCAL test counts differ, and the difference is environment-gated, NOT
+   window-introduced:
+     local (this machine) : 466 passed, 1 skipped   (total 467)
+     CI    (run #9)       : 463 passed, 4 skipped   (total 467)
+   Same total. The 3-test delta is 3 tests that skip in CI because their
+   environment prerequisites are absent there:
+     - tests/test_inference_engine.py:459  skipif not _REAL_MODELS_ROOT.is_dir()
+       (the real Claude-Quant-Lab models directory is unreachable in CI)
+     - tests/test_w3b_parity.py module-level pytest.skip(...) guards
+       (w3b harness / QL D-036 store / staged bundle absent in CI)
+   The one test that skips in BOTH is tests/test_w3b_parity.py:78
+   (skipif W3B_RUN_REPLAY != "1", the heavy full-day mbp10 decode).
+   BASELINE CHECK: the pre-window CI run #8 (head c92f13b) also reported
+   "444 passed, 4 skipped" - i.e. the skip count is 4 before AND after this
+   window, so no test was newly skipped. 463 - 444 = 19 = this window's new tests.
+
+2. The optional Databento SDK (the new [live] extra) is deliberately NOT installed
+   by TL CI; CI installs the base + dev extras only. Live-adapter tests run offline
+   against fakes, so the wedge-fix tests (thread-identity, loud-failure,
+   wedge-shaped regression) execute in CI without the SDK. Intentional.
+
+3. TL working tree carries UNCOMMITTED, UNPUSHED doc edits made after the reviewed
+   tip (a later README task, not part of this window's review):
+     M README.md
+     M backend/README.md
+     M backend/.env.example
+     M .claude/scheduled_tasks.lock   (harness file)
+   None of these are in the pushed tip 5a661ea. The reviewed commit set was pushed
+   exactly as reviewed; nothing was amended, squashed, or rebased.
+
+4. SC working tree: no modified tracked files. This report is written untracked at
+   the SC root and is NOT committed, per the work order.
+
+5. `gh` CLI is not installed on this host. CI was queried via the GitHub REST API
+   using the token from the git credential helper, held in memory only and never
+   written to disk or echoed.
+
+================================================================================
+FINAL VERDICT
+================================================================================
+STEP 1 TL push .......... DONE, tip MATCH, 6/6 ancestor assertions PASS
+STEP 2 SC push .......... DONE, tip MATCH, 2/2 ancestor assertions PASS, docs-only
+STEP 3 pins ............. VERIFIED UNCHANGED at 1650327 in TL and QL; no bump
+STEP 4 CI witness x2 .... BOTH GREEN on the reviewed head SHAs (TL #9, SC #7)
+STEP 5 report ........... this file
+
+WARM-FIX GREENLIGHT: COMPLETE. FULL STOP.

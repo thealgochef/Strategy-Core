@@ -1,0 +1,60 @@
+PROP-SIM GREENLIGHT REPORT
+Date: 2026-07-10 (CI completed 2026-07-11T01:17Z)
+Window: PROP-SIM (barrier-options walker: alpha_lab.propsim + OOS-writer outcome columns;
+QL window + SC doc-ops only; TL untouched)
+Reviewed tips: SC d92eaf7 · QL 1ef0ebe. Reviewed commits NOT amended.
+
+== STEP 1 — SC PUSH (Strategy-Core, branch platform-refactor) ==
+  local tip:  d92eaf7d07072685096a990cb6ef43f1a4cf255a
+  origin tip: d92eaf7d07072685096a990cb6ef43f1a4cf255a   -> MATCH
+  push: 0e86cb5..d92eaf7  platform-refactor -> platform-refactor
+  ancestor assertions (git merge-base --is-ancestor <sha> HEAD):
+    53b9b34 (docs: COCKPIT pushed annotation + COCKPIT-FIX/ENV-FIX records, PROP-SIM P0): True
+    d92eaf7 (docs: PROP-SIM window close record — the tip): True
+  DOCS-ONLY CONFIRMED: git diff --name-only 0e86cb5..HEAD =
+    docs/PLATFORM_REFACTOR_PROGRESS.md
+  (zero files under src/strategy_core)
+
+== STEP 2 — QL PUSH (Quant-Lab, branch platform-refactor) ==
+  local tip:  1ef0ebe92c80485ea3acb097732ec71624b07cba
+  origin tip: 1ef0ebe92c80485ea3acb097732ec71624b07cba   -> MATCH
+  push: 76546b0..1ef0ebe  platform-refactor -> platform-refactor
+  ancestor assertions (git merge-base --is-ancestor <sha> HEAD):
+    f247046 (fix(acceptance): live Strategy-Core sys.path becomes opt-in, ENV-FIX — RODE this greenlight): True
+    86654c7 (feat(oos): per-row labeler outcome columns, PROP-SIM P1, D-038): True
+    dbf73d8 (feat(propsim): prop-firm evaluation walker, PROP-SIM P2): True
+    1ef0ebe (fix(propsim): loader dedup + NaN guards, PROP-SIM P4 verify — the tip): True
+
+== STEP 3 — PINS (verified verbatim, NO bump — SC docs-only this window) ==
+  Trade-Lab backend/pyproject.toml:18
+    "strategy-core @ git+https://github.com/thealgochef/Strategy-Core.git@3d4193e6bf3e22caa23ad4246cffed153caede8f",
+  Claude-Quant-Lab pyproject.toml:36 (@ 1ef0ebe, working tree == committed)
+    "strategy-core @ git+https://github.com/thealgochef/Strategy-Core.git@3d4193e6bf3e22caa23ad4246cffed153caede8f",
+  Both consumers still pin 3d4193e (the EXEC-land tip); no consumer-facing SC change in
+  PROP-SIM, so per the 9.6 convention the pin does not move.
+
+== STEP 4 — CI ON THE PUSHED TIPS (both green; push triggers fired, no workflow_dispatch needed) ==
+  SC ci: run id 29134311915 (#11), trigger push, branch platform-refactor,
+    head d92eaf7d07072685096a990cb6ef43f1a4cf255a,
+    conclusion success (completed 2026-07-11T01:16:20Z)
+  QL ci: run id 29134318835 (#10), trigger push, branch platform-refactor,
+    head 1ef0ebe92c80485ea3acb097732ec71624b07cba,
+    conclusion success (completed 2026-07-11T01:17:37Z)
+  PIN RESOLUTION WITNESSED in the QL cold-install raw log (job 86495546595):
+    "Resolved https://github.com/thealgochef/Strategy-Core.git to commit 3d4193e6bf3e22caa23ad4246cffed153caede8f"
+  QL runner suite: 793 passed, 18 skipped in 29.31s (= 811 collected; the 18 are
+  local-data tests that skip on cold runners — the local full suite is 811 passed, 0 skipped).
+  TL untouched this window — no run owed.
+
+== DEVIATIONS ==
+  none. Notes for the record: (a) gh CLI absent on this box — CI reads went through the
+  GitHub REST API with the git-credential-fill token (the standing recipe); (b) the SC push
+  carried only the two doc commits (P0 annotation + close record) — no code, pin unmoved;
+  (c) ENV-FIX QL commit f247046 rode this greenlight exactly as recorded in PROGRESS and
+  ENVFIX_REPORT.txt; (d) greenlight CI ids to be banked in PROGRESS via a pushed annotation
+  at the next doc op, per the standing pattern.
+
+== LEDGER ==
+SC tip d92eaf7 (pushed, CI green) · QL tip 1ef0ebe (pushed, CI green) · TL tip 67e03e4
+(unchanged) · pins 3d4193e x2 (unchanged).
+FULL STOP.

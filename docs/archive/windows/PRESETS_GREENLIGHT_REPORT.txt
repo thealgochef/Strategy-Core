@@ -1,0 +1,64 @@
+PRESETS GREENLIGHT REPORT
+Date: 2026-07-10 (CI completed 2026-07-11T02:48Z)
+Window: PRESETS (remaining eval rulesets + two trail mechanics: intraday_peak_trail /
+static_floor, max_eval_days expiry, dll_hard supersedes dll_soft, apex/tpt presets,
+cross-preset baseline appendix; QL window + SC doc-ops only; TL untouched)
+Reviewed tips: SC 1a58aa8 · QL 49c2f22. Reviewed commits NOT amended.
+
+== STEP 1 — SC PUSH (Strategy-Core, branch platform-refactor) ==
+  local tip:  1a58aa8e911ed67c5f7c0ba9846747746c251f4a
+  origin tip: 1a58aa8e911ed67c5f7c0ba9846747746c251f4a   -> MATCH
+  push: d92eaf7..1a58aa8  platform-refactor -> platform-refactor
+  ancestor assertions (git merge-base --is-ancestor <sha> HEAD):
+    9ecd6c5 (docs: PROP-SIM pushed annotation w/ greenlight CI ids + PRESETS ratified
+             parameters, PRESETS P0): True
+    1a58aa8 (docs: PRESETS window close record — the tip): True
+  DOCS-ONLY CONFIRMED: git diff --name-only d92eaf7..HEAD =
+    docs/PLATFORM_REFACTOR_PROGRESS.md
+  (zero files under src/strategy_core)
+
+== STEP 2 — QL PUSH (Quant-Lab, branch platform-refactor) ==
+  local tip:  49c2f2236434b09a30733b8f2e3595bb8a68d684
+  origin tip: 49c2f2236434b09a30733b8f2e3595bb8a68d684   -> MATCH
+  push: 1ef0ebe..49c2f22  platform-refactor -> platform-refactor
+  ancestor assertions (git merge-base --is-ancestor <sha> HEAD):
+    3c4417e (feat(propsim): trail mechanics — intraday_peak_trail + static_floor,
+             max_eval_days expiry, dll_hard supersedes dll_soft, PRESETS P1): True
+    49c2f22 (feat(propsim): apex_50k_eod + apex_50k_intraday + tpt_50k_test presets,
+             data only, PRESETS P2 — the tip): True
+
+== STEP 3 — PINS (verified verbatim, NO bump — SC docs-only this window) ==
+  Trade-Lab backend/pyproject.toml:18
+    "strategy-core @ git+https://github.com/thealgochef/Strategy-Core.git@3d4193e6bf3e22caa23ad4246cffed153caede8f",
+  Claude-Quant-Lab pyproject.toml:36 (@ 49c2f22, working tree == committed)
+    "strategy-core @ git+https://github.com/thealgochef/Strategy-Core.git@3d4193e6bf3e22caa23ad4246cffed153caede8f",
+  Both consumers still pin 3d4193e (the EXEC-land tip); no consumer-facing SC change in
+  PRESETS, so per the 9.6 convention the pin does not move.
+
+== STEP 4 — CI ON THE PUSHED TIPS (both green; push triggers fired, no workflow_dispatch needed) ==
+  SC ci: run id 29136911173 (#12), trigger push, branch platform-refactor,
+    head 1a58aa8e911ed67c5f7c0ba9846747746c251f4a,
+    conclusion success (completed 2026-07-11T02:47:24Z)
+  QL ci: run id 29136917345 (#11), trigger push, branch platform-refactor,
+    head 49c2f2236434b09a30733b8f2e3595bb8a68d684,
+    conclusion success (completed 2026-07-11T02:48:37Z)
+  PIN RESOLUTION WITNESSED in the QL cold-install raw log (job 86502832238):
+    "Resolved https://github.com/thealgochef/Strategy-Core.git to commit 3d4193e6bf3e22caa23ad4246cffed153caede8f"
+  QL runner suite: 804 passed, 18 skipped in 23.91s (= 822 collected; the 18 are
+  local-data tests that skip on cold runners — the local full suite is 822 passed, 0 skipped;
+  +11 window tests over the PROP-SIM 811).
+  TL untouched this window — no run owed.
+
+== DEVIATIONS ==
+  none. Notes for the record: (a) gh CLI absent on this box — CI reads went through the
+  GitHub REST API with the git-credential-fill token (the standing recipe); (b) the SC push
+  carried only the two doc commits (P0 annotation + close record) — no code, pin unmoved;
+  (c) the dll_soft->dll_hard rename rides these tips as ratified in the P0 doc-op —
+  fuzz-proven float-exact vs the old engine, topstep_50k baseline reproduced exactly;
+  (d) greenlight CI ids to be banked in PROGRESS via a pushed annotation at the next
+  doc op, per the standing pattern.
+
+== LEDGER ==
+SC tip 1a58aa8 (pushed, CI green) · QL tip 49c2f22 (pushed, CI green) · TL tip 67e03e4
+(unchanged) · pins 3d4193e x2 (unchanged).
+FULL STOP.
