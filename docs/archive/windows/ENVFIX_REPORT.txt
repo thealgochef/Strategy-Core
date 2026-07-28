@@ -1,0 +1,123 @@
+ENV-FIX REPORT — close the two READER_PIN_RECON risks
+Date: 2026-07-10
+Scope: risk #1 (local strategy-core install was a non-editable file:// snapshot,
+pin-shaped by coincidence) and risk #2 (QL acceptance script's default sys.path
+insert of ../Strategy-Core/src bypassed the installed package).
+Reference: Trade-Lab/READER_PIN_RECON.md (2026-07-10).
+
+========================================================================
+STEP 1 — EDITABLE INSTALL (shared system Python 3.13, both consumers)
+========================================================================
+
+Exact command run (no --break-system-packages needed: the Windows python.org
+install is not PEP 668 EXTERNALLY-MANAGED; pip accepted the plain install):
+
+  "C:/Users/gonza/AppData/Local/Programs/Python/Python313/python.exe" -m pip install -e "C:/Users/gonza/Documents/Strategy-core"
+
+pip output (tail):
+  Successfully built strategy-core
+  Installing collected packages: strategy-core
+    Attempting uninstall: strategy-core
+      Found existing installation: strategy-core 0.1.0
+      Uninstalling strategy-core-0.1.0:
+        Successfully uninstalled strategy-core-0.1.0
+  Successfully installed strategy-core-0.1.0
+
+The old site-packages snapshot package dir is gone; resolution now goes through
+_editable_impl_strategy_core.pth, whose contents are:
+
+  C:\Users\gonza\Documents\Strategy-core\src
+
+Install metadata after the change:
+
+  $ pip show strategy-core
+  Name: strategy-core
+  Version: 0.1.0
+  Location: C:\Users\gonza\AppData\Local\Programs\Python\Python313\Lib\site-packages
+  Editable project location: C:\Users\gonza\Documents\Strategy-core
+
+  $ direct_url.json
+  {"dir_info": {"editable": true}, "url": "file:///C:/Users/gonza/Documents/Strategy-core"}
+
+(Before ENV-FIX these read: no Editable line; {"dir_info": {}, ...} — a frozen
+snapshot laid down 2026-07-10 03:16.)
+
+RESOLUTION PROOFS PER CONSUMER (same interpreter, probed from each consumer's
+working directory to rule out cwd-dependent shadowing):
+
+  --- cwd = C:/Users/gonza/Documents/Trade-Lab/backend (TL) ---
+  $ python -c "import strategy_core; print(strategy_core.__file__)"
+  C:\Users\gonza\Documents\Strategy-core\src\strategy_core\__init__.py     <- CHECKOUT src tree
+  $ python -c "from strategy_core.data.databento_parquet import DatabentoParquetSource as S; import inspect; src=inspect.getsource(S); print('VECTORIZED' if ('_decode_batches' in src or 'emit_deduped' in src) else 'ROW-WISE/UNKNOWN')"
+  VECTORIZED
+
+  --- cwd = C:/Users/gonza/Documents/Claude-Quant-Lab (QL) ---
+  $ python -c "import strategy_core; print(strategy_core.__file__)"
+  C:\Users\gonza\Documents\Strategy-core\src\strategy_core\__init__.py     <- CHECKOUT src tree
+  $ ...vectorized probe...
+  VECTORIZED
+
+  TL import smoke (editable trade-lab + editable strategy-core coexist):
+  $ python -c "import trade_lab, strategy_core; print('trade_lab OK;', 'strategy_core =', strategy_core.__file__)"
+  trade_lab OK; strategy_core = C:\Users\gonza\Documents\Strategy-core\src\strategy_core\__init__.py
+
+SC checkout at fix time: HEAD 0e86cb55867bbe67bfb7cac2e4f65b56f63d3407
+(platform-refactor; src/strategy_core byte-identical to pin 3d4193e — the 3
+commits past the pin are docs-only, proven in READER_PIN_RECON.md §2/§3).
+
+Rationale for the record: local runtime = working tree ALWAYS (the dev loop
+every window's local suites assumed); the git pin stays enforced by CI
+cold-installs (pip install -e ".[dev]" resolving the pyproject git URL sha),
+witnessed at every greenlight.
+
+========================================================================
+STEP 2 — QL ACCEPTANCE sys.path DEFAULT BECOMES OPT-IN (QL commit)
+========================================================================
+
+Change: scripts/run_databento_acceptance.py no longer prepends
+../Strategy-Core/src to sys.path by default. The insert is factored into
+_maybe_insert_live_strategy_core(), gated behind QL_ACCEPTANCE_USE_LIVE_SC=1;
+default = the installed strategy-core package. The acceptance summary now
+records which source loaded ("strategy_core_source":
+"installed_package"|"live_checkout_src" + "strategy_core_file"). Two seam
+tests cover both modes (default: no insert even when the checkout src exists;
+opt-in: sys.path[0] == <root>/src).
+
+QL commit (platform-refactor, COMMITTED NOT PUSHED — rides the next greenlight):
+
+  f24704651db173e50bbd6d869b25f32e733ca6b9
+  fix(acceptance): live Strategy-Core sys.path becomes opt-in (ENV-FIX)
+
+  $ git show --stat f247046
+   scripts/run_databento_acceptance.py           | 29 +++++++++++++++++++++++---
+   tests/agents/test_databento_acceptance_cli.py | 30 +++++++++++++++++++++++++++
+   2 files changed, 56 insertions(+), 3 deletions(-)
+
+========================================================================
+STEP 3 — QL QUICK TEST PASS
+========================================================================
+
+Affected surface = the acceptance CLI; ran its test file plus the rest of the
+QUANT_FOCUSED_TESTS set the acceptance path itself bundles:
+
+  $ python -m pytest tests/agents/test_databento_acceptance_cli.py tests/agents/test_ml_training_reporting.py tests/agents/test_strategy_contract_nodrift.py tests/agents/test_strategy_contract_repoint.py -q
+  59 passed, 2 warnings in 1.44s
+  (warnings = pre-existing google protobuf DeprecationWarnings, unrelated)
+
+  $ python -m ruff check scripts/run_databento_acceptance.py tests/agents/test_databento_acceptance_cli.py
+  All checks passed!
+
+========================================================================
+RESIDUAL STATE
+========================================================================
+
+- Risk #1 CLOSED: local runtime now always serves the working tree (editable);
+  divergence-by-stale-snapshot is impossible. The complementary property — the
+  working tree can drift ahead of the pin between windows — is the intended
+  dev loop; CI cold-install remains the pin enforcement point.
+- Risk #2 CLOSED at default; live-checkout mode preserved behind
+  QL_ACCEPTANCE_USE_LIVE_SC=1 and now self-documents in the acceptance summary.
+- Not addressed (unchanged from READER_PIN_RECON.md, by design): one shared
+  site-packages means TL/QL cannot honor divergent pins locally; pin lineage
+  exists only on platform-refactor; QL AGENTS.md:27 stale uv/3.14 doc.
+- QL f247046 is local-only. FULL STOP — it rides the next greenlight.

@@ -11,3 +11,14 @@ venv/
 *.parquet
 # validation harness outputs (the harness lives in validation/, reports are regenerable)
 validation/_out/
+
+# Window review artifacts at the repo root (archive under docs/archive/windows/ at window close)
+/*_SC_DIFF.txt
+/*_DIFF.txt
+/*_REPORT.txt
+/*_RECON.md
+/scratch_*
+/*.log
+/*.out
+/route_seam_report.json
+/*_REVIEW.txt

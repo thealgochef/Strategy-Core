@@ -1,0 +1,2427 @@
+diff --git a/.github/workflows/ci.yml b/.github/workflows/ci.yml
+new file mode 100644
+index 0000000..d2447c5
+--- /dev/null
++++ b/.github/workflows/ci.yml
+@@ -0,0 +1,41 @@
++name: ci
++
++# W2 P4a: Strategy-Core cold-install CI — the analog of TL's backend-ci and
++# QL's ci. Cold pip install, config-faithful repo-root ruff (validation/
++# included), pytest with validation/ in testpaths; the data-dependent
++# validation tests self-skip loudly on a fresh runner (no local store).
++on:
++  push:
++    branches: [main, platform-refactor]
++  pull_request:
++    branches: [main]
++  # W2 P4b (A157): manual runs for greenlight witnessing without a push.
++  workflow_dispatch:
++
++concurrency:
++  group: ci-${{ github.ref }}
++  cancel-in-progress: true
++
++jobs:
++  strategy-core:
++    name: strategy-core (cold install + ruff + pytest)
++    runs-on: ubuntu-latest
++    steps:
++      - name: Checkout
++        uses: actions/checkout@v4
++
++      - name: Set up Python 3.13
++        uses: actions/setup-python@v5
++        with:
++          python-version: "3.13"
++
++      # Clean install from scratch: catches undeclared dependencies the
++      # editable/PYTHONPATH dev runs mask.
++      - name: Install (cold)
++        run: pip install -e ".[dev]"
++
++      - name: Lint (ruff, repo root — config-faithful)
++        run: ruff check .
++
++      - name: Test (pytest — tests + validation)
++        run: pytest -q
+diff --git a/docs/PLATFORM_REFACTOR_PROGRESS.md b/docs/PLATFORM_REFACTOR_PROGRESS.md
+index 08ac4fe..144722a 100644
+--- a/docs/PLATFORM_REFACTOR_PROGRESS.md
++++ b/docs/PLATFORM_REFACTOR_PROGRESS.md
+@@ -1456,6 +1456,11 @@ Scope landed: SC canonical ingestion (day-mode for_trading_day [prev 18:00 ET, d
+ Commits: SC 2beb022..256020c (6) · TL e855aa3..0ffc9ff (5, landed ff-only from worktree-w1-migration) · QL 4 + lint. Suites at close: SC 177 / TL 381 / QL 744, ruff clean (configured scope). TL 429→381 reconciled exactly: 83 removed (41 deleted TL-local normalization pins + 41 star-import duplicates via tests/test_historical_parquet.py + 1 rename) vs 35 added; every removed pin maps to deleted machinery now covered by SC's 15 parquet-source tests or the new shim/gate/retention tests.
+ Review verdict: approved, zero code fixes. Accepted deviations: retention formula (CC's correction of the spec); legacy moved-not-deleted (book-mid parity proof still drives it; W3 decides retirement). Unflagged behavior fix recorded: the old TL adapter mapped Databento side 'A' (sell aggressor) to UNKNOWN; the shim maps it correctly. Pins: TL+QL Strategy-Core pin dc14652 → 256020c (W1 greenlight chore commits). Operator note: pre-W1 bundles with 120-min approach windows are refused by the gate under the default 45-min retention ceiling — correct behavior; they are tracer dye under D-P-01 and the fresh W3 bundle declares its own windows.
+ 
++### W2 record (2026-06-12, landed LOCALLY on all three repos — NOT pushed; awaiting greenlight review)
++Scope landed — TL (worktree branch `worktree-w2-operate`, base 81a54b2): P1a integer-ns decode in the live adapter (floor-µs `EPOCH + timedelta(µs=ns//1000)`; float `fromtimestamp` route deleted; precision-loss unit test at ns 1_770_000_000_123_456_789) + an unflagged-defect rider mirroring W1's shim note: live side 'A' (ask aggressor) now maps to SELL (was UNKNOWN — every sell print starved side-aware features on the live path). P1b warm-start: PRIMARY = `start=<trading-day 18:00 ET>` forwarded on the trades+quote live subscribes (gateway intraday replay through the SAME adapter path); FALLBACK on runtime rejection = Historical-API DBN records (trades + mbp-1) merged by ts_event and drained through the same `normalize_provider_message` path BEFORE the live subscribe (spec order fetch→feed→subscribe-from-now, so history can never overflow the live queue); status surface reports "warming (N events)" vs "live" (event ts vs start wall clock). P1c prior-day PDH/PDL: ohlcv-1h over the prior trading day reduced to (max high, min low) ticks → `runtime.load_prior_day_summary` (the research/cold-replay seed path); loud skip without API access; `prior_trading_day` skips weekends (Friday serves Monday; holidays surface as an empty fetch + warning). P1d reconnect = the same warm-start path: a feed disconnect re-runs the FULL start (reset + prior-day seed + trading-day replay) after a short delay — the wipe-without-recovery hole is closed; fake-feed drop test. P1e Chicago seed RETIRED: `services/seed.py` + tests deleted (zero other importers), `seed_enabled`/`seed_lookback_days` settings removed; display warm-up now comes from real engine bars via the warm-start replay. P2a (F10): `runtime.flush_resolver()` wired at replay stream end (last event instant), live stop (wall clock; FastAPI lifespan shutdown hook added so it runs on process exit), and hot-swap (OLD resolver flushed before the swap); flushed drops ride the existing drop→DroppedPrediction surface and the journal. P2b (F12): registry `prepare_activation`/`commit_activation` + runtime `prepare_inference_rebind`/`commit_inference_rebind` — validation, ActiveModel construction, and resolver build all complete BEFORE the swap; the commit pair is pure assignment with no awaits between (loop-atomicity preserved); negative test: a corrupt-binary bundle that passes discovery 409s and leaves the old model serving. P2c: typed `model.reset` WS frame (reason activation|replay_reset|live_reset) replaces the frontend 'runtime reset' substring trigger; activation clears prediction/outcome panes only, runtime resets also clear chart+intelligence; frame named `model.reset` per the envelope dot convention (spec example said `model_reset`); emitted on live resets too since the replaced trigger fired there. P2d: `FeatureComputationError` names the failing feature; the runtime logs exc_info=True with the name, counts, and surfaces `last_inference_error` (name + ts) on /api/v1/status. P2e (D-P-07): append-only per-trading-day JSONL journal under `TRADE_LAB_JOURNAL_PATH` (default backend/data/journal/), records predictions (features/probabilities/eligibility), outcomes, drops, tagged replay|live + bundle id; 18:00 ET rotation tested; write-only this window. QL: P3a OOS ROOT CAUSE — every shipped bundle predates commit 25d7459 (2026-06-07), which introduced BOTH `build_oos_predictions_frame` and the writer; `training_result.get("oos_predictions")` was None at every save, and the `isinstance(...) and not empty` guard (scripts/ml_training_tab.py:1498-1502 pre-W2) silently skipped — no bundle was ever saved after the writer landed, so none has the parquet. Fix: writer UNCONDITIONAL (empty frame writes the parquet WITH canonical schema; missing/illtyped frame or failed write fails the save loudly). P3b: `save_trained_model` refuses partial bundles — `training_result` and `config` now REQUIRED; metadata-augmentation and strategy.json swallows removed (failures abort); NEW unconditional `model.cbm.sha256` sidecar (TL activation verifies it; the store had none). P3c (A177): acceptance harness = the documented W3 entrypoint; bundle/data paths from `QL_ACCEPTANCE_BUNDLE`/`QL_ACCEPTANCE_DATA_DIR` with loud refusal; contract loads via the registry section hook (`validate_section_via_registry=True`); NOT run against real data. P3d (D-P-02): QL `scripts/audit_lookahead.py`, `scripts/phase8_1_golden.py`, `data/experiment/phase8_1/` (engine.json + golden.json) deleted; the `parity_harness*.py` pair lives in SC validation/ and was deleted THERE (repo-split deviation from the part labels; zero imports proven in both repos). SC: P1f weekend-gap verify — the emission lookup already resolves the most recent banked day < current trading day, so NO FIX was needed; Friday→Monday two-day stream test added. P4: NEW SC `.github/workflows/ci.yml` (cold install, config-faithful repo-root ruff, pytest) + `workflow_dispatch` on all three repos' workflows (A157); pyproject testpaths gains `validation/` (every validation test self-skips on path-existence guards and imports only SC+numpy+pandas at module level — cold collection green, 184 collected); the 47 F32 lint errors fixed mechanically (F401 removals, E401/E702 splits, E741 l→lvl renames, `# noqa: E402` where imports must follow the documented sys.path bootstrap — moving them would change harness behavior). P5 route-seam (D-P-03): `scripts/route_seam_check.py` (API trades+mbp-1 with the canonical post-merge L1 dedup vs `DatabentoParquetSource.for_trading_day`; trade count + sequence-identity sample, TOB-transition count, first/last instants; one attempt, no retries) — RUN ATTEMPTED ONCE: `DATABENTO_API_KEY` absent in the execution environment → clear-message exit 2, no report; the one-shot check remains to be run when the key is present.
++Commits: SC 40ecb0b..2c732ee (4 + this doc commit: cb3f637 P1f test · b393979 D-P-02 deletions · 7e7751d CI/lint/testpaths · 2c732ee route-seam script) · TL 81a54b2..c9e139b on `worktree-w2-operate` (06ed9eb P2 · a0dcb1f P1 · c9e139b P4b) · QL 393716d..12c50a5 (15f23f6 P3 · 12c50a5 P4b). Suites at close: SC **178** (177+1) + repo-root ruff clean; TL **403** (381+22 net) + ruff clean + frontend tsc clean + vitest **142**; QL **746** (744+2) + ruff clean. Per the window's "no validation harness runs" rule, SC's close pass executed `tests/` and proved `validation/` COLLECTION (the data-dependent runs ride CI's loud-skip path); the b3/d1/decision-diff gates were not re-run (no SC engine-semantics change this window — W2 touched levels-test, validation lint, CI, and a new script only).
++Structural notes: TL `domain/trading_day.py` (ET 18:00 helpers) landed in the P2 commit (journal dependency) with P1 consumers following; app.py's P2 endpoint riders landed in the P1 commit (file-level coupling) — both flagged in the commit messages. The frontend DOES have a harness (vitest), contra the spec note — the three substring-trigger tests were mechanically repointed to the typed frame. No new DECISIONS.md ruling was needed; no design fork outside the spec was taken.
++
+ ### Status
+ Phases A–E3: COMPLETE. W1: COMPLETE (pushed; pins bumped; CI witnessed). Current: W2 next. S9.9, F1–F3: PARKED behind W3 green + soak. Live model outputs remain DECORATIVE until W3's gate is green on the fresh bundle.
+ 
+diff --git a/pyproject.toml b/pyproject.toml
+index f744e23..f5ef67d 100644
+--- a/pyproject.toml
++++ b/pyproject.toml
+@@ -30,7 +30,9 @@ dev = [
+ packages = ["src/strategy_core"]
+ 
+ [tool.pytest.ini_options]
+-testpaths = ["tests"]
++# W2 P4a: validation/ rides the suite; its data-dependent tests self-skip
++# loudly when the local store / research repo are absent (CI cold runners).
++testpaths = ["tests", "validation"]
+ addopts = "-q"
+ 
+ [tool.ruff]
+diff --git a/scripts/route_seam_check.py b/scripts/route_seam_check.py
+new file mode 100644
+index 0000000..ce3b6b6
+--- /dev/null
++++ b/scripts/route_seam_check.py
+@@ -0,0 +1,222 @@
++#!/usr/bin/env python3
++"""W2 P5 (D-P-03): one-shot route-seam shape check — Historical API vs parquet.
++
++Live warm-start fetches its slice from the Databento Historical API while
++research/replay consume the local mbp-10 parquets through the canonical
++``DatabentoParquetSource`` L1 projection. This script checks the two routes
++against each other ONCE for a single trading day:
++
++* trade count + a sequence-identity sample of (ts_event_ns, price_ticks, size)
++* TOB-transition count (the canonical post-merge L1 dedup applied to both)
++* first/last event instants per route
++
++It is a SCRIPT, not a standing test (D-P-03: "shape-checked against each other
++once"). Requires ``DATABENTO_API_KEY``; exits with a clear message when absent.
++One attempt — no loops or retries on API errors.
++
++Usage:
++    python scripts/route_seam_check.py [--day 2026-02-18]
++        [--symbol-dir <store>/NQ] [--out route_seam_report.json]
++"""
++
++from __future__ import annotations
++
++import argparse
++import json
++import os
++from datetime import UTC, date, datetime, time, timedelta
++from pathlib import Path
++from zoneinfo import ZoneInfo
++
++from strategy_core.constants import SESSION_TIMEZONE, TRADING_DAY_BOUNDARY
++from strategy_core.data.databento_parquet import DatabentoParquetSource
++from strategy_core.types import Quote, Trade
++
++_DEFAULT_DAY = "2026-02-18"
++_DEFAULT_SYMBOL_DIR = Path(r"C:/Users/gonza/Documents/Trade-Dashboard/data/databento/NQ")
++_DEFAULT_OUT = Path("route_seam_report.json")
++_DATASET = "GLBX.MDP3"
++_REQUESTED_SYMBOL = "NQ.c.0"
++_STYPE_IN = "continuous"
++_SAMPLE_POSITIONS = 25
++_PRICE_SCALE = 1_000_000_000
++_TICK_SIZE = 0.25
++
++
++def _trading_day_window_utc(trading_day: date) -> tuple[datetime, datetime]:
++    tz = ZoneInfo(SESSION_TIMEZONE)
++    boundary = TRADING_DAY_BOUNDARY if isinstance(TRADING_DAY_BOUNDARY, time) else time(18, 0)
++    start = datetime.combine(trading_day - timedelta(days=1), boundary, tzinfo=tz)
++    end = datetime.combine(trading_day, boundary, tzinfo=tz)
++    return start.astimezone(UTC), end.astimezone(UTC)
++
++
++def _ns(ts: datetime) -> int:
++    return int(ts.timestamp() * 1_000_000) * 1_000  # µs precision; both routes share it
++
++
++def _summarize_stream(events) -> dict:
++    """Reduce an (ordered) Trade/Quote stream to the seam-check shape."""
++
++    trade_count = 0
++    tob_transitions = 0
++    last_tob: tuple[int, int, int, int] | None = None
++    first_ts: datetime | None = None
++    last_ts: datetime | None = None
++    trades: list[tuple[int, int, int]] = []
++    for event in events:
++        if isinstance(event, Trade):
++            trade_count += 1
++            trades.append((_ns(event.event_ts_utc), event.price_ticks, event.size))
++        elif isinstance(event, Quote):
++            tob = (
++                event.bid_price_ticks,
++                event.ask_price_ticks,
++                event.bid_size,
++                event.ask_size,
++            )
++            if tob != last_tob:
++                last_tob = tob
++                tob_transitions += 1
++        else:
++            continue  # data-quality warnings are not seam-shape inputs
++        ts = event.event_ts_utc
++        if first_ts is None:
++            first_ts = ts
++        last_ts = ts
++    return {
++        "trade_count": trade_count,
++        "tob_transitions": tob_transitions,
++        "first_event_utc": None if first_ts is None else first_ts.isoformat(),
++        "last_event_utc": None if last_ts is None else last_ts.isoformat(),
++        "_trades": trades,
++    }
++
++
++def _parquet_route(symbol_dir: Path, trading_day: date) -> dict:
++    source = DatabentoParquetSource.for_trading_day(
++        symbol_dir, trading_day, requested_symbol=_REQUESTED_SYMBOL
++    )
++    summary = _summarize_stream(source.events())
++    summary["route"] = "parquet (DatabentoParquetSource.for_trading_day)"
++    return summary
++
++
++def _api_route(api_key: str, trading_day: date) -> dict:
++    import databento
++
++    client = databento.Historical(api_key)
++    start, end = _trading_day_window_utc(trading_day)
++
++    def fetch(schema: str):
++        return client.timeseries.get_range(
++            dataset=_DATASET,
++            schema=schema,
++            symbols=[_REQUESTED_SYMBOL],
++            stype_in=_STYPE_IN,
++            start=start,
++            end=end,
++        )
++
++    def stream():
++        import heapq
++
++        def records(store, kind):
++            for record in store:
++                yield (_record_ts(record), kind, record)
++
++        merged = heapq.merge(
++            records(fetch("trades"), "trade"),
++            records(fetch("mbp-1"), "quote"),
++            key=lambda item: item[0],
++        )
++        for ts_ns, kind, record in merged:
++            ts = datetime(1970, 1, 1, tzinfo=UTC) + timedelta(microseconds=ts_ns // 1_000)
++            if kind == "trade":
++                yield Trade(
++                    event_ts_utc=ts,
++                    price_ticks=round(record.price / _PRICE_SCALE / _TICK_SIZE),
++                    size=int(record.size),
++                    side=str(getattr(record, "side", "N")),
++                )
++            else:
++                level = record.levels[0]
++                yield Quote(
++                    event_ts_utc=ts,
++                    bid_price_ticks=round(level.bid_px / _PRICE_SCALE / _TICK_SIZE),
++                    ask_price_ticks=round(level.ask_px / _PRICE_SCALE / _TICK_SIZE),
++                    bid_size=int(level.bid_sz),
++                    ask_size=int(level.ask_sz),
++                )
++
++    summary = _summarize_stream(stream())
++    summary["route"] = "historical API (trades + mbp-1, canonical L1 dedup)"
++    return summary
++
++
++def _record_ts(record) -> int:
++    value = getattr(record, "ts_event", None)
++    if value is None:
++        value = getattr(getattr(record, "hdr", None), "ts_event", 0)
++    return int(value or 0)
++
++
++def _sequence_sample(parquet_trades, api_trades) -> dict:
++    count = min(len(parquet_trades), len(api_trades))
++    if count == 0:
++        return {"positions_compared": 0, "mismatches": []}
++    step = max(count // _SAMPLE_POSITIONS, 1)
++    positions = list(range(0, count, step))[:_SAMPLE_POSITIONS]
++    mismatches = [
++        {"position": i, "parquet": parquet_trades[i], "api": api_trades[i]}
++        for i in positions
++        if parquet_trades[i] != api_trades[i]
++    ]
++    return {"positions_compared": len(positions), "mismatches": mismatches}
++
++
++def main() -> int:
++    parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
++    parser.add_argument("--day", default=_DEFAULT_DAY)
++    parser.add_argument("--symbol-dir", type=Path, default=_DEFAULT_SYMBOL_DIR)
++    parser.add_argument("--out", type=Path, default=_DEFAULT_OUT)
++    args = parser.parse_args()
++
++    api_key = os.environ.get("DATABENTO_API_KEY")
++    if not api_key:
++        print(
++            "route_seam_check: DATABENTO_API_KEY is not set — the API side of the "
++            "seam cannot be fetched. Set the key and re-run; no report written."
++        )
++        return 2
++    trading_day = date.fromisoformat(args.day)
++    if not args.symbol_dir.exists():
++        print(f"route_seam_check: symbol dir not found: {args.symbol_dir}; no report written.")
++        return 2
++
++    parquet = _parquet_route(args.symbol_dir, trading_day)
++    api = _api_route(api_key, trading_day)
++    sample = _sequence_sample(parquet.pop("_trades"), api.pop("_trades"))
++    report = {
++        "generated_utc": datetime.now(UTC).isoformat(),
++        "trading_day": trading_day.isoformat(),
++        "requested_symbol": _REQUESTED_SYMBOL,
++        "parquet": parquet,
++        "api": api,
++        "diff": {
++            "trade_count_delta": api["trade_count"] - parquet["trade_count"],
++            "tob_transition_delta": api["tob_transitions"] - parquet["tob_transitions"],
++            "first_event_equal": parquet["first_event_utc"] == api["first_event_utc"],
++            "last_event_equal": parquet["last_event_utc"] == api["last_event_utc"],
++            "trade_sequence_sample": sample,
++        },
++    }
++    text = json.dumps(report, indent=2)
++    print(text)
++    args.out.write_text(text, encoding="utf-8")
++    print(f"route_seam_check: report written to {args.out}")
++    return 0
++
++
++if __name__ == "__main__":
++    raise SystemExit(main())
+diff --git a/tests/test_runtime_levels.py b/tests/test_runtime_levels.py
+index de3cf99..ff9cea7 100644
+--- a/tests/test_runtime_levels.py
++++ b/tests/test_runtime_levels.py
+@@ -64,3 +64,24 @@ def test_asia_and_london_ranges_use_strategy_core_sessions_not_chicago_closed_wi
+     levels = {level.name for level in runtime.snapshot().levels}
+     assert {"asia_high", "asia_low", "london_high", "london_low"} <= levels
+     assert runtime.snapshot().trading_day is not None
++
++
++def test_friday_bank_serves_monday_pdh_pdl_across_the_weekend_gap() -> None:
++    """W2 P1f rider: the emission lookup resolves the MOST RECENT banked day with
++    key < the current trading day, so a Friday bank serves Monday across the
++    weekend gap (verified: no fix needed — this pins the behavior)."""
++    state = StrategyLevelState()
++    # Trading day Friday 2025-07-11 (rolls at 18:00 ET on Thu 7/10): high/low banked.
++    state.process_trade(_et_trade(2025, 7, 10, 19, 0, 68400))
++    state.process_trade(_et_trade(2025, 7, 11, 10, 0, 68000))
++    assert {level.name for level in state.levels()}.isdisjoint({"pdh", "pdl"})
++    # First trade of Monday's trading day (Sunday 19:00 ET) rolls across the
++    # weekend; Friday is the most recent banked day and must emit as pdh/pdl.
++    levels = {
++        level.name: level
++        for level in state.process_trade(_et_trade(2025, 7, 13, 19, 0, 68200))
++    }
++    assert levels["pdh"].price == 68400 * 0.25
++    assert levels["pdl"].price == 68000 * 0.25
++    assert levels["pdh"].side is Side.HIGH
++    assert levels["pdl"].side is Side.LOW
+diff --git a/validation/decision_diff_harness.py b/validation/decision_diff_harness.py
+index cbe0932..86f98e8 100644
+--- a/validation/decision_diff_harness.py
++++ b/validation/decision_diff_harness.py
+@@ -99,7 +99,6 @@ MAX_PRIOR_WALKBACK_DAYS = 7
+ 
+ from strategy_core import (  # noqa: E402
+     Bar,
+-    Direction,
+     Level,
+     Quote,
+     Side,
+@@ -627,7 +626,7 @@ FEATURE_EPS = 1e-6  # below this, two feature values are "identical" (approach u
+ 
+ 
+ def _level_map(levels: list[Level]) -> dict:
+-    return {l.name: (round(float(l.price), 6), l.side.value) for l in levels}
++    return {lvl.name: (round(float(lvl.price), 6), lvl.side.value) for lvl in levels}
+ 
+ 
+ def _zone_set(zones: list) -> set:
+diff --git a/validation/parity_harness.py b/validation/parity_harness.py
+deleted file mode 100644
+index fc7c85a..0000000
+--- a/validation/parity_harness.py
++++ /dev/null
+@@ -1,739 +0,0 @@
+-"""STANDALONE parity harness: strategy-core vs the canonical research pipeline.
+-
+-Proves that strategy-core reproduces the canonical dashboard-utility research
+-pipeline on REAL data, stage by stage. This is a money-path gate — it reports
+-mismatches HONESTLY and never fudges to make a must-match stage pass.
+-
+-ADDITIVE ONLY. Imports the research package (alpha_lab) and strategy_core
+-read-only. Writes nothing outside this validation/ tree.
+-
+-Key design choice that makes the comparison clean:
+-  The canonical pipeline runs ENTIRELY on BOOK-MID bars (tick_store
+-  build_tick_bars price=(bid_px_00+ask_px_00)/2.0; bar timestamp = LAST(ts_event)
+-  = the bar CLOSE time). Book mids are exact multiples of 0.125, so we represent
+-  canonical bars LOSSLESSLY as strategy_core.Bar with tick_size=0.125
+-  (low_ticks=round(low/0.125), high_ticks=round(high/0.125)). Feeding IDENTICAL
+-  bars to both pipelines means any zones/touches/labels difference is a PORT BUG,
+-  while feature differences are the deliberate trade-price change.
+-
+-Stages:
+-  A. ZONES                       [must_match]
+-  B. SESSIONS                    [must_match]
+-  C. TOUCHES                     [must_match]  <- core port-fidelity proof
+-  D. LABELS                      [must_match]
+-  E. INTERACTION FORMULA         [must_match]  <- identical book inputs
+-  F. INTERACTION TRADE-PRICE     [expected_differ]  <- deliberate price-source change
+-  G. APPROACH FEATURES (3)       [must_match]  <- ref-independent
+-"""
+-
+-from __future__ import annotations
+-
+-# --- CRITICAL: research package shadow guard -------------------------------
+-# alpha_lab is NOT importable by default; a different partial copy shadows it.
+-# This MUST run before importing alpha_lab.
+-import sys
+-
+-sys.path.insert(0, r"C:/Users/gonza/Documents/Claude-Quant-Lab/src")
+-
+-import math
+-from collections import defaultdict
+-from datetime import date, datetime, timedelta, timezone
+-from pathlib import Path
+-
+-import duckdb
+-import numpy as np
+-import pandas as pd
+-
+-# Canonical research code (read-only) ---------------------------------------
+-from alpha_lab.agents.data_infra.ml import dashboard_utility_builder as B
+-from alpha_lab.agents.data_infra.ml import dashboard_utility_labeling as L
+-from alpha_lab.agents.data_infra.ml.config import MLPipelineConfig
+-from alpha_lab.agents.data_infra.tick_store import TickStore
+-
+-# Engine under test ----------------------------------------------------------
+-import strategy_core as sc
+-from strategy_core import (
+-    Bar,
+-    CloseReason,
+-    Direction,
+-    Level,
+-    Quote,
+-    Side,
+-    Trade,
+-    app_avg_trade_size,
+-    app_large_trade_vol_pct,
+-    app_max_spread,
+-    build_zones,
+-    classify_session,
+-    detect_touches,
+-    int_absorption_ratio,
+-    int_time_beyond_level,
+-    int_time_within_2pts,
+-    make_bar_id,
+-    resolve_outcome,
+-)
+-
+-# --- Configuration ----------------------------------------------------------
+-DAYS = ["2025-06-02", "2025-06-03", "2025-06-04", "2025-06-05", "2025-06-06"]
+-DATA_DIR = Path(r"C:/Users/gonza/Documents/Trade-Dashboard/data/databento")
+-SYMBOL = "NQ"
+-
+-CANON_TICK = 0.125  # book-mid grid: lossless representation of canonical bars
+-TRADE_TICK = 0.25  # real NQ trade-price tick (deliberate divergence in stages F/G)
+-
+-PROD_CONFIG = MLPipelineConfig(
+-    training_mode="dashboard_utility",
+-    instrument="NQ",
+-    tick_size=0.25,
+-    dashboard_utility=dict(
+-        bar_type="147t",
+-        interaction_window_minutes=5,
+-        approach_window_minutes=30,
+-        include_approach_features=True,
+-        tp_points=15.0,
+-        sl_points=30.0,
+-        trap_mfe_min=5.0,
+-        level_proximity_pts=0.5,
+-    ),
+-)
+-U = PROD_CONFIG.dashboard_utility
+-TF = 147
+-
+-OUT_DIR = Path(r"C:/Users/gonza/Documents/Strategy-core/validation/_out")
+-REPORT_PATH = OUT_DIR / "PARITY_REPORT.md"
+-
+-ABS_TOL = 1e-9
+-APP_TOL = 1e-6
+-
+-_ET = "US/Eastern"
+-_ET_TZ = pd.Timestamp("2025-01-01", tz=_ET).tz  # ZoneInfo for US/Eastern
+-
+-
+-# --- Stage accumulators -----------------------------------------------------
+-class Stage:
+-    def __init__(self, name: str, scope: str):
+-        self.name = name
+-        self.scope = scope  # "must_match" | "expected_differ"
+-        self.total = 0
+-        self.matched = 0
+-        self.mismatched = 0
+-        self.example = ""  # first mismatch example (must_match)
+-        self.divergences: dict[str, list[float]] = defaultdict(list)  # expected_differ
+-
+-    def record(self, ok: bool, example: str = ""):
+-        self.total += 1
+-        if ok:
+-            self.matched += 1
+-        else:
+-            self.mismatched += 1
+-            if not self.example and example:
+-                self.example = example
+-
+-    def divergence_summary(self) -> str:
+-        parts = []
+-        for feat, vals in self.divergences.items():
+-            if not vals:
+-                continue
+-            arr = np.array(vals, dtype=float)
+-            arr = arr[~np.isnan(arr)]
+-            if arr.size == 0:
+-                parts.append(f"{feat}: (no finite samples)")
+-                continue
+-            parts.append(
+-                f"{feat}: n={arr.size} mean={arr.mean():.4f} "
+-                f"median={np.median(arr):.4f} max={arr.max():.4f}"
+-            )
+-        return "; ".join(parts)
+-
+-
+-STAGES: dict[str, Stage] = {
+-    "A_ZONES": Stage("A. ZONES", "must_match"),
+-    "B_SESSIONS": Stage("B. SESSIONS", "must_match"),
+-    "C_TOUCHES": Stage("C. TOUCHES", "must_match"),
+-    "D_LABELS": Stage("D. LABELS", "must_match"),
+-    "E_INT_FORMULA": Stage("E. INTERACTION FORMULA FIDELITY", "must_match"),
+-    "F_INT_TRADEPRICE": Stage("F. INTERACTION TRADE-PRICE DIVERGENCE", "expected_differ"),
+-    "G_APPROACH": Stage("G. APPROACH FEATURES (3 model features)", "must_match"),
+-}
+-
+-
+-# --- Helpers ----------------------------------------------------------------
+-def _floats_eq(a: float, b: float, tol: float = ABS_TOL) -> bool:
+-    if a is None and b is None:
+-        return True
+-    if a is None or b is None:
+-        return False
+-    if isinstance(a, float) and isinstance(b, float):
+-        if math.isnan(a) and math.isnan(b):
+-            return True
+-        if math.isnan(a) or math.isnan(b):
+-            return False
+-    return abs(float(a) - float(b)) <= tol
+-
+-
+-def _to_utc_dt(ts: pd.Timestamp) -> datetime:
+-    """ET-aware (or naive-UTC) pandas Timestamp -> tz-aware python UTC datetime."""
+-    ts = pd.Timestamp(ts)
+-    if ts.tz is None:
+-        ts = ts.tz_localize("UTC")
+-    return ts.tz_convert("UTC").to_pydatetime()
+-
+-
+-def _round_to_ticks(value: float, tick: float) -> int:
+-    return int(round(float(value) / tick))
+-
+-
+-def _engine_bars_from_et(bars_et: pd.DataFrame, trading_day: date) -> list[Bar]:
+-    """Build engine Bars from canonical ET-indexed OHLCV rows (book-mid grid)."""
+-    out: list[Bar] = []
+-    for i, (idx, row) in enumerate(bars_et.iterrows()):
+-        close_utc = _to_utc_dt(idx)
+-        out.append(
+-            Bar(
+-                timeframe_ticks=TF,
+-                trading_day=trading_day,
+-                bar_index=i,
+-                bar_id=make_bar_id(TF, trading_day, i),
+-                open_ts_utc=close_utc,
+-                close_ts_utc=close_utc,
+-                open_ticks=_round_to_ticks(row["open"], CANON_TICK),
+-                high_ticks=_round_to_ticks(row["high"], CANON_TICK),
+-                low_ticks=_round_to_ticks(row["low"], CANON_TICK),
+-                close_ticks=_round_to_ticks(row["close"], CANON_TICK),
+-                volume=int(row["volume"]),
+-                trade_count=TF,
+-                is_complete=True,
+-                is_partial=False,
+-                close_reason=CloseReason.COMPLETE,
+-            )
+-        )
+-    return out
+-
+-
+-def _canon_levels_to_engine(levels: list[dict]) -> list[Level]:
+-    return [
+-        Level(name=l["name"], price=float(l["price"]), side=Side(l["side"]))
+-        for l in levels
+-    ]
+-
+-
+-def _canon_session_for_ts(ts_et: pd.Timestamp) -> str:
+-    """Canonical _slice_session masks, evaluated for a single ET timestamp.
+-
+-    asia: t>=18:00 or t<01:00 ; london: 01:00<=t<08:00 ; ny_rth: 09:30<=t<16:15 ;
+-    else 'none'. Mirrors dashboard_utility_builder._slice_session exactly.
+-    """
+-    t = ts_et.time()
+-    if t >= B._ASIA_START or t < B._ASIA_END:
+-        return "asia"
+-    if B._LONDON_START <= t < B._LONDON_END:
+-        return "london"
+-    if B._NY_RTH_START <= t < B._NY_RTH_END:
+-        return "ny_rth"
+-    return "none"
+-
+-
+-# --- Front-month / trade-quote extraction for stages F & G ------------------
+-class DayParquet:
+-    """Per-day DuckDB view over mbp10 parquet, with front-month resolution.
+-
+-    Registers both the day file and (lazily) the previous day's file so the
+-    approach window can cross the calendar-day boundary, exactly as the
+-    canonical builder does (builder:566-567 registers prev day).
+-    """
+-
+-    def __init__(self):
+-        self._cache: dict[str, dict] = {}
+-
+-    def _path(self, date_str: str) -> Path:
+-        return DATA_DIR / SYMBOL / date_str / "mbp10.parquet"
+-
+-    def get(self, date_str: str) -> dict | None:
+-        if date_str in self._cache:
+-            return self._cache[date_str]
+-        path = self._path(date_str)
+-        prev = (date.fromisoformat(date_str) - timedelta(days=1)).isoformat()
+-        prev_path = self._path(prev)
+-        if not path.exists():
+-            self._cache[date_str] = None
+-            return None
+-        con = duckdb.connect(":memory:")
+-        reads = [f"SELECT * FROM read_parquet('{path.as_posix()}')"]
+-        if prev_path.exists():
+-            reads.append(f"SELECT * FROM read_parquet('{prev_path.as_posix()}')")
+-        union_sql = " UNION ALL ".join(reads)
+-        # Resolve the dominant front-month outright contract (same as
+-        # build_tick_bars: symbol NOT LIKE '%-%', pick by row count).
+-        front = con.execute(
+-            f"SELECT symbol, count(*) AS n FROM ({union_sql}) AS t "
+-            f"WHERE symbol NOT LIKE '%-%' GROUP BY symbol ORDER BY n DESC LIMIT 1"
+-        ).fetchone()
+-        sym = front[0] if front else None
+-        info = {"con": con, "union_sql": union_sql, "symbol": sym}
+-        self._cache[date_str] = info
+-        return info
+-
+-    def trades(self, date_str: str, start_utc: datetime, end_utc: datetime,
+-               end_exclusive: bool) -> pd.DataFrame:
+-        info = self.get(date_str)
+-        if info is None:
+-            return pd.DataFrame(columns=["ts_event", "price", "size"])
+-        sym_f = f"AND symbol = '{info['symbol']}'" if info["symbol"] else "AND symbol NOT LIKE '%-%'"
+-        cmp_end = "<" if end_exclusive else "<="
+-        sql = f"""
+-            SELECT ts_event, price, size
+-            FROM ({info['union_sql']}) AS t
+-            WHERE ts_event >= $1 AND ts_event {cmp_end} $2
+-              AND bid_px_00 > 0 AND ask_px_00 > 0
+-              AND action = 'T'
+-              {sym_f}
+-            ORDER BY ts_event ASC
+-        """
+-        return info["con"].execute(sql, [pd.Timestamp(start_utc), pd.Timestamp(end_utc)]).fetchdf()
+-
+-    def quotes_base(self, date_str: str, start_utc: datetime, end_utc: datetime) -> pd.DataFrame:
+-        """base rows (bid>0 & ask>0) over [start, end) — used as quotes for max_spread."""
+-        info = self.get(date_str)
+-        if info is None:
+-            return pd.DataFrame(columns=["ts_event", "bid_px_00", "ask_px_00"])
+-        sym_f = f"AND symbol = '{info['symbol']}'" if info["symbol"] else "AND symbol NOT LIKE '%-%'"
+-        sql = f"""
+-            SELECT ts_event, bid_px_00, ask_px_00
+-            FROM ({info['union_sql']}) AS t
+-            WHERE ts_event >= $1 AND ts_event < $2
+-              AND bid_px_00 > 0 AND ask_px_00 > 0
+-              {sym_f}
+-            ORDER BY ts_event ASC
+-        """
+-        return info["con"].execute(sql, [pd.Timestamp(start_utc), pd.Timestamp(end_utc)]).fetchdf()
+-
+-
+-DAY_PARQUET = DayParquet()
+-
+-
+-# --- Main per-day pipeline ---------------------------------------------------
+-def process_day(date_str, prev_ny_hl, prev_asia_hl, prev_london_hl, store_book: TickStore):
+-    """Run all stages for one day. Returns updated prev-session H/L tuples and
+-    the day's touch count (kept touches with non-None canonical features)."""
+-    td = date.fromisoformat(date_str)
+-
+-    # 1. bars (canonical book-mid) ------------------------------------------
+-    bars = B._build_bars_for_date(DATA_DIR, SYMBOL, date_str, U)
+-    if bars.empty:
+-        return prev_ny_hl, prev_asia_hl, prev_london_hl, 0
+-    bars_et = B._ensure_et_index(bars)
+-
+-    # 2. levels --------------------------------------------------------------
+-    levels = B._compute_levels_for_date(bars_et, date_str, prev_ny_hl, prev_asia_hl, prev_london_hl)
+-
+-    # next-day session H/L carry (mirror build_utility_dataset loop) ---------
+-    new_ny, new_asia, new_london = B._get_session_hl_for_date(
+-        DATA_DIR, SYMBOL, date_str, U, prev_ny_hl, prev_asia_hl, prev_london_hl
+-    )
+-
+-    # engine bars (shared by C, D) ------------------------------------------
+-    eng_bars = _engine_bars_from_et(bars_et, td)
+-
+-    # ---------------------------------------------------------------- STAGE A
+-    canon_zones_cmp = B._build_zones(levels)  # for comparison (not mutated by detection)
+-    eng_levels = _canon_levels_to_engine(levels)
+-    eng_zones_cmp = build_zones(eng_levels)
+-    _compare_zones(date_str, canon_zones_cmp, eng_zones_cmp)
+-
+-    # ---------------------------------------------------------------- STAGE B
+-    _compare_sessions(date_str, bars_et)
+-
+-    # ---------------------------------------------------------------- STAGE C
+-    # FRESH zones for detection (detection MUTATES zone['touched']).
+-    canon_zones_det = B._build_zones(levels)
+-    canon_touches = B._detect_touches(bars_et, canon_zones_det)
+-    eng_zones_det = build_zones(_canon_levels_to_engine(levels))
+-    eng_touches = detect_touches(eng_bars, eng_zones_det, tick_size=CANON_TICK, trading_day=td)
+-    _compare_touches(date_str, canon_touches, eng_touches)
+-
+-    # ---------------------------------------------------------------- STAGE D
+-    rth_cutoff = pd.Timestamp(f"{date_str} 16:15:00", tz=_ET)
+-    for touch in canon_touches:
+-        forward = bars_et[bars_et.index > touch["bar_ts"]]
+-        forward = forward[forward.index < rth_cutoff]
+-        if forward.empty:
+-            continue
+-        canon = L.label_touch_event(touch, forward, U)
+-        fwd_bars = _engine_bars_from_et(forward, td)
+-        eng = resolve_outcome(
+-            entry_points=float(touch["representative_price"]),
+-            direction=Direction(touch["direction"]),
+-            forward_bars=fwd_bars,
+-            tick_size=CANON_TICK,
+-            tp_points=U.tp_points,
+-            sl_points=U.sl_points,
+-            trap_mfe_min=U.trap_mfe_min,
+-        )
+-        _compare_label(date_str, touch, canon, eng)
+-
+-    # ----------------------------------------------------- STAGES E, F, G ----
+-    # Per kept touch (canonical interaction features not None).
+-    day_touch_count = 0
+-    for touch in canon_touches:
+-        canon_int = B._compute_interaction_features(touch, DATA_DIR, SYMBOL, U)
+-        if canon_int is None:
+-            continue
+-        day_touch_count += 1
+-
+-        rep = float(touch["representative_price"])
+-        direction = touch["direction"]
+-        eng_dir = Direction(direction)
+-        event_ts = pd.Timestamp(touch["bar_ts"])
+-        event_ts_utc = _to_utc_dt(event_ts)
+-        win_end_utc = event_ts_utc + timedelta(minutes=U.interaction_window_minutes)
+-
+-        # ----- STAGE E: identical BOOK inputs -> must match -----------------
+-        book_rows = store_book.query_tick_feature_rows(SYMBOL, event_ts_utc, win_end_utc)
+-        eng_book_trades = []
+-        if not book_rows.empty and "price" in book_rows.columns:
+-            for r in book_rows.itertuples(index=False):
+-                eng_book_trades.append(
+-                    Trade(
+-                        event_ts_utc=_to_utc_dt(r.ts_event),
+-                        price_ticks=_round_to_ticks(r.price, CANON_TICK),
+-                        size=int(r.size),
+-                    )
+-                )
+-        e_beyond = int_time_beyond_level(eng_book_trades, rep, eng_dir, CANON_TICK)
+-        e_within = int_time_within_2pts(eng_book_trades, rep, CANON_TICK)
+-        e_absorp = int_absorption_ratio(eng_book_trades, rep, eng_dir, CANON_TICK)
+-        _compare_int_formula(date_str, touch, canon_int, e_beyond, e_within, e_absorp)
+-
+-        # ----- STAGE F: real TRADE prints -> expected to differ -------------
+-        trade_df = DAY_PARQUET.trades(date_str, event_ts_utc, win_end_utc, end_exclusive=False)
+-        eng_trades = [
+-            Trade(
+-                event_ts_utc=_to_utc_dt(r.ts_event),
+-                price_ticks=_round_to_ticks(r.price, TRADE_TICK),
+-                size=int(r.size),
+-            )
+-            for r in trade_df.itertuples(index=False)
+-        ]
+-        f_beyond = int_time_beyond_level(eng_trades, rep, eng_dir, TRADE_TICK)
+-        f_within = int_time_within_2pts(eng_trades, rep, TRADE_TICK)
+-        f_absorp = int_absorption_ratio(eng_trades, rep, eng_dir, TRADE_TICK)
+-        _record_int_divergence(canon_int, f_beyond, f_within, f_absorp)
+-
+-        # ----- STAGE G: approach features (3 model features) -> must match --
+-        canon_app = B._compute_approach_features(touch, DATA_DIR, SYMBOL, U)
+-        app_start_utc = event_ts_utc - timedelta(minutes=U.approach_window_minutes)
+-        # base rows / trades for the approach window, crossing prev day if needed
+-        a_trades_df = _approach_trades(date_str, app_start_utc, event_ts_utc)
+-        a_quotes_df = _approach_quotes(date_str, app_start_utc, event_ts_utc)
+-        eng_app_trades = [
+-            Trade(event_ts_utc=_to_utc_dt(r.ts_event),
+-                  price_ticks=_round_to_ticks(r.price, TRADE_TICK), size=int(r.size))
+-            for r in a_trades_df.itertuples(index=False)
+-        ]
+-        eng_app_quotes = [
+-            Quote(event_ts_utc=_to_utc_dt(r.ts_event),
+-                  bid_price_ticks=_round_to_ticks(r.bid_px_00, TRADE_TICK),
+-                  ask_price_ticks=_round_to_ticks(r.ask_px_00, TRADE_TICK))
+-            for r in a_quotes_df.itertuples(index=False)
+-        ]
+-        e_avg = app_avg_trade_size(eng_app_trades)
+-        e_largepct = app_large_trade_vol_pct(eng_app_trades)
+-        e_maxspread = app_max_spread(eng_app_quotes, TRADE_TICK)
+-        _compare_approach(date_str, touch, canon_app, e_avg, e_largepct, e_maxspread)
+-
+-    return new_ny, new_asia, new_london, day_touch_count
+-
+-
+-def _approach_trades(date_str, start_utc, end_utc):
+-    """Trades over [start, end) across day + prev day (front-month filtered).
+-
+-    The DayParquet view for ``date_str`` already UNIONs in the prev-day file, so a
+-    single windowed query covers a window that crosses midnight. Do NOT dedup or
+-    re-concat: the windowed front-month SQL already yields exactly the canonical
+-    trade set, and dropping duplicate (ts,price,size) rows would silently discard
+-    legitimately-identical prints and corrupt avg_trade_size.
+-    """
+-    return DAY_PARQUET.trades(date_str, start_utc, end_utc, end_exclusive=True)
+-
+-
+-def _approach_quotes(date_str, start_utc, end_utc):
+-    df = DAY_PARQUET.quotes_base(date_str, start_utc, end_utc)
+-    if not df.empty:
+-        df = df.sort_values("ts_event")
+-    return df
+-
+-
+-# --- Stage comparators ------------------------------------------------------
+-def _compare_zones(date_str, canon, eng):
+-    st = STAGES["A_ZONES"]
+-    # count check as one record
+-    if len(canon) != len(eng):
+-        st.record(False, f"{date_str}: zone count canon={len(canon)} eng={len(eng)}")
+-        return
+-    for i, (cz, ez) in enumerate(zip(canon, eng)):
+-        ok = (
+-            _floats_eq(cz["representative_price"], ez.representative_price)
+-            and cz["side"] == ez.side.value
+-            and tuple(cz["names"]) == tuple(ez.names)
+-        )
+-        ex = (
+-            f"{date_str} zone#{i}: canon(rep={cz['representative_price']},side={cz['side']},"
+-            f"names={tuple(cz['names'])}) vs eng(rep={ez.representative_price},"
+-            f"side={ez.side.value},names={tuple(ez.names)})"
+-        )
+-        st.record(ok, ex)
+-
+-
+-def _compare_sessions(date_str, bars_et):
+-    st = STAGES["B_SESSIONS"]
+-    idx = bars_et.index
+-    n = len(idx)
+-    # sample up to ~5000 bars/day evenly
+-    if n > 5000:
+-        sel = np.linspace(0, n - 1, 5000).astype(int)
+-        sel = np.unique(sel)
+-    else:
+-        sel = range(n)
+-    for i in sel:
+-        ts_et = idx[i]
+-        canon_sess = _canon_session_for_ts(ts_et)
+-        ts_utc = _to_utc_dt(ts_et)
+-        eng_sess = classify_session(ts_utc).session
+-        ok = canon_sess == eng_sess
+-        ex = f"{date_str} {ts_et.isoformat()}: canon={canon_sess} eng={eng_sess}"
+-        st.record(ok, ex)
+-
+-
+-def _compare_touches(date_str, canon, eng):
+-    st = STAGES["C_TOUCHES"]
+-    if len(canon) != len(eng):
+-        st.record(False, f"{date_str}: touch count canon={len(canon)} eng={len(eng)}")
+-        # still compare the overlapping prefix to surface the first divergence
+-    for i in range(min(len(canon), len(eng))):
+-        ct = canon[i]
+-        et = eng[i]
+-        canon_ts = _to_utc_dt(ct["bar_ts"])
+-        ok = (
+-            canon_ts == et.bar_ts_utc
+-            and ct["direction"] == et.direction.value
+-            and _floats_eq(ct["representative_price"], et.representative_price)
+-            and ct["level_type"] == et.level_type
+-        )
+-        ex = (
+-            f"{date_str} touch#{i}: canon(ts={canon_ts.isoformat()},dir={ct['direction']},"
+-            f"rep={ct['representative_price']},lvl={ct['level_type']}) vs "
+-            f"eng(ts={et.bar_ts_utc.isoformat()},dir={et.direction.value},"
+-            f"rep={et.representative_price},lvl={et.level_type})"
+-        )
+-        st.record(ok, ex)
+-
+-
+-def _compare_label(date_str, touch, canon, eng):
+-    st = STAGES["D_LABELS"]
+-    ok = (
+-        canon["label"] == eng.label
+-        and canon["label_encoded"] == eng.label_encoded
+-        and _floats_eq(round(float(canon["max_mfe"]), 4), round(float(eng.max_mfe), 4))
+-        and _floats_eq(round(float(canon["max_mae"]), 4), round(float(eng.max_mae), 4))
+-    )
+-    ts = _to_utc_dt(pd.Timestamp(touch["bar_ts"]))
+-    ex = (
+-        f"{date_str} touch@{ts.isoformat()}: canon(label={canon['label']},"
+-        f"enc={canon['label_encoded']},mfe={canon['max_mfe']},mae={canon['max_mae']}) vs "
+-        f"eng(label={eng.label},enc={eng.label_encoded},mfe={eng.max_mfe},mae={eng.max_mae})"
+-    )
+-    st.record(ok, ex)
+-
+-
+-def _compare_int_formula(date_str, touch, canon, e_beyond, e_within, e_absorp):
+-    st = STAGES["E_INT_FORMULA"]
+-    ok = (
+-        _floats_eq(canon["int_time_beyond_level"], e_beyond)
+-        and _floats_eq(canon["int_time_within_2pts"], e_within)
+-        and _floats_eq(canon["int_absorption_ratio"], e_absorp)
+-    )
+-    ts = _to_utc_dt(pd.Timestamp(touch["bar_ts"]))
+-    ex = (
+-        f"{date_str} touch@{ts.isoformat()}: "
+-        f"beyond canon={canon['int_time_beyond_level']} eng={e_beyond}; "
+-        f"within canon={canon['int_time_within_2pts']} eng={e_within}; "
+-        f"absorp canon={canon['int_absorption_ratio']} eng={e_absorp}"
+-    )
+-    st.record(ok, ex)
+-
+-
+-def _record_int_divergence(canon, f_beyond, f_within, f_absorp):
+-    st = STAGES["F_INT_TRADEPRICE"]
+-    st.total += 1
+-    st.divergences["int_time_beyond_level"].append(
+-        abs(f_beyond - float(canon["int_time_beyond_level"]))
+-    )
+-    st.divergences["int_time_within_2pts"].append(
+-        abs(f_within - float(canon["int_time_within_2pts"]))
+-    )
+-    st.divergences["int_absorption_ratio"].append(
+-        abs(f_absorp - float(canon["int_absorption_ratio"]))
+-    )
+-
+-
+-def _compare_approach(date_str, touch, canon, e_avg, e_largepct, e_maxspread):
+-    st = STAGES["G_APPROACH"]
+-    if canon is None:
+-        canon = {}
+-    c_avg = canon.get("app_avg_trade_size", float("nan"))
+-    c_largepct = canon.get("app_large_trade_vol_pct", float("nan"))
+-    c_maxspread = canon.get("app_max_spread", float("nan"))
+-    ok = (
+-        _floats_eq(c_avg, e_avg, APP_TOL)
+-        and _floats_eq(c_largepct, e_largepct, APP_TOL)
+-        and _floats_eq(c_maxspread, e_maxspread, APP_TOL)
+-    )
+-    ts = _to_utc_dt(pd.Timestamp(touch["bar_ts"]))
+-    ex = (
+-        f"{date_str} touch@{ts.isoformat()}: "
+-        f"avg_trade_size canon={c_avg} eng={e_avg}; "
+-        f"large_vol_pct canon={c_largepct} eng={e_largepct}; "
+-        f"max_spread canon={c_maxspread} eng={e_maxspread}"
+-    )
+-    st.record(ok, ex)
+-
+-
+-# --- Report -----------------------------------------------------------------
+-def write_report(days_processed, total_touches):
+-    OUT_DIR.mkdir(parents=True, exist_ok=True)
+-    must_pass = all(
+-        s.mismatched == 0 for s in STAGES.values() if s.scope == "must_match"
+-    )
+-
+-    lines = []
+-    lines.append("# Strategy-Core Parity Report")
+-    lines.append("")
+-    lines.append(f"Generated: {datetime.now(timezone.utc).isoformat()}")
+-    lines.append(f"Engine: strategy_core v{getattr(sc, 'PLATFORM_VERSION', '?')} "
+-                 f"(contract v{getattr(sc, 'CONTRACT_VERSION', '?')})")
+-    lines.append("")
+-    lines.append("Proves strategy-core reproduces the canonical dashboard-utility "
+-                 "research pipeline on REAL NQ data. The canonical pipeline runs on "
+-                 "BOOK-MID bars; those bars are represented LOSSLESSLY in the engine "
+-                 "(tick_size=0.125), so any zones/touches/labels difference would be a "
+-                 "PORT BUG. Feature *price-source* differences (stage F) are the "
+-                 "deliberate trade-price change and are reported, not asserted.")
+-    lines.append("")
+-    lines.append(f"- Days processed: {', '.join(days_processed)}")
+-    lines.append(f"- Total kept touches (canonical features not None): {total_touches}")
+-    lines.append("")
+-
+-    lines.append("## Stage results")
+-    lines.append("")
+-    lines.append("| Stage | Scope | Total | Matched | Mismatched |")
+-    lines.append("|-------|-------|------:|--------:|-----------:|")
+-    order = ["A_ZONES", "B_SESSIONS", "C_TOUCHES", "D_LABELS",
+-             "E_INT_FORMULA", "F_INT_TRADEPRICE", "G_APPROACH"]
+-    for key in order:
+-        s = STAGES[key]
+-        lines.append(f"| {s.name} | {s.scope} | {s.total} | {s.matched} | {s.mismatched} |")
+-    lines.append("")
+-
+-    # must_match mismatch examples
+-    lines.append("## Must-match mismatches (concrete examples)")
+-    lines.append("")
+-    any_mismatch = False
+-    for key in order:
+-        s = STAGES[key]
+-        if s.scope != "must_match":
+-            continue
+-        if s.mismatched > 0:
+-            any_mismatch = True
+-            lines.append(f"- **{s.name}**: {s.mismatched}/{s.total} mismatched.")
+-            lines.append(f"  - Example: `{s.example}`")
+-    if not any_mismatch:
+-        lines.append("None. Every must-match stage is 100% matched.")
+-    lines.append("")
+-
+-    # expected_differ distributions
+-    lines.append("## Expected-differ divergence distributions")
+-    lines.append("")
+-    lines.append("Stage F feeds REAL TRADE prints (tick 0.25) where the canonical "
+-                 "feature used BOOK-MID prints (tick 0.125). This is the deliberate "
+-                 "price-source change. Distribution of `|engine_trade - canonical_book|`:")
+-    lines.append("")
+-    f = STAGES["F_INT_TRADEPRICE"]
+-    lines.append(f"- samples (touches): {f.total}")
+-    summ = f.divergence_summary()
+-    if summ:
+-        for part in summ.split("; "):
+-            lines.append(f"  - {part}")
+-    else:
+-        lines.append("  - (no samples)")
+-    lines.append("")
+-
+-    # Pinned open-item resolutions
+-    lines.append("## Pinned open-item resolutions (applied)")
+-    lines.append("")
+-    lines.append("1. **Touch timestamp = bar CLOSE (LAST(ts_event)).** The canonical "
+-                 "tick-bar timestamp is the last event time of the bar "
+-                 "(tick_store build_tick_bars: LAST(ts_event ORDER BY ts_event)). "
+-                 "strategy_core.detect_touches stamps each touch with `bar.close_ts_utc`, "
+-                 "which equals that close time. Stage C compares these as instant-equal "
+-                 "and they match.")
+-    lines.append("2. **Absorption size source.** The canonical interaction features use "
+-                 "BOOK-EVENT size over book rows. The engine on the trade-price path uses "
+-                 "TRADE size. That is a DELIBERATE divergence and is NOT forced to match: "
+-                 "stage E proves the int_* FORMULA is faithful by feeding the SAME book "
+-                 "rows to both, while stage F reports (does not assert) the trade-price "
+-                 "divergence.")
+-    lines.append("")
+-
+-    verdict = "PORT FIDELITY PROVEN" if must_pass else None
+-    if not must_pass:
+-        first_bad = next(
+-            s.name for k in order for s in [STAGES[k]]
+-            if s.scope == "must_match" and s.mismatched > 0
+-        )
+-        verdict = f"MISMATCH — see stage {first_bad}"
+-    lines.append(f"## VERDICT: {verdict}")
+-    lines.append("")
+-
+-    REPORT_PATH.write_text("\n".join(lines), encoding="utf-8")
+-    return must_pass
+-
+-
+-# --- Driver -----------------------------------------------------------------
+-def main():
+-    prev_ny_hl = prev_asia_hl = prev_london_hl = None
+-    days_processed = []
+-    total_touches = 0
+-
+-    # one TickStore for book-row interaction queries (stage E), register all days
+-    store_book = TickStore(DATA_DIR)
+-    for d in DAYS:
+-        try:
+-            store_book.register_symbol_date(SYMBOL, d)
+-            prevd = (date.fromisoformat(d) - timedelta(days=1)).isoformat()
+-            store_book.register_symbol_date(SYMBOL, prevd)
+-        except Exception as exc:
+-            print(f"[warn] register {d}: {exc}")
+-
+-    try:
+-        for d in sorted(DAYS):
+-            print(f"=== processing {d} ===", flush=True)
+-            prev_ny_hl, prev_asia_hl, prev_london_hl, n = process_day(
+-                d, prev_ny_hl, prev_asia_hl, prev_london_hl, store_book
+-            )
+-            days_processed.append(d)
+-            total_touches += n
+-            print(f"    kept touches: {n}", flush=True)
+-    finally:
+-        store_book.close()
+-
+-    must_pass = write_report(days_processed, total_touches)
+-    print(f"\nReport written: {REPORT_PATH}")
+-    print(f"must_match_all_pass: {must_pass}")
+-    for key in ["A_ZONES", "B_SESSIONS", "C_TOUCHES", "D_LABELS",
+-                "E_INT_FORMULA", "F_INT_TRADEPRICE", "G_APPROACH"]:
+-        s = STAGES[key]
+-        print(f"  {s.name}: {s.matched}/{s.total} matched, {s.mismatched} mismatched ({s.scope})")
+-
+-
+-if __name__ == "__main__":
+-    main()
+diff --git a/validation/parity_harness_v2.py b/validation/parity_harness_v2.py
+deleted file mode 100644
+index b22dca6..0000000
+--- a/validation/parity_harness_v2.py
++++ /dev/null
+@@ -1,1076 +0,0 @@
+-"""CORRECTED phase-4a parity harness: strategy-core vs the canonical research
+-pipeline, over the FULL requested NQ day range, with a DETERMINISTIC candle stage.
+-
+-This is a money-path gate. It reports mismatches HONESTLY and never fudges a
+-must-match stage to pass. ADDITIVE ONLY: imports alpha_lab + strategy_core
+-read-only; writes nothing outside validation/.
+-
+-What v2 fixes vs parity_harness.py:
+-  1. DAY RANGE: every available NQ day in 2025-07-01..2025-09-05 inclusive (was a
+-     wrong 5-day June window). Warm prior-day session levels with 2025-06-30.
+-  2. DETERMINISTIC CANDLE STAGE 0: the canonical book-mid bars come from DuckDB
+-     build_tick_bars whose FIRST/LAST/ROW_NUMBER tie-break over duplicate ts_event
+-     is NONDETERMINISTIC (prior run saw ~2.2% open/close diffs). v2 imposes a stable
+-     TOTAL order (ts_event, source_row_seq) in PANDAS and feeds the SAME ordered
+-     events to a harness-local reference bucketer AND the engine builder, then
+-     compares them incl. open/close.
+-
+-CRITICAL WINDOW FINDING (historical; rerun this harness before citing):
+-  research's _build_bars_for_date passes a NAIVE datetime(prev,23,0) to DuckDB,
+-  whose session TimeZone is America/Chicago, so DuckDB interprets the bound as
+-  23:00 *Chicago*, NOT 23:00 UTC. The real research window is therefore
+-  [prev 23:00 America/Chicago, cur 23:00 America/Chicago]. The reference frame must
+-  use Chicago-localized bounds to reproduce the canonical bars (count + values).
+-"""
+-from __future__ import annotations
+-
+-# --- research package shadow guard (MUST precede alpha_lab import) ----------
+-import sys
+-
+-sys.path.insert(0, r"C:/Users/gonza/Documents/Claude-Quant-Lab/src")
+-
+-import math
+-import time as _time
+-from collections import Counter, defaultdict
+-from datetime import date, datetime, timedelta, timezone
+-from pathlib import Path
+-
+-import duckdb  # noqa: F401  (research deps loaded transitively)
+-import numpy as np
+-import pandas as pd
+-
+-# Canonical research code (read-only) ---------------------------------------
+-from alpha_lab.agents.data_infra.ml import dashboard_utility_builder as B
+-from alpha_lab.agents.data_infra.ml import dashboard_utility_labeling as L
+-from alpha_lab.agents.data_infra.ml.config import MLPipelineConfig
+-from alpha_lab.agents.data_infra.tick_store import TickStore
+-
+-# Engine under test ----------------------------------------------------------
+-import strategy_core as sc
+-from strategy_core import (
+-    Bar,
+-    CloseReason,
+-    Direction,
+-    Level,
+-    Quote,
+-    Side,
+-    Trade,
+-    app_avg_trade_size,
+-    app_large_trade_vol_pct,
+-    app_max_spread,
+-    build_tick_bars_from_frame,
+-    build_zones,
+-    classify_session,
+-    detect_touches,
+-    int_absorption_ratio,
+-    int_time_beyond_level,
+-    int_time_within_2pts,
+-    make_bar_id,
+-    resolve_outcome,
+-)
+-
+-# --- Configuration ----------------------------------------------------------
+-DATA_DIR = Path(r"C:/Users/gonza/Documents/Trade-Dashboard/data/databento")
+-SYMBOL = "NQ"
+-
+-RANGE_START = date(2025, 7, 1)
+-RANGE_END = date(2025, 9, 5)
+-WARMUP_DAY = date(2025, 6, 30)  # prior available trading day, for PDH/PDL carry
+-
+-CANON_TICK = 0.125  # book-mid grid: lossless representation of canonical bars
+-TRADE_TICK = 0.25   # real NQ trade-price tick (deliberate divergence, stage F/G)
+-TF = 147
+-
+-PROD_CONFIG = MLPipelineConfig(
+-    training_mode="dashboard_utility",
+-    instrument="NQ",
+-    tick_size=0.25,
+-    dashboard_utility=dict(
+-        bar_type="147t",
+-        interaction_window_minutes=5,
+-        approach_window_minutes=30,
+-        include_approach_features=True,
+-        tp_points=15.0,
+-        sl_points=30.0,
+-        trap_mfe_min=5.0,
+-        level_proximity_pts=0.5,
+-    ),
+-)
+-U = PROD_CONFIG.dashboard_utility
+-
+-OUT_DIR = Path(r"C:/Users/gonza/Documents/Strategy-core/validation/_out")
+-REPORT_PATH = OUT_DIR / "PARITY_REPORT_V2.md"
+-
+-ABS_TOL = 1e-9
+-APP_TOL = 1e-6
+-_ET = "US/Eastern"
+-
+-PARQUET_COLS = ["ts_event", "bid_px_00", "ask_px_00", "size", "symbol", "action"]
+-
+-
+-# --- Stage accumulators -----------------------------------------------------
+-class Stage:
+-    def __init__(self, name: str, scope: str):
+-        self.name = name
+-        self.scope = scope  # "must_match" | "expected_differ"
+-        self.total = 0
+-        self.matched = 0
+-        self.mismatched = 0
+-        self.example = ""
+-        self.divergences: dict[str, list[float]] = defaultdict(list)
+-
+-    def record(self, ok: bool, example: str = ""):
+-        self.total += 1
+-        if ok:
+-            self.matched += 1
+-        else:
+-            self.mismatched += 1
+-            if not self.example and example:
+-                self.example = example
+-
+-    def divergence_summary(self) -> str:
+-        parts = []
+-        for feat, vals in self.divergences.items():
+-            arr = np.array(vals, dtype=float)
+-            arr = arr[~np.isnan(arr)]
+-            if arr.size == 0:
+-                parts.append(f"{feat}: (no finite samples)")
+-                continue
+-            parts.append(
+-                f"{feat}: n={arr.size} mean={arr.mean():.4f} "
+-                f"median={np.median(arr):.4f} p95={np.percentile(arr, 95):.4f} "
+-                f"max={arr.max():.4f}"
+-            )
+-        return "; ".join(parts)
+-
+-
+-STAGE_ORDER = [
+-    "S0_CANDLES",
+-    "A_ZONES",
+-    "B_TOUCHES",
+-    "C_SESSIONS",
+-    "D_LABELS",
+-    "E_INT_FORMULA",
+-    "F_INT_TRADEPRICE",
+-    "G_APPROACH",
+-]
+-STAGES: dict[str, Stage] = {
+-    "S0_CANDLES": Stage("Stage 0. CANDLES (deterministic book-mid bars)", "must_match"),
+-    "A_ZONES": Stage("Stage A. ZONES", "must_match"),
+-    "B_TOUCHES": Stage("Stage B. TOUCHES", "must_match"),
+-    "C_SESSIONS": Stage("Stage C. SESSIONS", "must_match"),
+-    "D_LABELS": Stage("Stage D. LABELS", "must_match"),
+-    "E_INT_FORMULA": Stage("Stage E. INTERACTION FORMULA FIDELITY", "must_match"),
+-    "F_INT_TRADEPRICE": Stage("Stage F. INTERACTION TRADE-PRICE", "expected_differ"),
+-    "G_APPROACH": Stage("Stage G. APPROACH (3 model features)", "must_match"),
+-}
+-
+-# per-day pass/fail + touch counts for the compact table
+-DAY_ROWS: list[dict] = []
+-# candle confirmation aggregates
+-CANDLE_AGG = {
+-    "compared": 0, "matched_full": 0,
+-    "boundary_split_days": 0, "trailing_partials": 0,
+-    "first_finding": None,  # concrete example string
+-    "all_100pct": True,
+-}
+-# benchmark accumulators
+-BENCH = {"engine_builder_seconds": 0.0, "duckdb_seconds": 0.0, "days": 0, "bars": 0}
+-
+-
+-# --- Helpers ----------------------------------------------------------------
+-def _floats_eq(a, b, tol: float = ABS_TOL) -> bool:
+-    if a is None and b is None:
+-        return True
+-    if a is None or b is None:
+-        return False
+-    if isinstance(a, float) and isinstance(b, float):
+-        if math.isnan(a) and math.isnan(b):
+-            return True
+-        if math.isnan(a) or math.isnan(b):
+-            return False
+-    return abs(float(a) - float(b)) <= tol
+-
+-
+-def _to_utc_dt(ts) -> datetime:
+-    ts = pd.Timestamp(ts)
+-    if ts.tz is None:
+-        ts = ts.tz_localize("UTC")
+-    return ts.tz_convert("UTC").to_pydatetime()
+-
+-
+-def _round_to_ticks(value: float, tick: float) -> int:
+-    return int(round(float(value) / tick))
+-
+-
+-def enumerate_days() -> tuple[list[str], list[str], int]:
+-    """Available vs unavailable days in [RANGE_START, RANGE_END] inclusive."""
+-    available, missing = [], []
+-    total = (RANGE_END - RANGE_START).days + 1
+-    d = RANGE_START
+-    while d <= RANGE_END:
+-        p = DATA_DIR / SYMBOL / d.isoformat() / "mbp10.parquet"
+-        if p.exists() and p.stat().st_size > 0:
+-            available.append(d.isoformat())
+-        else:
+-            missing.append(d.isoformat())
+-        d += timedelta(days=1)
+-    return available, missing, total
+-
+-
+-# --- Deterministic event frame (Chicago-bound, matches canonical bars) ------
+-def build_event_frame(date_str: str):
+-    """Deterministic event frame for the research window.
+-
+-    Window bound = NAIVE 23:00 interpreted in America/Chicago, exactly as research's
+-    DuckDB session does (verified: DuckDB TimeZone='America/Chicago'). Reads prev+cur
+-    day parquet in FILE ORDER, assigns a stable source seq, filters to the dominant
+-    front-month outright + bid/ask>0 + window, then sorts by (ts_event, seq) stable.
+-    """
+-    td = date.fromisoformat(date_str)
+-    prev = td - timedelta(days=1)
+-    start = pd.Timestamp(datetime(prev.year, prev.month, prev.day, 23, 0), tz="America/Chicago")
+-    end = pd.Timestamp(datetime(td.year, td.month, td.day, 23, 0), tz="America/Chicago")
+-
+-    frames = []
+-    for d in (prev, td):
+-        p = DATA_DIR / SYMBOL / d.isoformat() / "mbp10.parquet"
+-        if p.exists():
+-            frames.append(pd.read_parquet(p, columns=PARQUET_COLS))
+-    if not frames:
+-        return None, None
+-    df = pd.concat(frames, ignore_index=True)  # preserves per-file source order
+-    df["seq"] = np.arange(len(df), dtype="int64")
+-
+-    nodash = df[~df["symbol"].str.contains("-", na=False)]
+-    if nodash.empty:
+-        return None, None
+-    front = nodash["symbol"].value_counts().idxmax()
+-
+-    m = (
+-        (df["bid_px_00"] > 0)
+-        & (df["ask_px_00"] > 0)
+-        & (df["symbol"] == front)
+-        & (df["ts_event"] >= start)
+-        & (df["ts_event"] <= end)
+-    )
+-    df = df.loc[m].copy()
+-    if df.empty:
+-        return None, front
+-    df["mid"] = (df["bid_px_00"] + df["ask_px_00"]) / 2.0
+-    df = df.sort_values(["ts_event", "seq"], kind="stable").reset_index(drop=True)
+-    return df, front
+-
+-
+-def reference_bars_continuous(df: pd.DataFrame) -> pd.DataFrame:
+-    """CONTINUOUS bucketing: bar_id = arange//147 over the whole window; keep n==147.
+-    This reproduces the canonical DuckDB build_tick_bars (rn//147, no trading-day
+-    partition) made deterministic by the (ts_event,seq) sort. Used only to quantify
+-    the engine-vs-research 18:00-ET boundary difference, NOT for the must-match set."""
+-    n = len(df)
+-    bar_id = np.arange(n) // TF
+-    g = df.assign(bar_id=bar_id).groupby("bar_id", sort=True)
+-    ref = g.agg(
+-        open=("mid", "first"), high=("mid", "max"), low=("mid", "min"),
+-        close=("mid", "last"), volume=("size", "sum"),
+-        open_ts=("ts_event", "first"), close_ts=("ts_event", "last"), n=("mid", "size"),
+-    ).reset_index()
+-    return ref[ref["n"] == TF].reset_index(drop=True)
+-
+-
+-def _trading_day_series(ts: pd.Series) -> pd.Series:
+-    """18:00-ET trading_day for each ts (mirrors build_tick_bars_from_frame /
+-    RESEARCH_SESSION_SCHEME: localize to ET, roll into next day at/after 18:00)."""
+-    local = ts.dt.tz_convert(_ET)
+-    sod = local.dt.hour * 3600 + local.dt.minute * 60 + local.dt.second
+-    cal = local.dt.tz_localize(None).dt.floor("D")
+-    roll = (sod >= 18 * 3600).astype("int64")
+-    return cal + pd.to_timedelta(roll, unit="D")
+-
+-
+-def reference_bars(df: pd.DataFrame) -> pd.DataFrame:
+-    """build_tick_bars' exact logic, GROUPED THE SAME WAY THE ENGINE GROUPS:
+-    partition by 18:00-ET trading_day, then bar_id = arange//147 WITHIN each group,
+-    keep n==147. Made deterministic by the (ts_event,seq) sort. This is the apples-
+-    to-apples reference for the engine's build_tick_bars_from_frame complete bars."""
+-    work = df.copy()
+-    work["_td"] = _trading_day_series(work["ts_event"]).to_numpy()
+-    work = work.sort_values(["ts_event", "seq"], kind="stable").reset_index(drop=True)
+-    parts = []
+-    for tdv, g in work.groupby("_td", sort=True):
+-        g = g.reset_index(drop=True)
+-        g = g.assign(bar_id=np.arange(len(g)) // TF)
+-        agg = g.groupby("bar_id", sort=True).agg(
+-            open=("mid", "first"), high=("mid", "max"), low=("mid", "min"),
+-            close=("mid", "last"), volume=("size", "sum"),
+-            open_ts=("ts_event", "first"), close_ts=("ts_event", "last"), n=("mid", "size"),
+-        ).reset_index()
+-        agg = agg[agg["n"] == TF].copy()
+-        agg["trading_day"] = tdv.date()
+-        parts.append(agg)
+-    if not parts:
+-        return pd.DataFrame(columns=["open", "high", "low", "close", "volume", "open_ts", "close_ts", "n", "trading_day"])
+-    return pd.concat(parts, ignore_index=True)
+-
+-
+-def engine_bars_from_frame(df: pd.DataFrame, timed: bool = False):
+-    frame = pd.DataFrame(
+-        {"ts_event": df["ts_event"].to_numpy(), "price": df["mid"].to_numpy(), "size": df["size"].to_numpy()}
+-    )
+-    t0 = _time.perf_counter()
+-    bars = build_tick_bars_from_frame(frame, (TF,), scheme=sc.RESEARCH_SESSION_SCHEME, tick_size=CANON_TICK)
+-    dt = _time.perf_counter() - t0
+-    return (bars, dt) if timed else bars
+-
+-
+-# --- STAGE 0: deterministic candle comparison -------------------------------
+-def stage0_candles(date_str: str, df: pd.DataFrame, eng_bars: list[Bar]) -> dict:
+-    """Compare the engine's COMPLETE bars 1:1 against an engine-aligned reference
+-    (same 18:00-ET trading_day partition + arange//147 within group). Both are in
+-    (trading_day, bar_index) order, so they align element-for-element. This is the
+-    must-match candle proof. The continuous-vs-partitioned boundary difference is
+-    quantified separately (NOT counted as a mismatch) below."""
+-    st = STAGES["S0_CANDLES"]
+-    ref = reference_bars(df)  # engine-aligned (per trading_day)
+-    complete = [b for b in eng_bars if b.is_complete]
+-    partials = [b for b in eng_bars if not b.is_complete]
+-
+-    # both lists are in (trading_day, bar_index) ascending order
+-    n_cmp = min(len(ref), len(complete))
+-    day_full = 0
+-    first_div = None
+-    for i in range(n_cmp):
+-        rr = ref.iloc[i]
+-        eb = complete[i]
+-        eo = eb.open_ticks * CANON_TICK
+-        eh = eb.high_ticks * CANON_TICK
+-        el = eb.low_ticks * CANON_TICK
+-        ec = eb.close_ticks * CANON_TICK
+-        ok_o = abs(eo - float(rr["open"])) <= ABS_TOL
+-        ok_h = abs(eh - float(rr["high"])) <= ABS_TOL
+-        ok_l = abs(el - float(rr["low"])) <= ABS_TOL
+-        ok_c = abs(ec - float(rr["close"])) <= ABS_TOL
+-        ok_v = int(eb.volume) == int(rr["volume"])
+-        ok_cts = eb.close_ts_utc == _to_utc_dt(rr["close_ts"])
+-        ok_ots = eb.open_ts_utc == _to_utc_dt(rr["open_ts"])
+-        ok_td = eb.trading_day == rr["trading_day"]
+-        ok = ok_o and ok_h and ok_l and ok_c and ok_v and ok_cts and ok_ots and ok_td
+-        if ok:
+-            day_full += 1
+-        elif first_div is None:
+-            first_div = (
+-                f"{date_str} bar#{i}: ref(td={rr['trading_day']},o={rr['open']},h={rr['high']},"
+-                f"l={rr['low']},c={rr['close']},v={int(rr['volume'])},cts={pd.Timestamp(rr['close_ts'])}) vs "
+-                f"eng(td={eb.trading_day},o={eo},h={eh},l={el},c={ec},v={eb.volume},cts={eb.close_ts_utc}) "
+-                f"flags(o,h,l,c,v,cts,ots,td)={(ok_o, ok_h, ok_l, ok_c, ok_v, ok_cts, ok_ots, ok_td)}"
+-            )
+-        st.record(ok, first_div or "")
+-    # length mismatch (should not happen): record explicitly
+-    if len(ref) != len(complete):
+-        st.record(False, f"{date_str}: bar count ref={len(ref)} eng_complete={len(complete)}")
+-
+-    # ---- quantify the continuous-vs-partitioned 18:00-ET boundary difference ----
+-    cont = reference_bars_continuous(df)
+-    n_td_groups = _trading_day_series(df["ts_event"]).nunique()
+-    boundary_split = n_td_groups > 1
+-    # positional disagreement between continuous and engine-aligned complete bars
+-    n_cont = min(len(cont), len(complete))
+-    cont_disagree = 0
+-    seam_idx = None
+-    for i in range(n_cont):
+-        cc = cont.iloc[i]
+-        eb = complete[i]
+-        same = (abs(eb.close_ticks * CANON_TICK - float(cc["close"])) <= ABS_TOL
+-                and abs(eb.open_ticks * CANON_TICK - float(cc["open"])) <= ABS_TOL)
+-        if not same:
+-            cont_disagree += 1
+-            if seam_idx is None:
+-                seam_idx = i
+-
+-    CANDLE_AGG["compared"] += n_cmp
+-    CANDLE_AGG["matched_full"] += day_full
+-    CANDLE_AGG["trailing_partials"] += len(partials)
+-    CANDLE_AGG["boundary_diff_bars"] = CANDLE_AGG.get("boundary_diff_bars", 0) + cont_disagree
+-    if boundary_split:
+-        CANDLE_AGG["boundary_split_days"] += 1
+-
+-    if boundary_split and CANDLE_AGG["first_finding"] is None and seam_idx is not None:
+-        cc = cont.iloc[seam_idx]
+-        eb = complete[seam_idx]
+-        CANDLE_AGG["first_finding"] = (
+-            f"18:00-ET trading-day partition vs continuous DuckDB bucketing, first observed on "
+-            f"{date_str}. The engine resets bar buckets at each 18:00-ET boundary (it emits an "
+-            f"END_OF_DAY partial of {[p.trade_count for p in partials]} events at each boundary, "
+-            f"then restarts bar_index=0 for the next trading_day); the canonical continuous "
+-            f"DuckDB rn//147 does not. They first diverge positionally at bar#{seam_idx}: "
+-            f"continuous close={cc['close']} @ {pd.Timestamp(cc['close_ts'])} vs engine "
+-            f"close={eb.close_ticks * CANON_TICK} @ {eb.close_ts_utc} (engine td={eb.trading_day}). "
+-            f"This is the documented engine-vs-research difference, NOT a port bug: when the "
+-            f"reference is partitioned the SAME way the engine groups, all complete bars match "
+-            f"100% incl. open/close (see Stage 0 must-match result)."
+-        )
+-
+-    day_pass = (day_full == n_cmp) and (n_cmp > 0) and (len(ref) == len(complete))
+-    if not day_pass:
+-        CANDLE_AGG["all_100pct"] = False
+-    return {
+-        "ref_bars": len(ref),
+-        "eng_complete": len(complete),
+-        "cont_bars": len(cont),
+-        "compared": n_cmp,
+-        "matched_full": day_full,
+-        "partials": len(partials),
+-        "boundary_split": boundary_split,
+-        "boundary_diff_bars": cont_disagree,
+-        "pass": day_pass,
+-    }
+-
+-
+-# --- Front-month trade/quote extraction (stages F & G) ----------------------
+-class DayParquet:
+-    """Per-day DuckDB view over mbp10 parquet (+prev day union), front-month aware.
+-
+-    Mirrors the prior harness; DuckDB session TZ is America/Chicago, but stages F/G
+-    pass tz-aware UTC bounds (event_ts_utc) so the session TZ does not affect them.
+-    """
+-
+-    def __init__(self):
+-        self._cache: dict[str, dict] = {}
+-
+-    def _path(self, date_str: str) -> Path:
+-        return DATA_DIR / SYMBOL / date_str / "mbp10.parquet"
+-
+-    def get(self, date_str: str):
+-        if date_str in self._cache:
+-            return self._cache[date_str]
+-        # 1-deep cache: close any other day's connection before opening a new one
+-        # (each connection holds a DuckDB read over prev+cur ~8M-row parquets;
+-        # retaining all 57 days would exhaust memory). Stages F/G only ever query
+-        # the current day's connection.
+-        self.close_all()
+-        path = self._path(date_str)
+-        prev = (date.fromisoformat(date_str) - timedelta(days=1)).isoformat()
+-        prev_path = self._path(prev)
+-        if not path.exists():
+-            self._cache[date_str] = None
+-            return None
+-        con = duckdb.connect(":memory:")
+-        reads = [f"SELECT * FROM read_parquet('{path.as_posix()}')"]
+-        if prev_path.exists():
+-            reads.append(f"SELECT * FROM read_parquet('{prev_path.as_posix()}')")
+-        union_sql = " UNION ALL ".join(reads)
+-        front = con.execute(
+-            f"SELECT symbol, count(*) AS n FROM ({union_sql}) AS t "
+-            f"WHERE symbol NOT LIKE '%-%' GROUP BY symbol ORDER BY n DESC LIMIT 1"
+-        ).fetchone()
+-        sym = front[0] if front else None
+-        info = {"con": con, "union_sql": union_sql, "symbol": sym}
+-        self._cache[date_str] = info
+-        return info
+-
+-    def close_all(self):
+-        for info in self._cache.values():
+-            if info:
+-                try:
+-                    info["con"].close()
+-                except Exception:
+-                    pass
+-        self._cache.clear()
+-
+-    def trades(self, date_str, start_utc, end_utc, end_exclusive):
+-        info = self.get(date_str)
+-        if info is None:
+-            return pd.DataFrame(columns=["ts_event", "price", "size"])
+-        sym_f = f"AND symbol = '{info['symbol']}'" if info["symbol"] else "AND symbol NOT LIKE '%-%'"
+-        cmp_end = "<" if end_exclusive else "<="
+-        sql = f"""
+-            SELECT ts_event, price, size
+-            FROM ({info['union_sql']}) AS t
+-            WHERE ts_event >= $1 AND ts_event {cmp_end} $2
+-              AND bid_px_00 > 0 AND ask_px_00 > 0
+-              AND action = 'T'
+-              {sym_f}
+-            ORDER BY ts_event ASC
+-        """
+-        return info["con"].execute(sql, [pd.Timestamp(start_utc), pd.Timestamp(end_utc)]).fetchdf()
+-
+-    def quotes_base(self, date_str, start_utc, end_utc):
+-        info = self.get(date_str)
+-        if info is None:
+-            return pd.DataFrame(columns=["ts_event", "bid_px_00", "ask_px_00"])
+-        sym_f = f"AND symbol = '{info['symbol']}'" if info["symbol"] else "AND symbol NOT LIKE '%-%'"
+-        sql = f"""
+-            SELECT ts_event, bid_px_00, ask_px_00
+-            FROM ({info['union_sql']}) AS t
+-            WHERE ts_event >= $1 AND ts_event < $2
+-              AND bid_px_00 > 0 AND ask_px_00 > 0
+-              {sym_f}
+-            ORDER BY ts_event ASC
+-        """
+-        return info["con"].execute(sql, [pd.Timestamp(start_utc), pd.Timestamp(end_utc)]).fetchdf()
+-
+-
+-DAY_PARQUET = DayParquet()
+-
+-# Per-date single-day TickStore for Stage E (reproduces canonical book-row scope:
+-# _compute_interaction_features registers ONLY date_str). Touches are always for the
+-# CURRENT day, so we keep just a 1-deep cache and CLOSE the prior day's store on a
+-# date change — caching every day's store would retain a DuckDB view over an ~8M-row
+-# parquet per day and exhaust memory across the 57-day range.
+-_SINGLE_DAY_STORE: dict[str, object] = {"date": None, "store": None}
+-
+-
+-def _single_day_store(date_str: str) -> TickStore:
+-    if _SINGLE_DAY_STORE["date"] != date_str:
+-        old = _SINGLE_DAY_STORE["store"]
+-        if old is not None:
+-            try:
+-                old.close()
+-            except Exception:
+-                pass
+-        st = TickStore(DATA_DIR)
+-        st.register_symbol_date(SYMBOL, date_str)
+-        _SINGLE_DAY_STORE["date"] = date_str
+-        _SINGLE_DAY_STORE["store"] = st
+-    return _SINGLE_DAY_STORE["store"]
+-
+-
+-def _close_single_day_stores():
+-    st = _SINGLE_DAY_STORE["store"]
+-    if st is not None:
+-        try:
+-            st.close()
+-        except Exception:
+-            pass
+-    _SINGLE_DAY_STORE["date"] = None
+-    _SINGLE_DAY_STORE["store"] = None
+-
+-
+-def _engine_bars_from_et(bars_et: pd.DataFrame, trading_day: date) -> list[Bar]:
+-    """Engine Bars from canonical ET-indexed OHLCV (book-mid grid). Used by the
+-    decision stages, which depend only on HIGH/LOW (tie-break independent)."""
+-    out: list[Bar] = []
+-    for i, (idx, row) in enumerate(bars_et.iterrows()):
+-        close_utc = _to_utc_dt(idx)
+-        out.append(
+-            Bar(
+-                timeframe_ticks=TF,
+-                trading_day=trading_day,
+-                bar_index=i,
+-                bar_id=make_bar_id(TF, trading_day, i),
+-                open_ts_utc=close_utc,
+-                close_ts_utc=close_utc,
+-                open_ticks=_round_to_ticks(row["open"], CANON_TICK),
+-                high_ticks=_round_to_ticks(row["high"], CANON_TICK),
+-                low_ticks=_round_to_ticks(row["low"], CANON_TICK),
+-                close_ticks=_round_to_ticks(row["close"], CANON_TICK),
+-                volume=int(row["volume"]),
+-                trade_count=TF,
+-                is_complete=True,
+-                is_partial=False,
+-                close_reason=CloseReason.COMPLETE,
+-            )
+-        )
+-    return out
+-
+-
+-def _canon_levels_to_engine(levels: list[dict]) -> list[Level]:
+-    return [Level(name=l["name"], price=float(l["price"]), side=Side(l["side"])) for l in levels]
+-
+-
+-def _canon_session_for_ts(ts_et: pd.Timestamp) -> str:
+-    t = ts_et.time()
+-    if t >= B._ASIA_START or t < B._ASIA_END:
+-        return "asia"
+-    if B._LONDON_START <= t < B._LONDON_END:
+-        return "london"
+-    if B._NY_RTH_START <= t < B._NY_RTH_END:
+-        return "ny_rth"
+-    return "none"
+-
+-
+-# --- Decision-stage comparators (ported from parity_harness.py) -------------
+-def _compare_zones(date_str, canon, eng) -> bool:
+-    st = STAGES["A_ZONES"]
+-    ok_all = True
+-    if len(canon) != len(eng):
+-        st.record(False, f"{date_str}: zone count canon={len(canon)} eng={len(eng)}")
+-        return False
+-    for i, (cz, ez) in enumerate(zip(canon, eng)):
+-        ok = (
+-            _floats_eq(cz["representative_price"], ez.representative_price)
+-            and cz["side"] == ez.side.value
+-            and tuple(cz["names"]) == tuple(ez.names)
+-        )
+-        ex = (
+-            f"{date_str} zone#{i}: canon(rep={cz['representative_price']},side={cz['side']},"
+-            f"names={tuple(cz['names'])}) vs eng(rep={ez.representative_price},"
+-            f"side={ez.side.value},names={tuple(ez.names)})"
+-        )
+-        st.record(ok, ex)
+-        ok_all = ok_all and ok
+-    return ok_all
+-
+-
+-def _compare_sessions(date_str, bars_et) -> bool:
+-    st = STAGES["C_SESSIONS"]
+-    idx = bars_et.index
+-    n = len(idx)
+-    if n > 5000:
+-        sel = np.unique(np.linspace(0, n - 1, 5000).astype(int))
+-    else:
+-        sel = range(n)
+-    ok_all = True
+-    for i in sel:
+-        ts_et = idx[i]
+-        canon_sess = _canon_session_for_ts(ts_et)
+-        eng_sess = classify_session(_to_utc_dt(ts_et)).session
+-        ok = canon_sess == eng_sess
+-        ex = f"{date_str} {ts_et.isoformat()}: canon={canon_sess} eng={eng_sess}"
+-        st.record(ok, ex)
+-        ok_all = ok_all and ok
+-    return ok_all
+-
+-
+-def _compare_touches(date_str, canon, eng) -> bool:
+-    st = STAGES["B_TOUCHES"]
+-    ok_all = True
+-    if len(canon) != len(eng):
+-        st.record(False, f"{date_str}: touch count canon={len(canon)} eng={len(eng)}")
+-        ok_all = False
+-    for i in range(min(len(canon), len(eng))):
+-        ct, et = canon[i], eng[i]
+-        canon_ts = _to_utc_dt(ct["bar_ts"])
+-        ok = (
+-            canon_ts == et.bar_ts_utc
+-            and ct["direction"] == et.direction.value
+-            and _floats_eq(ct["representative_price"], et.representative_price)
+-            and ct["level_type"] == et.level_type
+-        )
+-        ex = (
+-            f"{date_str} touch#{i}: canon(ts={canon_ts.isoformat()},dir={ct['direction']},"
+-            f"rep={ct['representative_price']},lvl={ct['level_type']}) vs "
+-            f"eng(ts={et.bar_ts_utc.isoformat()},dir={et.direction.value},"
+-            f"rep={et.representative_price},lvl={et.level_type})"
+-        )
+-        st.record(ok, ex)
+-        ok_all = ok_all and ok
+-    return ok_all
+-
+-
+-def _compare_label(date_str, touch, canon, eng) -> bool:
+-    st = STAGES["D_LABELS"]
+-    ok = (
+-        canon["label"] == eng.label
+-        and canon["label_encoded"] == eng.label_encoded
+-        and _floats_eq(round(float(canon["max_mfe"]), 4), round(float(eng.max_mfe), 4))
+-        and _floats_eq(round(float(canon["max_mae"]), 4), round(float(eng.max_mae), 4))
+-    )
+-    ts = _to_utc_dt(pd.Timestamp(touch["bar_ts"]))
+-    ex = (
+-        f"{date_str} touch@{ts.isoformat()}: canon(label={canon['label']},"
+-        f"enc={canon['label_encoded']},mfe={canon['max_mfe']},mae={canon['max_mae']}) vs "
+-        f"eng(label={eng.label},enc={eng.label_encoded},mfe={eng.max_mfe},mae={eng.max_mae})"
+-    )
+-    st.record(ok, ex)
+-    return ok
+-
+-
+-def _compare_int_formula(date_str, touch, canon, e_beyond, e_within, e_absorp) -> bool:
+-    st = STAGES["E_INT_FORMULA"]
+-    ok = (
+-        _floats_eq(canon["int_time_beyond_level"], e_beyond)
+-        and _floats_eq(canon["int_time_within_2pts"], e_within)
+-        and _floats_eq(canon["int_absorption_ratio"], e_absorp)
+-    )
+-    ts = _to_utc_dt(pd.Timestamp(touch["bar_ts"]))
+-    ex = (
+-        f"{date_str} touch@{ts.isoformat()}: "
+-        f"beyond canon={canon['int_time_beyond_level']} eng={e_beyond}; "
+-        f"within canon={canon['int_time_within_2pts']} eng={e_within}; "
+-        f"absorp canon={canon['int_absorption_ratio']} eng={e_absorp}"
+-    )
+-    st.record(ok, ex)
+-    return ok
+-
+-
+-def _record_int_divergence(canon, f_beyond, f_within, f_absorp):
+-    st = STAGES["F_INT_TRADEPRICE"]
+-    st.total += 1
+-    st.divergences["int_time_beyond_level"].append(abs(f_beyond - float(canon["int_time_beyond_level"])))
+-    st.divergences["int_time_within_2pts"].append(abs(f_within - float(canon["int_time_within_2pts"])))
+-    st.divergences["int_absorption_ratio"].append(abs(f_absorp - float(canon["int_absorption_ratio"])))
+-
+-
+-def _compare_approach(date_str, touch, canon, e_avg, e_largepct, e_maxspread) -> bool:
+-    st = STAGES["G_APPROACH"]
+-    if canon is None:
+-        canon = {}
+-    c_avg = canon.get("app_avg_trade_size", float("nan"))
+-    c_largepct = canon.get("app_large_trade_vol_pct", float("nan"))
+-    c_maxspread = canon.get("app_max_spread", float("nan"))
+-    ok = (
+-        _floats_eq(c_avg, e_avg, APP_TOL)
+-        and _floats_eq(c_largepct, e_largepct, APP_TOL)
+-        and _floats_eq(c_maxspread, e_maxspread, APP_TOL)
+-    )
+-    ts = _to_utc_dt(pd.Timestamp(touch["bar_ts"]))
+-    ex = (
+-        f"{date_str} touch@{ts.isoformat()}: "
+-        f"avg_trade_size canon={c_avg} eng={e_avg}; "
+-        f"large_vol_pct canon={c_largepct} eng={e_largepct}; "
+-        f"max_spread canon={c_maxspread} eng={e_maxspread}"
+-    )
+-    st.record(ok, ex)
+-    return ok
+-
+-
+-# --- Per-day driver ----------------------------------------------------------
+-def process_day(date_str, prev_ny_hl, prev_asia_hl, prev_london_hl, store_book, count_only=False):
+-    """Run STAGE 0 + decision stages for one day. Returns updated session H/L
+-    carry and kept-touch count. If count_only (warmup), only advance the carry."""
+-    td = date.fromisoformat(date_str)
+-
+-    # research continuous bars (shared input for decision stages) ------------
+-    t0 = _time.perf_counter()
+-    bars = B._build_bars_for_date(DATA_DIR, SYMBOL, date_str, U)
+-    BENCH["duckdb_seconds"] += _time.perf_counter() - t0
+-    if bars.empty:
+-        return prev_ny_hl, prev_asia_hl, prev_london_hl, 0, None
+-    bars_et = B._ensure_et_index(bars.copy())
+-
+-    # advance session H/L carry (mirror build_utility_dataset loop) ----------
+-    t0 = _time.perf_counter()
+-    new_ny, new_asia, new_london = B._get_session_hl_for_date(
+-        DATA_DIR, SYMBOL, date_str, U, prev_ny_hl, prev_asia_hl, prev_london_hl
+-    )
+-    BENCH["duckdb_seconds"] += _time.perf_counter() - t0
+-
+-    if count_only:
+-        return new_ny, new_asia, new_london, 0, None
+-
+-    # STAGE 0: deterministic candle comparison ------------------------------
+-    df, _front = build_event_frame(date_str)
+-    s0 = None
+-    if df is not None and not df.empty:
+-        eng_bars, dt = engine_bars_from_frame(df, timed=True)
+-        BENCH["engine_builder_seconds"] += dt
+-        BENCH["days"] += 1
+-        BENCH["bars"] += sum(1 for b in eng_bars if b.is_complete)
+-        s0 = stage0_candles(date_str, df, eng_bars)
+-        del df, eng_bars
+-        import gc
+-        gc.collect()
+-
+-    # levels -----------------------------------------------------------------
+-    levels = B._compute_levels_for_date(bars_et, date_str, prev_ny_hl, prev_asia_hl, prev_london_hl)
+-    eng_bars_et = _engine_bars_from_et(bars_et, td)
+-
+-    # STAGE A: zones ---------------------------------------------------------
+-    a_ok = _compare_zones(date_str, B._build_zones(levels), build_zones(_canon_levels_to_engine(levels)))
+-
+-    # STAGE C: sessions ------------------------------------------------------
+-    c_ok = _compare_sessions(date_str, bars_et)
+-
+-    # STAGE B: touches (fresh zones; detection mutates 'touched') ------------
+-    canon_zones_det = B._build_zones(levels)
+-    canon_touches = B._detect_touches(bars_et, canon_zones_det)
+-    eng_zones_det = build_zones(_canon_levels_to_engine(levels))
+-    eng_touches = detect_touches(eng_bars_et, eng_zones_det, tick_size=CANON_TICK, trading_day=td)
+-    b_ok = _compare_touches(date_str, canon_touches, eng_touches)
+-
+-    # STAGE D: labels --------------------------------------------------------
+-    rth_cutoff = pd.Timestamp(f"{date_str} 16:15:00", tz=_ET)
+-    d_ok = True
+-    for touch in canon_touches:
+-        forward = bars_et[(bars_et.index > touch["bar_ts"]) & (bars_et.index < rth_cutoff)]
+-        if forward.empty:
+-            continue
+-        canon = L.label_touch_event(touch, forward, U)
+-        fwd_bars = _engine_bars_from_et(forward, td)
+-        eng = resolve_outcome(
+-            entry_points=float(touch["representative_price"]),
+-            direction=Direction(touch["direction"]),
+-            forward_bars=fwd_bars,
+-            tick_size=CANON_TICK,
+-            tp_points=U.tp_points,
+-            sl_points=U.sl_points,
+-            trap_mfe_min=U.trap_mfe_min,
+-        )
+-        d_ok = _compare_label(date_str, touch, canon, eng) and d_ok
+-
+-    # STAGES E, F, G ---------------------------------------------------------
+-    e_ok = f_ok = g_ok = True
+-    day_touch_count = 0
+-    for touch in canon_touches:
+-        canon_int = B._compute_interaction_features(touch, DATA_DIR, SYMBOL, U)
+-        if canon_int is None:
+-            continue
+-        day_touch_count += 1
+-        rep = float(touch["representative_price"])
+-        eng_dir = Direction(touch["direction"])
+-        event_ts_utc = _to_utc_dt(pd.Timestamp(touch["bar_ts"]))
+-        win_end_utc = event_ts_utc + timedelta(minutes=U.interaction_window_minutes)
+-
+-        # STAGE E: identical BOOK inputs -> must match.
+-        # CRITICAL: canonical _compute_interaction_features registers ONLY the touch's
+-        # date_str (builder:468-469), NOT prev/next day. The shared multi-day store
+-        # would leak rows from the NEXT day's file when the 5-min window crosses
+-        # midnight UTC (e.g. a 23:59 touch), inflating int_time_*. Use a per-date
+-        # single-day store that reproduces the canonical book-row scope EXACTLY.
+-        ds_touch = touch.get("date") or str(pd.Timestamp(touch["bar_ts"]).date())
+-        book_store = _single_day_store(ds_touch)
+-        book_rows = book_store.query_tick_feature_rows(SYMBOL, event_ts_utc, win_end_utc)
+-        eng_book_trades = []
+-        if not book_rows.empty and "price" in book_rows.columns:
+-            for r in book_rows.itertuples(index=False):
+-                eng_book_trades.append(
+-                    Trade(event_ts_utc=_to_utc_dt(r.ts_event),
+-                          price_ticks=_round_to_ticks(r.price, CANON_TICK), size=int(r.size))
+-                )
+-        e_beyond = int_time_beyond_level(eng_book_trades, rep, eng_dir, CANON_TICK)
+-        e_within = int_time_within_2pts(eng_book_trades, rep, CANON_TICK)
+-        e_absorp = int_absorption_ratio(eng_book_trades, rep, eng_dir, CANON_TICK)
+-        e_ok = _compare_int_formula(date_str, touch, canon_int, e_beyond, e_within, e_absorp) and e_ok
+-
+-        # STAGE F: real TRADE prints -> expected to differ
+-        trade_df = DAY_PARQUET.trades(date_str, event_ts_utc, win_end_utc, end_exclusive=False)
+-        eng_trades = [
+-            Trade(event_ts_utc=_to_utc_dt(r.ts_event),
+-                  price_ticks=_round_to_ticks(r.price, TRADE_TICK), size=int(r.size))
+-            for r in trade_df.itertuples(index=False)
+-        ]
+-        f_beyond = int_time_beyond_level(eng_trades, rep, eng_dir, TRADE_TICK)
+-        f_within = int_time_within_2pts(eng_trades, rep, TRADE_TICK)
+-        f_absorp = int_absorption_ratio(eng_trades, rep, eng_dir, TRADE_TICK)
+-        _record_int_divergence(canon_int, f_beyond, f_within, f_absorp)
+-
+-        # STAGE G: approach features (3 model features) -> must match
+-        canon_app = B._compute_approach_features(touch, DATA_DIR, SYMBOL, U)
+-        app_start_utc = event_ts_utc - timedelta(minutes=U.approach_window_minutes)
+-        a_trades_df = DAY_PARQUET.trades(date_str, app_start_utc, event_ts_utc, end_exclusive=True)
+-        a_quotes_df = DAY_PARQUET.quotes_base(date_str, app_start_utc, event_ts_utc)
+-        eng_app_trades = [
+-            Trade(event_ts_utc=_to_utc_dt(r.ts_event),
+-                  price_ticks=_round_to_ticks(r.price, TRADE_TICK), size=int(r.size))
+-            for r in a_trades_df.itertuples(index=False)
+-        ]
+-        eng_app_quotes = [
+-            Quote(event_ts_utc=_to_utc_dt(r.ts_event),
+-                  bid_price_ticks=_round_to_ticks(r.bid_px_00, TRADE_TICK),
+-                  ask_price_ticks=_round_to_ticks(r.ask_px_00, TRADE_TICK))
+-            for r in a_quotes_df.itertuples(index=False)
+-        ]
+-        e_avg = app_avg_trade_size(eng_app_trades)
+-        e_largepct = app_large_trade_vol_pct(eng_app_trades)
+-        e_maxspread = app_max_spread(eng_app_quotes, TRADE_TICK)
+-        g_ok = _compare_approach(date_str, touch, canon_app, e_avg, e_largepct, e_maxspread) and g_ok
+-
+-    DAY_ROWS.append({
+-        "day": date_str,
+-        "S0": (s0["pass"] if s0 else None),
+-        "A": a_ok, "B": b_ok, "C": c_ok, "D": d_ok, "E": e_ok, "G": g_ok,
+-        "touches": day_touch_count,
+-        "s0_detail": s0,
+-    })
+-    return new_ny, new_asia, new_london, day_touch_count, s0
+-
+-
+-# --- Report ------------------------------------------------------------------
+-def write_report(available, missing, total_cal, days_run, total_touches):
+-    OUT_DIR.mkdir(parents=True, exist_ok=True)
+-    must_pass = all(s.mismatched == 0 for s in STAGES.values() if s.scope == "must_match")
+-
+-    L_ = []
+-    L_.append("# Strategy-Core Parity Report v2 (CORRECTED phase-4a gate)")
+-    L_.append("")
+-    L_.append(f"Generated: {datetime.now(timezone.utc).isoformat()}")
+-    L_.append(f"Engine: strategy_core v{getattr(sc, 'PLATFORM_VERSION', '?')} "
+-              f"(contract v{getattr(sc, 'CONTRACT_VERSION', '?')})")
+-    L_.append("")
+-    L_.append("## Day range")
+-    L_.append(f"- Requested window: {RANGE_START} .. {RANGE_END} inclusive")
+-    L_.append(f"- Total calendar days in range: {total_cal}")
+-    L_.append(f"- Available days run: {len(days_run)}")
+-    L_.append(f"- Warm-up day (session-level carry, NOT counted): {WARMUP_DAY.isoformat()}")
+-    L_.append(f"- Unavailable days ({len(missing)}): {', '.join(missing) if missing else 'none'}")
+-    L_.append(f"- Total kept touches (canonical interaction features not None): {total_touches}")
+-    L_.append("")
+-
+-    L_.append("## Window finding (root cause of the prior wrong-range/candle issue)")
+-    L_.append("research `_build_bars_for_date` passes a NAIVE `datetime(prev,23,0)` to DuckDB, "
+-              "whose session `TimeZone='America/Chicago'`. DuckDB interprets that bound as "
+-              "**23:00 Chicago**, not 23:00 UTC, so the real research window is "
+-              "`[prev 23:00 America/Chicago, cur 23:00 America/Chicago]`. The deterministic "
+-              "reference frame uses Chicago-localized bounds and reproduces the canonical "
+-              "DuckDB bar count and values exactly.")
+-    L_.append("")
+-
+-    L_.append("## Stage results (aggregate over all available days)")
+-    L_.append("")
+-    L_.append("| Stage | Scope | Total | Matched | Mismatched |")
+-    L_.append("|-------|-------|------:|--------:|-----------:|")
+-    for key in STAGE_ORDER:
+-        s = STAGES[key]
+-        L_.append(f"| {s.name} | {s.scope} | {s.total} | {s.matched} | {s.mismatched} |")
+-    L_.append("")
+-
+-    # Candle confirmation
+-    L_.append("## Stage 0 candle confirmation (deterministic book-mid bars)")
+-    cand_100 = CANDLE_AGG["all_100pct"] and STAGES["S0_CANDLES"].mismatched == 0
+-    L_.append(f"- Engine complete bars compared vs engine-aligned reference: {CANDLE_AGG['compared']}")
+-    L_.append(f"- Fully matched (open/high/low/close/volume/close_ts/open_ts/trading_day): "
+-              f"{CANDLE_AGG['matched_full']}")
+-    L_.append(f"- **Do candles match 100% incl. open/close after the deterministic sort? "
+-              f"{'YES' if cand_100 else 'NO'}**")
+-    L_.append(f"- Days with an 18:00-ET trading-day boundary (>1 trading_day group in window): "
+-              f"{CANDLE_AGG['boundary_split_days']}/{len(days_run)}")
+-    L_.append(f"- Engine END_OF_DAY trailing partials excluded (by design, one per trading_day "
+-              f"group): {CANDLE_AGG['trailing_partials']}")
+-    L_.append(f"- Bars where the CONTINUOUS DuckDB bucketing positionally disagrees with the "
+-              f"engine (the boundary phase-shift, quantified): {CANDLE_AGG.get('boundary_diff_bars', 0)}")
+-    L_.append("")
+-    L_.append("Reference definition (must-match): the engine-aligned reference applies the EXACT "
+-              "build_tick_bars logic (open=first/close=last/high=max/low=min over 147-event "
+-              "buckets) but PARTITIONS by the same 18:00-ET trading_day the engine uses, made "
+-              "deterministic by the (ts_event,seq) stable sort. Engine complete bars and this "
+-              "reference are both in (trading_day, bar_index) order, so they align 1:1.")
+-    L_.append("")
+-    L_.append("Boundary finding (expected engine-vs-research difference, reported not hidden):")
+-    if CANDLE_AGG["first_finding"]:
+-        L_.append(f"- {CANDLE_AGG['first_finding']}")
+-    else:
+-        L_.append("- No boundary observed (single trading_day group on every available day).")
+-    if STAGES["S0_CANDLES"].mismatched > 0:
+-        L_.append(f"- FIRST diverging candle in the must-match comparison: `{STAGES['S0_CANDLES'].example}`")
+-    L_.append("")
+-    L_.append("Interpretation: the engine's tick-bar builder is a faithful, deterministic "
+-              "reproduction of build_tick_bars. The ONLY structural difference vs the canonical "
+-              "CONTINUOUS DuckDB bars is the 18:00-ET trading-day partition (the engine resets "
+-              "bar buckets and emits an END_OF_DAY partial at each 18:00-ET boundary; the "
+-              "continuous DuckDB rn//147 does not). When the reference is partitioned the same "
+-              "way the engine groups, all complete bars match 100% incl. open/close.")
+-    L_.append("")
+-
+-    # Per-day table
+-    L_.append("## Per-day pass/fail")
+-    L_.append("")
+-    L_.append("| Day | S0 | A | B | C | D | E | G | touches | ref/eng/cont bars | bnd_diff |")
+-    L_.append("|-----|----|---|---|---|---|---|---|--------:|-------------------|---------:|")
+-
+-    def mk(v):
+-        return "—" if v is None else ("pass" if v else "FAIL")
+-
+-    for r in DAY_ROWS:
+-        d = r["s0_detail"]
+-        bars_str = f"{d['ref_bars']}/{d['eng_complete']}/{d['cont_bars']}" if d else "—"
+-        bnd = d["boundary_diff_bars"] if d else "—"
+-        L_.append(
+-            f"| {r['day']} | {mk(r['S0'])} | {mk(r['A'])} | {mk(r['B'])} | {mk(r['C'])} | "
+-            f"{mk(r['D'])} | {mk(r['E'])} | {mk(r['G'])} | {r['touches']} | {bars_str} | {bnd} |"
+-        )
+-    L_.append("")
+-
+-    # must-match mismatch examples
+-    L_.append("## Must-match mismatches (first diverging layer + concrete example)")
+-    L_.append("")
+-    any_mm = False
+-    for key in STAGE_ORDER:
+-        s = STAGES[key]
+-        if s.scope != "must_match" or s.mismatched == 0:
+-            continue
+-        any_mm = True
+-        L_.append(f"- **{s.name}**: {s.mismatched}/{s.total} mismatched. Example: `{s.example}`")
+-    if not any_mm:
+-        L_.append("None. Every must-match stage is 100% matched across all available days.")
+-    L_.append("")
+-
+-    # expected-differ distribution
+-    L_.append("## Stage F — interaction trade-price divergence (reported, not asserted)")
+-    L_.append("Real TRADE prints (tick 0.25) vs canonical BOOK-MID (tick 0.125). Distribution of "
+-              "`|engine_trade - canonical_book|`:")
+-    f = STAGES["F_INT_TRADEPRICE"]
+-    L_.append(f"- samples (touches): {f.total}")
+-    summ = f.divergence_summary()
+-    if summ:
+-        for part in summ.split("; "):
+-            L_.append(f"  - {part}")
+-    else:
+-        L_.append("  - (no samples)")
+-    L_.append("")
+-
+-    # benchmark
+-    L_.append("## Bar-builder benchmark (informational)")
+-    L_.append(f"- Shared engine builder (lean columnar parquet read + vectorized "
+-              f"build_tick_bars_from_frame, deterministic sort): "
+-              f"{BENCH['engine_builder_seconds']:.2f}s")
+-    L_.append(f"- Old all-DuckDB path (B._build_bars_for_date + _get_session_hl_for_date): "
+-              f"{BENCH['duckdb_seconds']:.2f}s")
+-    L_.append(f"- Days: {BENCH['days']}  Engine complete bars built: {BENCH['bars']}")
+-    L_.append("- Note: the engine-builder time EXCLUDES the parquet read (measured around the "
+-              "vectorized builder call only); I/O dominates wall time for both paths and the "
+-              "DuckDB number also includes the session-H/L second pass.")
+-    L_.append("")
+-
+-    verdict = ("CLEAN — must-match set passes across ALL available requested days"
+-               if must_pass else None)
+-    if not must_pass:
+-        first_bad = next(STAGES[k].name for k in STAGE_ORDER
+-                         if STAGES[k].scope == "must_match" and STAGES[k].mismatched > 0)
+-        verdict = f"MISMATCH — first diverging must-match stage: {first_bad}"
+-    L_.append(f"## VERDICT: {verdict}")
+-    L_.append("")
+-
+-    REPORT_PATH.write_text("\n".join(L_), encoding="utf-8")
+-    return must_pass, verdict
+-
+-
+-# --- Driver -----------------------------------------------------------------
+-def main():
+-    available, missing, total_cal = enumerate_days()
+-    print(f"calendar days={total_cal} available={len(available)} missing={len(missing)}", flush=True)
+-
+-    # Stage E book rows now come from per-date single-day stores (canonical scope),
+-    # so no global multi-day store is needed. Keep a placeholder for the signature.
+-    store_book = None
+-
+-    prev_ny_hl = prev_asia_hl = prev_london_hl = None
+-    total_touches = 0
+-    days_run = []
+-    try:
+-        # warm-up (advance carry only; not reported / not benchmarked)
+-        print(f"=== warmup {WARMUP_DAY.isoformat()} (carry only) ===", flush=True)
+-        prev_ny_hl, prev_asia_hl, prev_london_hl, _, _ = process_day(
+-            WARMUP_DAY.isoformat(), prev_ny_hl, prev_asia_hl, prev_london_hl,
+-            store_book, count_only=True
+-        )
+-
+-        for i, d in enumerate(available):
+-            t0 = _time.perf_counter()
+-            prev_ny_hl, prev_asia_hl, prev_london_hl, n, s0 = process_day(
+-                d, prev_ny_hl, prev_asia_hl, prev_london_hl, store_book
+-            )
+-            days_run.append(d)
+-            total_touches += n
+-            s0s = (f"S0 {s0['matched_full']}/{s0['compared']} (ref={s0['ref_bars']} "
+-                   f"eng_complete={s0['eng_complete']} bnd_diff={s0['boundary_diff_bars']} "
+-                   f"split={s0['boundary_split']})") if s0 else "S0 n/a"
+-            print(f"[{i+1}/{len(available)}] {d}: touches={n} {s0s} "
+-                  f"({_time.perf_counter()-t0:.1f}s)", flush=True)
+-    finally:
+-        if store_book is not None:
+-            store_book.close()
+-        _close_single_day_stores()
+-        DAY_PARQUET.close_all()
+-
+-    must_pass, verdict = write_report(available, missing, total_cal, days_run, total_touches)
+-    print(f"\nReport: {REPORT_PATH}")
+-    print(f"must_match_all_pass={must_pass}")
+-    print(f"VERDICT: {verdict}")
+-    for key in STAGE_ORDER:
+-        s = STAGES[key]
+-        print(f"  {s.name}: {s.matched}/{s.total} matched, {s.mismatched} mismatched ({s.scope})")
+-
+-
+-if __name__ == "__main__":
+-    main()
+diff --git a/validation/phase4b_validate.py b/validation/phase4b_validate.py
+index 4f49eef..fcd7b50 100644
+--- a/validation/phase4b_validate.py
++++ b/validation/phase4b_validate.py
+@@ -12,8 +12,10 @@ Checks:
+ """
+ from __future__ import annotations
+ 
+-import sys, time, warnings
+-from datetime import date, datetime, time as dtime, timedelta
++import sys
++import time
++import warnings
++from datetime import date, timedelta
+ from pathlib import Path
+ 
+ CQL_SRC = r"C:/Users/gonza/Documents/Claude-Quant-Lab/src"
+@@ -22,18 +24,18 @@ DATA_DIR = Path(r"C:/Users/gonza/Documents/Trade-Dashboard/data/databento")
+ SYMBOL = "NQ"
+ CANON_TICK = 0.125  # book-mid lands on the 0.125 grid -> lossless integer ticks
+ 
+-import numpy as np
+-import pandas as pd
++import numpy as np  # noqa: E402 (imports follow the sys.path bootstrap)
++import pandas as pd  # noqa: E402 (imports follow the sys.path bootstrap)
+ 
+-import strategy_core as sc
+-from strategy_core.candles._ids import make_bar_id
+-from strategy_core.candles.batch import build_tick_bars_from_frame
+-from strategy_core.types import Bar, CloseReason, Direction, Level, Side
+-from strategy_core.constants import RESEARCH_SESSION_SCHEME
++import strategy_core as sc  # noqa: E402 (imports follow the sys.path bootstrap)
++from strategy_core.candles._ids import make_bar_id  # noqa: E402 (imports follow the sys.path bootstrap)
++from strategy_core.candles.batch import build_tick_bars_from_frame  # noqa: E402 (imports follow the sys.path bootstrap)
++from strategy_core.types import Bar, CloseReason, Level, Side  # noqa: E402 (imports follow the sys.path bootstrap)
++from strategy_core.constants import RESEARCH_SESSION_SCHEME  # noqa: E402 (imports follow the sys.path bootstrap)
+ 
+-from alpha_lab.agents.data_infra.ml.config import MLPipelineConfig
+-from alpha_lab.agents.data_infra.ml import dashboard_utility_builder as B
+-from alpha_lab.agents.data_infra.ml import dashboard_utility_labeling as L
++from alpha_lab.agents.data_infra.ml.config import MLPipelineConfig  # noqa: E402 (imports follow the sys.path bootstrap)
++from alpha_lab.agents.data_infra.ml import dashboard_utility_builder as B  # noqa: E402 (imports follow the sys.path bootstrap)
++from alpha_lab.agents.data_infra.ml import dashboard_utility_labeling as L  # noqa: E402 (imports follow the sys.path bootstrap)
+ 
+ CFG = MLPipelineConfig(
+     training_mode="dashboard_utility", instrument=SYMBOL, tick_size=0.25,
+@@ -138,7 +140,8 @@ def legacy_build(frame: pd.DataFrame, timeframe: int, scheme=RESEARCH_SESSION_SC
+                     high_ticks=("price_ticks", "max"), low_ticks=("price_ticks", "min"),
+                     volume=("size", "sum"), trade_count=("price_ticks", "size")).reset_index())
+         for row in agg.itertuples(index=False):
+-            td = row.trading_day.date(); bi = int(row.bar_index)
++            td = row.trading_day.date()
++            bi = int(row.bar_index)
+             complete = int(row.trade_count) == tf
+             bars.append(Bar(timeframe_ticks=tf, trading_day=td, bar_index=bi,
+                             bar_id=make_bar_id(tf, td, bi),
+@@ -154,7 +157,8 @@ def legacy_build(frame: pd.DataFrame, timeframe: int, scheme=RESEARCH_SESSION_SC
+ 
+ # ───────────────────────── windows ─────────────────────────
+ def research_window(day: str) -> tuple[pd.Timestamp, pd.Timestamp, list[str]]:
+-    d = date.fromisoformat(day); prev = d - timedelta(days=1)
++    d = date.fromisoformat(day)
++    prev = d - timedelta(days=1)
+     start = pd.Timestamp(f"{prev.isoformat()} 23:00:00", tz="America/Chicago").tz_convert("UTC")
+     end = pd.Timestamp(f"{d.isoformat()} 23:00:00", tz="America/Chicago").tz_convert("UTC")
+     return start, end, [prev.isoformat(), d.isoformat()]
+@@ -162,7 +166,8 @@ def research_window(day: str) -> tuple[pd.Timestamp, pd.Timestamp, list[str]]:
+ 
+ def engine_td_window(day: str) -> tuple[pd.Timestamp, pd.Timestamp, list[str]]:
+     """Events whose 18:00-ET trading_day == day: [prev 18:00 ET, day 18:00 ET)."""
+-    d = date.fromisoformat(day); prev = d - timedelta(days=1)
++    d = date.fromisoformat(day)
++    prev = d - timedelta(days=1)
+     start = pd.Timestamp(f"{prev.isoformat()} 18:00:00", tz=ET).tz_convert("UTC")
+     end = pd.Timestamp(f"{d.isoformat()} 18:00:00", tz=ET).tz_convert("UTC")
+     return start, end, [prev.isoformat(), d.isoformat()]
+@@ -190,7 +195,8 @@ def bars_to_et_df(bars: list[Bar]) -> pd.DataFrame:
+ 
+ 
+ def df_to_engine_bars(bars_et: pd.DataFrame, day: str) -> list[Bar]:
+-    td = date.fromisoformat(day); out = []
++    td = date.fromisoformat(day)
++    out = []
+     for i, (ts, r) in enumerate(bars_et.iterrows()):
+         ts_utc = ts.tz_convert("UTC").to_pydatetime()
+         out.append(Bar(timeframe_ticks=TF, trading_day=td, bar_index=i, bar_id=make_bar_id(TF, td, i),
+@@ -204,7 +210,8 @@ def df_to_engine_bars(bars_et: pd.DataFrame, day: str) -> list[Bar]:
+ 
+ # ───────────── canonical levels/zones (prev-day carry) ─────────────
+ def prior_available(day: str, back: int = 7) -> list[str]:
+-    d = date.fromisoformat(day); out = []
++    d = date.fromisoformat(day)
++    out = []
+     for k in range(back, 0, -1):
+         c = (d - timedelta(days=k)).isoformat()
+         if (DATA_DIR / SYMBOL / c / "mbp10.parquet").exists():
+@@ -218,7 +225,8 @@ def canonical_levels_and_bars(day: str):
+     (research bars_et for `day`, levels list)."""
+     seq = prior_available(day, back=4)
+     prev_ny = prev_asia = prev_london = None
+-    bars_et = None; levels = None
++    bars_et = None
++    levels = None
+     for ds in seq:
+         bars = B._build_bars_for_date(DATA_DIR, SYMBOL, ds, U)
+         if bars.empty:
+@@ -233,7 +241,7 @@ def canonical_levels_and_bars(day: str):
+ 
+ 
+ def levels_to_engine(levels):
+-    return [Level(name=l["name"], price=float(l["price"]), side=Side(l["side"])) for l in levels]
++    return [Level(name=lvl["name"], price=float(lvl["price"]), side=Side(lvl["side"])) for lvl in levels]
+ 
+ 
+ # ───────────────────────── checks ─────────────────────────
+@@ -250,13 +258,17 @@ def check_a_and_d():
+         ev = load_book_mid_events(s, e, files)
+         frame = events_to_frame(ev)
+         # legacy timing
+-        t0 = time.perf_counter(); legacy = legacy_build(frame, TF); t_leg = time.perf_counter() - t0
++        t0 = time.perf_counter()
++        legacy = legacy_build(frame, TF)
++        t_leg = time.perf_counter() - t0
+         # new timing
+         t0 = time.perf_counter()
+         new = build_tick_bars_from_frame(frame, (TF,), scheme=RESEARCH_SESSION_SCHEME, tick_size=CANON_TICK)
+         t_new = time.perf_counter() - t0
+         # DuckDB baseline
+-        t0 = time.perf_counter(); _ = B._build_bars_for_date(DATA_DIR, SYMBOL, day, U); t_duck = time.perf_counter() - t0
++        t0 = time.perf_counter()
++        _ = B._build_bars_for_date(DATA_DIR, SYMBOL, day, U)
++        t_duck = time.perf_counter() - t0
+         same = len(legacy) == len(new) and all(bar_tuple(a) == bar_tuple(b) for a, b in zip(legacy, new))
+         n_complete = sum(1 for b in new if b.is_complete)
+         print(f"  {day}: bars new={len(new)} legacy={len(legacy)} complete={n_complete} | "
+@@ -264,7 +276,8 @@ def check_a_and_d():
+         if not same:
+             for a, b in zip(legacy, new):
+                 if bar_tuple(a) != bar_tuple(b):
+-                    print(f"     FIRST DIFF: legacy={bar_tuple(a)}\n                  new   ={bar_tuple(b)}"); break
++                    print(f"     FIRST DIFF: legacy={bar_tuple(a)}\n                  new   ={bar_tuple(b)}")
++                    break
+ 
+ 
+ def _norm(t):
+@@ -298,19 +311,20 @@ def check_b_c():
+     for day in SEAM_DAYS:
+         bars_et, levels = canonical_levels_and_bars(day)
+         if bars_et is None or not levels:
+-            print(f"  {day}: no canonical bars/levels (skip)"); continue
++            print(f"  {day}: no canonical bars/levels (skip)")
++            continue
+         eng_bars = engine_bars_for_day(day)
+         eng_bars_et = bars_to_et_df(eng_bars)
+ 
+         # zones: identical inputs (levels are session max/min -> bucketing-independent)
+-        zc = B._build_zones([dict(l) for l in levels])
++        zc = B._build_zones([dict(lvl) for lvl in levels])
+         ze = sc.build_zones(levels_to_engine(levels))
+         zones_same = (len(zc) == len(ze) and all(
+             abs(a["representative_price"] - b.representative_price) < 1e-9 and str(a["side"]) == str(b.side)
+             and tuple(a["names"]) == tuple(b.names) for a, b in zip(zc, ze)))
+ 
+         # (b1) LOGIC UNCHANGED: identical bars -> identical touches (research fn vs engine fn)
+-        canon_t_same_bars = B._detect_touches(bars_et, [dict(z) for z in B._build_zones([dict(l) for l in levels])])
++        canon_t_same_bars = B._detect_touches(bars_et, [dict(z) for z in B._build_zones([dict(lvl) for lvl in levels])])
+         eng_t_same_bars = sc.detect_touches(df_to_engine_bars(bars_et, day),
+                                             sc.build_zones(levels_to_engine(levels)),
+                                             tick_size=CANON_TICK, trading_day=date.fromisoformat(day))
+@@ -320,7 +334,7 @@ def check_b_c():
+             for a, b in zip(canon_t_same_bars, eng_t_same_bars))
+ 
+         # (b2) BOUNDARY EFFECT: canonical bars vs engine 18:00-ET bars (same zones)
+-        canon_touches = B._detect_touches(bars_et, [dict(z) for z in B._build_zones([dict(l) for l in levels])])
++        canon_touches = B._detect_touches(bars_et, [dict(z) for z in B._build_zones([dict(lvl) for lvl in levels])])
+         eng_touches = sc.detect_touches(df_to_engine_bars(eng_bars_et, day),
+                                         sc.build_zones(levels_to_engine(levels)),
+                                         tick_size=CANON_TICK, trading_day=date.fromisoformat(day))
+@@ -336,7 +350,8 @@ def check_b_c():
+             lc = label_for(ct["rep"], ct["direction"], fwd_c)
+             fwd_e = eng_bars_et[(eng_bars_et.index > et["ts"].tz_convert(ET)) & (eng_bars_et.index < cutoff)]
+             le = label_for(et["rep"], et["direction"], fwd_e)
+-            classes_seen.add(lc["label"]); classes_seen.add(le["label"])
++            classes_seen.add(lc["label"])
++            classes_seen.add(le["label"])
+             if lc["label"] == le["label"]:
+                 lbl_match += 1
+             else:
+@@ -360,7 +375,8 @@ def seam_audit(day: str, eng_bars: list[Bar]):
+     d = date.fromisoformat(day)
+     seam = pd.Timestamp(f"{(d - timedelta(days=1)).isoformat()} 18:00:00", tz=ET)  # td-D opens here
+     if not eng_bars:
+-        print(f"    [seam audit {day}] no engine bars"); return
++        print(f"    [seam audit {day}] no engine bars")
++        return
+     b0 = eng_bars[0]  # first bar of trading_day D
+     # raw events for td-D window, independently
+     s, e, files = engine_td_window(day)
+diff --git a/validation/test_duckdb_streaming_parity.py b/validation/test_duckdb_streaming_parity.py
+index 8066d7b..de66318 100644
+--- a/validation/test_duckdb_streaming_parity.py
++++ b/validation/test_duckdb_streaming_parity.py
+@@ -40,10 +40,10 @@ SYMBOL = "NQ"
+ TICK_COUNT = 147
+ TICK_SIZE = 0.25  # NQ trade prints land on the 0.25 grid -> lossless integer ticks
+ 
+-from strategy_core.candles._ids import make_bar_id
+-from strategy_core.candles.streaming import CandleEngine
+-from strategy_core.constants import RESEARCH_SESSION_SCHEME
+-from strategy_core.types import CloseReason, Trade
++from strategy_core.candles._ids import make_bar_id  # noqa: E402 (imports follow the sys.path bootstrap)
++from strategy_core.candles.streaming import CandleEngine  # noqa: E402 (imports follow the sys.path bootstrap)
++from strategy_core.constants import RESEARCH_SESSION_SCHEME  # noqa: E402 (imports follow the sys.path bootstrap)
++from strategy_core.types import Trade  # noqa: E402 (imports follow the sys.path bootstrap)
+ 
+ # ties-heavy big day; Sunday-Globex / 18:00-ET-seam day (Monday's trading day opens at
+ # Sunday 18:00 ET and pulls in the Sunday-evening Globex); ordinary RTH weekday.
+diff --git a/validation/test_production_pair_parity.py b/validation/test_production_pair_parity.py
+index 8d6b8d6..3cbc2c3 100644
+--- a/validation/test_production_pair_parity.py
++++ b/validation/test_production_pair_parity.py
+@@ -41,9 +41,9 @@ TICK_SIZE = 0.25
+ BUY_SIDE = "B"  # VERIFIED: databento side='B' = buy aggressor (see constants.BUY_AGGRESSOR_SIDE)
+ SAMPLE_DAYS = ["2025-07-15", "2025-07-07", "2025-07-11"]
+ 
+-from strategy_core.candles.streaming import CandleEngine
+-from strategy_core.constants import BUY_AGGRESSOR_SIDE, RESEARCH_SESSION_SCHEME
+-from strategy_core.types import Trade
++from strategy_core.candles.streaming import CandleEngine  # noqa: E402 (imports follow the sys.path bootstrap)
++from strategy_core.constants import BUY_AGGRESSOR_SIDE, RESEARCH_SESSION_SCHEME  # noqa: E402 (imports follow the sys.path bootstrap)
++from strategy_core.types import Trade  # noqa: E402 (imports follow the sys.path bootstrap)
+ 
+ # order/membership-sensitive fields; excludes open_ts/close_ts (the us-vs-ns ts seam).
+ CORE = ("trading_day", "bar_index", "open_t", "high_t", "low_t", "close_t",
+@@ -231,7 +231,8 @@ if __name__ == "__main__":
+     all_ok = True
+     for day in SAMPLE_DAYS:
+         if not _available(day):
+-            print(f"  {day}: NO DATA"); continue
++            print(f"  {day}: NO DATA")
++            continue
+         r = run_day(day)
+         ok = (r["before_4d_diff"] >= 4 * max(r["gate_diff"], 1)
+               and r["gate_ohlc_diff"] <= max(8, r["bars"] // 100)

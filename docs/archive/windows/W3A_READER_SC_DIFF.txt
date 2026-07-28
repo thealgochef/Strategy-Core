@@ -1,0 +1,906 @@
+diff --git a/docs/DECISIONS.md b/docs/DECISIONS.md
+index 7307cf8..9339a80 100644
+--- a/docs/DECISIONS.md
++++ b/docs/DECISIONS.md
+@@ -110,6 +110,26 @@ proven on a FRESH model, then soaked ≥7 trading days before any number is trus
+   ~34µs/event × 15.3M events × 2 passes is a platform tax on all future research, but
+   fixing it mid-PROVE puts engine churn under the proof; the weekend absorbs the build
+   for free. Enforced: W3a record (options preserved); post-soak roadmap.
++- D-P-15 RATIFIED (2026-06-12) — W3A-READER: D-P-14's SC-freeze is SUPERSEDED for one
++  component, pre-build — `DatabentoParquetSource`'s row-by-row decode internals are
++  vectorized BEFORE the W3 dataset build, gated by (1) a full-day event-by-event
++  IDENTITY PROOF on 2022-02-15 + 2026-02-18 (count, order, every field, ns-exact ts;
++  `W3A_READER_PROOF.log`: 5,218,914 + 10,720,798 events IDENTICAL, zero warnings; warm
++  drains ×13.0/×12.5) and (2) the full drift net green on the committed P2 tree (SC 184
++  = tests + validation: b3 golive/multiday digests, duckdb-streaming parity,
++  decision-diff, d1 streaming-vs-batch, production-pair parity; repo-root ruff; QL 751
++  via the editable install). The row-wise path was deleted only on full green (the W3a
++  P1 quote-pass convention; the proof harness re-runs at the pre-delete commit
++  `332ad3e`). Documented edge deviations, all unreachable on store data (zero-warning
++  proof tallies attest): inf-price / out-of-datetime-range-timestamp / uint64-overflow
++  cells now warn-and-skip the ROW where the row-wise path aborted the FILE (and
++  |price/tick| > 2^62 now warns instead of emitting a wrapped int). D-P-14's REMAINING
++  scope — L1 event cache, single-pass quote collection, parallel day-pool — stays
++  post-soak. Why: the stop-gated build was ~2×513s/day of reader decode; an
++  output-identical reader swap under proof + net is churn-free and cuts the build
++  projection 24.1 h → ~8.7 h (the residual is the non-reader ~420s/day — exactly the
++  post-soak scope). Enforced: this entry; the W3a record's W3A-READER subsection;
++  proof log + drift-net tallies as receipts.
+ 
+ ## How to add an entry
+ New ruling in a design exchange → it gets the next D-P id, lands here in the same
+diff --git a/docs/PLATFORM_REFACTOR_PROGRESS.md b/docs/PLATFORM_REFACTOR_PROGRESS.md
+index 0da8284..9b46c2d 100644
+--- a/docs/PLATFORM_REFACTOR_PROGRESS.md
++++ b/docs/PLATFORM_REFACTOR_PROGRESS.md
+@@ -1471,7 +1471,11 @@ Scope landed — QL: **P1 quote-pass vectorization** (`ef77885`): `process_singl
+ **P2 COMPUTE STOP-GATE: STOP.** Full per-day pipeline (post-P1, exact P3 config, fresh — config hash `7850272e`, no cache) on 2026-02-12: **1447.1s (24.1 min) → ×60 days ≈ 24.1 h >> the 90-min gate.** Attribution: ONE bare canonical-reader drain (`DatabentoParquetSource.for_trading_day().events()`, no runtime, no features) = **513.4s for 15,303,125 events (~34µs/event)**; the labeling pipeline makes TWO such passes (trades+runtime, then quotes), so ~17 min of the 24 is SC reader event decode — an SC-side cost, untouchable under this window's `src/strategy_core UNTOUCHED` constraint. Per the gate: **the train was NOT launched; no bundle exists; P4 (save+audit) did not run.** The W3 config stands RATIFIED (D-036) awaiting an owner ruling on the reader cost. Options for that ruling (none taken): (a) SC reader batch/vectorized decode (column-pruned arrow → typed arrays) — an SC window; (b) QL single-pass quote collection (trailing approach-window buffer during pass 1 — halves reader cost, needs its own identity proof); (c) accept a one-time overnight dataset build (per-day `ml_utility_<hash>` caches make reruns ~instant; ~24 h once per config).
+ Commits: QL `ef77885` (P1) + `c6fc42c` (P3 plumbing) + `b8d2eb0` (D-036/D-037); SC `9ff4f81` (P0 doc-op) + this record; TL `b27e2c0` (P0 housekeeping: merged `worktree-w2-operate` deleted; root recon/diff scratch gitignored). Gates at close: QL suite **750** (746+4) + ruff clean on the configured scope (the 13 known pre-existing root-scratch findings stand); SC suite + ruff (doc-only window) below; TL suite + ruff (hygiene-only) below. Evidence at QL root (untracked): `W3A_P1_PROOF.log`, `W3A_P2_GATE.log`, `scratch_w3a_p2_gate.py` (the re-runnable gate harness), `W3A_QL_DIFF.txt`/`W3A_SC_DIFF.txt`.
+ 
++#### W3A-READER (2026-06-12, post-stop-gate; supersedes W3a-RESUME and the prior W3A-READER text. BUILD NOT LAUNCHED — launches after review, per the task's FULL STOP)
++Reader-cost ruling executed under **D-P-15** (supersedes D-P-14's SC-freeze for this one component; D-P-14's remaining scope — L1 event cache, single-pass quotes, parallel day-pool — stays post-soak). Scope landed — QL **P0 zero-touch guard** (`0a03980`): `process_single_date_stream`'s vectorized approach-quote pass is guarded `if touches:` (empty → `approach_quotes` stays empty, the old per-touch loop's natural no-op; previously the hull `min()`/`max()` would raise if the early no-touch return were ever bypassed) + a zero-touch-day test (real one-hour slice, PDH/PDL seeded absurdly far above any stored price — levels exist but untouchable, approach pass ON, asserts empty frame). SC **P2 vectorized decode** (`332ad3e`): `DatabentoParquetSource`'s per-row `to_pylist`/`_normalize_row` decode replaced by a vectorized core — column-pruned pyarrow read (`ts_recv` dropped; decoded-and-discarded before), trade/L0 classification + exact-grid price validation + TOB-change dedup (shift-compare, state carried across batches AND files) + day-window bounds as numpy masks, canonical per-batch order via `np.lexsort` with an explicit emission index reproducing the row-wise stable sort's insertion order (a row's Trade item before its Quote item), identical `Trade`/`Quote` objects from extracted scalars (ns-unit columns emit ns-precision `pd.Timestamp` exactly as `as_py` did — the canonical order IS ns-precise; µs-floor window compare proven equivalent for whole-µs bounds). `events()` dispatches: ordered-disjoint windows (single path / the trading-day composition) → `_events_sequential` (concatenation; suppressed quotes never constructed); generic overlapping multi-path → the k-way heap merge + merge-layer dedup (the pinned canonical-interleave semantics), fed by the same vectorized scan. PUBLIC API unchanged; no DuckDB on this path. SC **P3c delete** (`37359ae`): row-wise path deleted on full green (the W3a P1 convention; the proof harness re-runs at `332ad3e`). **P3a IDENTITY PROOF** (`W3A_READER_PROOF.log` at SC root, untracked; harness `scratch_w3a_reader_proof.py`): full-trading-day event-by-event old-vs-new — 2022-02-15 **IDENTICAL, 5,218,914 events** (trades 378,369 / quotes 4,840,545 / warnings 0); 2026-02-18 **IDENTICAL, 10,720,798 events** (trades 353,681 / quotes 10,367,117 / warnings 0); count + order + every field + ns-exact ts; compare pass ran cold-cache first, then both timed drains warm: **NEW 17.5s vs OLD 227.1s (×13.0; 3.36 vs 43.51 µs/event)** and **NEW 30.8s vs OLD 383.7s (×12.5; 2.87 vs 35.79 µs/event)**. **P3b DRIFT NET, all green, committed P2 tree**: SC **184** (tests + validation — b3 golive/multiday digest regressions on untouched fixtures, duckdb-streaming parity, decision-diff, d1 streaming-vs-batch, production-pair parity) + repo-root ruff clean; QL **751** (750+1, consuming the new reader via the editable install); SC re-ran **184** + ruff clean on the committed post-delete tree. **BUILD PROJECTION** (honest): new drain projected on the gate day 3.36 µs/event × 15,303,125 = **51.4s** → per-day pipeline 1447.1 − 2×(513.4 − 51.4) ≈ **523s** → **×60 ≈ 8.72 h** (was 24.1 h) — still above the 90-min gate; the residual ~420s/day is the NON-reader pipeline (runtime drive + labeling + features), exactly D-P-14's post-soak scope; per-day `ml_utility_<hash>` caches make same-config reruns ~instant. Documented edge deviations (unreachable on store data; zero-warning tallies attest): inf-price / out-of-range-ts / uint64-overflow cells warn-and-skip the ROW where the old path aborted the FILE. Evidence: SC root `W3A_READER_PROOF.log` + `scratch_w3a_reader_proof.py` + `W3A_READER_SC_DIFF.txt`; QL root `W3A_READER_QL_DIFF.txt` (P0 is its own QL commit — separate diff, not folded). Launch command (verbatim, from QL root, after the review go — dry-run verified to resolve the exact D-036 config, 73 store dirs 2025-11-21→2026-02-13):
++`PYTHONPATH=src python scripts/run_dashboard_session_experiment.py --preset all_to_ny --symbol NQ --bar-type 147t --start 2025-11-21 --end 2026-02-13 --tp 15 --sl 15 --interaction-window 5 --include-approach-features --approach-window 15 --fold-scheme purged-days --fold-train-days 40 --fold-test-days 5 --fold-step-days 5 --fold-purge-days 2 --min-train-events 30 --pin-features int_time_within_2pts,int_absorption_ratio,app_avg_trade_size,app_large_trade_vol_pct,app_max_spread --iterations 1000 --depth 6 --save --allow-failed-gates --model-name NQ_W3_$(date -u +%Y%m%dT%H%M%SZ)`
++
+ ### Status
+-Phases A–E3: COMPLETE. W1: COMPLETE (pushed; pins bumped; CI witnessed). W2: COMPLETE (pushed; pins held `256020c` — no consumer-facing SC change; CI ×3 green incl. SC's first run; W2-FIX + the TL lint commit `5a8d28a` recorded). Current: W3 — **W3a executed 2026-06-12 (vectorization + fold/pin plumbing landed; TRAIN STOP-GATED at 24.1 h projected vs the 90-min gate — reader-cost ruling pending)**; W3b (parity gate + falsification) follows the ruling + the fresh bundle. S9.9, F1–F3: PARKED behind W3 green + soak. Live model outputs remain DECORATIVE until W3's gate is green on the fresh bundle.
++Phases A–E3: COMPLETE. W1: COMPLETE (pushed; pins bumped; CI witnessed). W2: COMPLETE (pushed; pins held `256020c` — no consumer-facing SC change; CI ×3 green incl. SC's first run; W2-FIX + the TL lint commit `5a8d28a` recorded). Current: W3 — **W3a executed 2026-06-12 (vectorization + fold/pin plumbing landed; the P2 stop-gate's reader cost RESOLVED by W3A-READER under D-P-15: decode vectorized, identity-proven on 2 full days, drift net green, row-wise path deleted; build projection 24.1 h → ~8.7 h. BUILD LAUNCH PENDING the review go — command verbatim in the W3A-READER subsection)**; W3b (parity gate + falsification) follows the bundle. S9.9, F1–F3: PARKED behind W3 green + soak. Live model outputs remain DECORATIVE until W3's gate is green on the fresh bundle.
+ 
+ ---
+diff --git a/src/strategy_core/data/databento_parquet.py b/src/strategy_core/data/databento_parquet.py
+index a60466b..368fe3e 100644
+--- a/src/strategy_core/data/databento_parquet.py
++++ b/src/strategy_core/data/databento_parquet.py
+@@ -2,7 +2,7 @@
+ 
+ from __future__ import annotations
+ 
+-from collections.abc import Iterator
++from collections.abc import Callable, Iterator
+ from dataclasses import dataclass
+ from datetime import UTC, date, datetime, timedelta
+ from decimal import Decimal, InvalidOperation
+@@ -12,6 +12,8 @@ from pathlib import Path
+ from typing import Any
+ from zoneinfo import ZoneInfo
+ 
++import numpy as np
++
+ from strategy_core.constants import (
+     BUY_AGGRESSOR_SIDE,
+     DEFAULT_TICK_SIZE,
+@@ -24,7 +26,6 @@ from strategy_core.data.events import (
+     DataQualityWarning,
+     safe_source,
+ )
+-from strategy_core.data.ordering import side_signed_price_ticks
+ from strategy_core.types import Quote, Trade
+ 
+ __all__ = ["DatabentoParquetSource"]
+@@ -35,9 +36,12 @@ TOB_ALIASES = (
+     ("bid_price", "bid_px", "bid", "bid_px_00"),
+     ("ask_price", "ask_px", "ask", "ask_px_00"),
+ )
+-TRADE_SELECTED = (
++BID_SIZE_ALIASES = ("bid_size", "bid_sz", "bid_sz_00")
++ASK_SIZE_ALIASES = ("ask_size", "ask_sz", "ask_sz_00")
++#: W3A-READER P2: the decode reads only columns the normalization consumes
++#: (the retired row-wise path also decoded ts_recv and discarded it).
++DECODE_SELECTED = (
+     "ts_event",
+-    "ts_recv",
+     "sequence",
+     "seq",
+     "instrument_id",
+@@ -74,6 +78,151 @@ DAY_FILE_PRIORITY = (
+     ("trades.parquet", "trades"),
+ )
+ 
++_EPOCH = datetime(1970, 1, 1, tzinfo=UTC)
++_ONE_US = timedelta(microseconds=1)
++#: datetime-representable bounds in epoch microseconds — values outside warn-and-skip
++#: (the row-wise int branch raised OverflowError into a per-row warning the same way).
++_MIN_DT_US = (datetime.min.replace(tzinfo=UTC) - _EPOCH) // _ONE_US
++_MAX_DT_US = (datetime.max.replace(tzinfo=UTC) - _EPOCH) // _ONE_US
++_TS_UNIT_TO_US = {"s": 1_000_000, "ms": 1_000, "us": 1}
++
++
++def _pandas_or_none() -> Any:
++    """Lazy pandas, mirroring pyarrow ``as_py``: timestamp[ns] cells surface as
++    ns-precision ``pd.Timestamp`` when pandas is importable, µs-floor ``datetime``
++    otherwise. The vectorized path must construct the same objects."""
++
++    try:
++        import pandas
++    except ImportError:  # pragma: no cover - pandas present in all current envs
++        return None
++    return pandas
++
++
++def _us_datetimes(us_values: np.ndarray) -> list[datetime]:
++    return [_EPOCH + timedelta(microseconds=us) for us in us_values.tolist()]
++
++
++@dataclass(slots=True)
++class _DecodedBatch:
++    """One parquet batch decoded to canonical-order emission arrays.
++
++    Arrays are aligned and already in the per-batch emission order: stable sort by
++    ``(ts, sequence, side_signed_price, size)`` with the row-wise path's original
++    item order (row order; a trade item before its row's quote item) breaking ties.
++    ``ts_sort`` is the native-precision integer timestamp (ns for ns-unit columns —
++    the canonical order is ns-precise there — µs otherwise); ``make_ts`` converts a
++    subset of it into the exact objects the row-wise decode emitted.
++    """
++
++    is_quote: np.ndarray
++    ts_sort: np.ndarray
++    seq: np.ndarray
++    ssp: np.ndarray
++    size: np.ndarray
++    price_ticks: np.ndarray
++    side: list[str | None]
++    bid_ticks: np.ndarray
++    ask_ticks: np.ndarray
++    bid_size: np.ndarray
++    ask_size: np.ndarray
++    make_ts: Callable[[np.ndarray], list]
++
++    def emit_deduped(
++        self, last_tob: tuple[int, int, int, int] | None
++    ) -> tuple[list[Trade | Quote], tuple[int, int, int, int] | None]:
++        """Materialize events with L1 TOB dedup applied BEFORE construction.
++
++        A quote is emitted only when its level-0 state differs from the previous
++        quote's in stream order (``last_tob`` carries across batches and files);
++        suppressed quotes are never constructed. Trades always emit.
++        """
++
++        emit = np.ones(self.is_quote.shape[0], dtype=bool)
++        quote_pos = np.flatnonzero(self.is_quote)
++        if quote_pos.size:
++            tob = (
++                self.bid_ticks[quote_pos],
++                self.ask_ticks[quote_pos],
++                self.bid_size[quote_pos],
++                self.ask_size[quote_pos],
++            )
++            changed = np.zeros(quote_pos.size, dtype=bool)
++            for field in tob:
++                changed[1:] |= field[1:] != field[:-1]
++            if last_tob is None:
++                changed[0] = True
++            else:
++                changed[0] = any(
++                    int(field[0]) != prev for field, prev in zip(tob, last_tob, strict=True)
++                )
++            emit[quote_pos] = changed
++            last_tob = tuple(int(field[-1]) for field in tob)
++        idx = np.flatnonzero(emit)
++        ts_objects = self.make_ts(self.ts_sort[idx])
++        quote_flags = self.is_quote[idx].tolist()
++        price = self.price_ticks[idx].tolist()
++        size = self.size[idx].tolist()
++        bid = self.bid_ticks[idx].tolist()
++        ask = self.ask_ticks[idx].tolist()
++        bid_size = self.bid_size[idx].tolist()
++        ask_size = self.ask_size[idx].tolist()
++        positions = idx.tolist()
++        events: list[Trade | Quote] = []
++        for out, pos in enumerate(positions):
++            if quote_flags[out]:
++                events.append(
++                    Quote(
++                        event_ts_utc=ts_objects[out],
++                        bid_price_ticks=bid[out],
++                        ask_price_ticks=ask[out],
++                        bid_size=bid_size[out],
++                        ask_size=ask_size[out],
++                    )
++                )
++            else:
++                events.append(
++                    Trade(
++                        event_ts_utc=ts_objects[out],
++                        price_ticks=price[out],
++                        size=size[out],
++                        side=self.side[pos],
++                    )
++                )
++        return events, last_tob
++
++    def emit_keyed(self) -> list[tuple[SortKey, Trade | Quote]]:
++        """Materialize ALL events with their canonical sort keys (no dedup) for the
++        generic k-way merge path; dedup happens at the merge layer there."""
++
++        ts_objects = self.make_ts(self.ts_sort)
++        quote_flags = self.is_quote.tolist()
++        seq = self.seq.tolist()
++        ssp = self.ssp.tolist()
++        price = self.price_ticks.tolist()
++        size = self.size.tolist()
++        bid = self.bid_ticks.tolist()
++        ask = self.ask_ticks.tolist()
++        bid_size = self.bid_size.tolist()
++        ask_size = self.ask_size.tolist()
++        out: list[tuple[SortKey, Trade | Quote]] = []
++        for pos, ts in enumerate(ts_objects):
++            if quote_flags[pos]:
++                event: Trade | Quote = Quote(
++                    event_ts_utc=ts,
++                    bid_price_ticks=bid[pos],
++                    ask_price_ticks=ask[pos],
++                    bid_size=bid_size[pos],
++                    ask_size=ask_size[pos],
++                )
++                out.append(((ts, seq[pos], 0, 0), event))
++            else:
++                event = Trade(
++                    event_ts_utc=ts, price_ticks=price[pos], size=size[pos], side=self.side[pos]
++                )
++                out.append(((ts, seq[pos], ssp[pos], size[pos]), event))
++        return out
++
+ 
+ @dataclass(frozen=True, slots=True)
+ class DatabentoParquetSource:
+@@ -188,8 +337,52 @@ class DatabentoParquetSource:
+             return self.path_windows[index]
+         return (self.start_ts_utc, self.end_ts_utc)
+ 
++    def _sequential_windows(self) -> bool:
++        """True when per-path windows are pairwise ordered and non-overlapping —
++        every event of path i precedes every event of path i+1, so the k-way merge
++        degenerates to concatenation. Single-path sources are trivially sequential.
++        The trading-day composition (split at UTC midnight) always qualifies."""
++
++        if len(self.paths) <= 1:
++            return True
++        if self.path_windows is None:
++            return False
++        for (_, prev_end), (next_start, _) in zip(
++            self.path_windows, self.path_windows[1:], strict=False
++        ):
++            if prev_end is None or next_start is None or prev_end > next_start:
++                return False
++        return True
++
+     def events(self) -> Iterator[Trade | Quote | DataQualityWarning]:
+         yield from self.pending_warnings
++        if self._sequential_windows():
++            yield from self._events_sequential()
++        else:
++            yield from self._events_merged()
++
++    def _events_sequential(self) -> Iterator[Trade | Quote | DataQualityWarning]:
++        """Vectorized fast path for ordered-disjoint (or single-path) sources.
++
++        Files stream in order; the L1 TOB dedup state carries across batches and
++        files (identical to deduping the merged stream), and suppressed quotes are
++        never constructed.
++        """
++
++        last_tob: tuple[int, int, int, int] | None = None
++        for index, path in enumerate(self.paths):
++            for item in self._decode_batches(Path(path), self._window_for(index)):
++                if isinstance(item, DataQualityWarning):
++                    yield item
++                    continue
++                events, last_tob = item.emit_deduped(last_tob)
++                yield from events
++
++    def _events_merged(self) -> Iterator[Trade | Quote | DataQualityWarning]:
++        """Generic k-way merge for multi-path sources whose windows may overlap:
++        canonical-key interleave with the global tie counter, L1 TOB dedup applied
++        across the merged stream."""
++
+         streams = [
+             iter(self._scan_file(Path(path), self._window_for(index)))
+             for index, path in enumerate(self.paths)
+@@ -266,6 +459,26 @@ class DatabentoParquetSource:
+     def _scan_file(
+         self, path: Path, window: tuple[datetime | None, datetime | None]
+     ) -> Iterator[SourceItem]:
++        """Adapter for the merge path: vectorized decode re-expressed as the
++        row-wise scan's ``(key, event)`` item stream (warnings inline)."""
++
++        for item in self._decode_batches(path, window):
++            if isinstance(item, DataQualityWarning):
++                yield item
++            else:
++                yield from item.emit_keyed()
++
++    # ── W3A-READER P2: vectorized decode core ─────────────────────────────────
++
++    def _decode_batches(
++        self, path: Path, window: tuple[datetime | None, datetime | None]
++    ) -> Iterator[DataQualityWarning | _DecodedBatch]:
++        """Column-pruned pyarrow read; classification, validation, window bounds and
++        canonical per-batch ordering as numpy masks. Semantics mirror the row-wise
++        scan exactly: same batch boundaries (same ``iter_batches`` slicing over the
++        same row groups), same per-batch ``[row warnings in row order] + [events
++        stable-sorted by canonical key]`` emission, same warn-and-skip rules."""
++
+         import pyarrow.parquet as pq
+ 
+         source = safe_source(str(path)) or "historical-parquet"
+@@ -296,11 +509,11 @@ class DatabentoParquetSource:
+         if missing:
+             yield self._warning(DataQualityCode.MISSING_REQUIRED_COLUMN, "missing required historical parquet fields", source, severity=DataQualitySeverity.ERROR, missing=sorted(missing))
+             return
+-        selected = [name for name in TRADE_SELECTED if name in names]
+-        # audit N5: the front-month prescan and iter_batches/to_pylist decode read
+-        # actual data pages, so a corrupt page must warn-and-skip this file instead
+-        # of aborting the k-way merge. Per-row warn/skip behavior is unchanged: row
+-        # warnings are still yielded inline below; only decode failures land here.
++        selected = [name for name in DECODE_SELECTED if name in names]
++        # audit N5: the front-month prescan and iter_batches decode read actual data
++        # pages, so a corrupt page must warn-and-skip this file instead of aborting
++        # the k-way merge. Per-row warn/skip behavior is unchanged: row warnings are
++        # still yielded inline below; only decode failures land here.
+         try:
+             window_start, window_end = window
+             start = window_start.astimezone(UTC) if window_start is not None else None
+@@ -315,74 +528,454 @@ class DatabentoParquetSource:
+                 if self.front_month_only
+                 else None
+             )
++            ts_kind, ts_scale = self._ts_column_kind(parquet.schema_arrow.field("ts_event").type)
++            start_us = None if start is None else (start - _EPOCH) // _ONE_US
++            end_us = None if end is None else (end - _EPOCH) // _ONE_US
+             for batch in parquet.iter_batches(
+                 columns=selected, batch_size=self.batch_size, row_groups=row_groups
+             ):
+-                events: list[tuple[SortKey, Trade | Quote]] = []
+-                for row in batch.to_pylist():
+-                    if self.front_month_only and self._is_off_front_month(row, front_month_id):
+-                        continue
+-                    normalized = self._normalize_row(row, schema=schema, source=source, is_trade_schema=is_trade_schema, is_mbp10=is_mbp10, is_tob=is_tob)
+-                    for item in normalized:
+-                        if isinstance(item, DataQualityWarning):
+-                            yield item
+-                            continue
+-                        key, event = item
+-                        if start is not None and event.event_ts_utc < start:
+-                            continue
+-                        if end is not None and event.event_ts_utc >= end:
+-                            continue
+-                        events.append((key, event))
+-                yield from sorted(events, key=lambda item: item[0])
++                warnings, decoded = self._decode_batch(
++                    batch,
++                    source=source,
++                    is_trade_schema=is_trade_schema,
++                    is_mbp10=is_mbp10,
++                    is_tob=is_tob,
++                    front_month_id=front_month_id,
++                    ts_kind=ts_kind,
++                    ts_scale=ts_scale,
++                    start_us=start_us,
++                    end_us=end_us,
++                )
++                yield from warnings
++                if decoded is not None:
++                    yield decoded
+         except Exception as exc:
+             yield self._warning(DataQualityCode.INVALID_RECORD, f"could not decode historical parquet: {type(exc).__name__}", source, severity=DataQualitySeverity.ERROR)
+             return
+ 
+-    def _normalize_row(self, row: dict[str, Any], *, schema: str, source: str, is_trade_schema: bool, is_mbp10: bool, is_tob: bool) -> tuple[SourceItem, ...]:
+-        items: list[SourceItem] = []
+-        if is_trade_schema or (is_mbp10 and self._is_trade_action(row.get("action"))):
+-            items.append(self._normalize_trade(row, schema=schema, source=source))
+-        if is_tob or (is_mbp10 and self._has_top_of_book(row)):
+-            items.append(self._normalize_quote(row, schema=schema, source=source))
+-        return tuple(items)
+-
+-    def _normalize_trade(self, row: dict[str, Any], *, schema: str, source: str) -> SourceItem:
+-        ts = self._timestamp(row.get("ts_event"), source=source)
+-        if isinstance(ts, DataQualityWarning):
+-            return ts
+-        price_ticks = self._price_ticks(row.get("price"), source=source)
+-        if isinstance(price_ticks, DataQualityWarning):
+-            return price_ticks
+-        size = row.get("size")
+-        if not isinstance(size, int) or isinstance(size, bool) or size <= 0:
+-            return self._warning(DataQualityCode.INVALID_RECORD, "invalid historical parquet record", source, event_ts_utc=ts)
+-        side_text = self._as_text(row.get("side"))
+-        side = None if side_text is None else side_text.upper()
+-        trade = Trade(event_ts_utc=ts, price_ticks=price_ticks, size=size, side=side)
+-        sequence = self._optional_int(row.get("sequence")) or self._optional_int(row.get("seq")) or 0
+-        key = (ts, sequence, side_signed_price_ticks(trade, buy_side=BUY_AGGRESSOR_SIDE), size)
+-        return key, trade
+-
+-    def _normalize_quote(self, row: dict[str, Any], *, schema: str, source: str) -> SourceItem:
+-        _ = schema
+-        ts = self._timestamp(row.get("ts_event"), source=source)
+-        if isinstance(ts, DataQualityWarning):
+-            return ts
+-        bid = self._price_ticks(self._first(row, TOB_ALIASES[0]), source=source)
+-        ask = self._price_ticks(self._first(row, TOB_ALIASES[1]), source=source)
+-        if isinstance(bid, DataQualityWarning):
+-            return bid
+-        if isinstance(ask, DataQualityWarning):
+-            return ask
+-        quote = Quote(
+-            event_ts_utc=ts,
+-            bid_price_ticks=bid,
+-            ask_price_ticks=ask,
+-            bid_size=self._optional_int(self._first(row, ("bid_size", "bid_sz", "bid_sz_00"))) or 0,
+-            ask_size=self._optional_int(self._first(row, ("ask_size", "ask_sz", "ask_sz_00"))) or 0,
++    @staticmethod
++    def _ts_column_kind(arrow_type: Any) -> tuple[str, int]:
++        """Classify the ts_event column: ``("ns", 1)`` (ns-precision objects),
++        ``("us", scale)`` (µs-domain datetimes; covers tz-aware s/ms/us units and
++        raw-integer ns columns via the int branch's ``// 1000``), ``("naive", 0)``
++        (every row warns INVALID_TIMESTAMP) or ``("scalar", 0)`` (per-cell
++        fallback through ``_timestamp`` — string-typed and exotic columns)."""
++
++        import pyarrow as pa
++
++        if pa.types.is_timestamp(arrow_type):
++            if arrow_type.tz is None:
++                return ("naive", 0)
++            if arrow_type.unit == "ns":
++                return ("ns", 1)
++            scale = _TS_UNIT_TO_US.get(arrow_type.unit)
++            if scale is not None:
++                return ("us", scale)
++            return ("scalar", 0)
++        if pa.types.is_integer(arrow_type):
++            return ("int", 0)
++        return ("scalar", 0)
++
++    def _ts_arrays(
++        self, column: Any, ts_kind: str, ts_scale: int, source: str
++    ) -> tuple[np.ndarray, np.ndarray, np.ndarray, Callable[[np.ndarray], list]]:
++        """Return ``(ts_us, ts_sort, valid, make_ts)`` for the batch's ts column.
++
++        ``ts_us`` is the µs-floor epoch timestamp used by the window masks (the
++        row-wise path window-filtered the constructed objects; for whole-µs bounds
++        the floor-µs compare is exactly equivalent, ns-precision included).
++        ``ts_sort`` is the native-precision sort integer; ``make_ts`` rebuilds the
++        exact objects the row-wise ``as_py``/``_timestamp`` decode produced."""
++
++        import pyarrow.compute as pc
++
++        rows = len(column)
++        if ts_kind == "naive":
++            zeros = np.zeros(rows, dtype=np.int64)
++            return zeros, zeros, np.zeros(rows, dtype=bool), _us_datetimes
++        if ts_kind in {"ns", "us"}:
++            valid = pc.is_valid(column).to_numpy(zero_copy_only=False)
++            raw = column.to_numpy(zero_copy_only=False).view("i8").astype(np.int64, copy=False)
++            raw = np.where(valid, raw, 0)
++            if ts_kind == "ns":
++                ts_us = raw // 1000
++                pandas = _pandas_or_none()
++                if pandas is not None:
++                    def make_ts(values: np.ndarray) -> list:
++                        return list(pandas.DatetimeIndex(values, tz="UTC"))
++                else:  # pragma: no cover - pandas present in all current envs
++                    def make_ts(values: np.ndarray) -> list:
++                        return _us_datetimes(values // 1000)
++                return ts_us, raw, valid, make_ts
++            in_range = (raw >= _MIN_DT_US // ts_scale) & (raw <= _MAX_DT_US // ts_scale)
++            valid &= in_range
++            ts_us = np.where(in_range, raw, 0) * ts_scale
++            return ts_us, ts_us, valid, _us_datetimes
++        if ts_kind == "int":
++            valid = pc.is_valid(column).to_numpy(zero_copy_only=False)
++            raw = self._int64_values(column)
++            ts_us = np.where(valid, raw, 0) // 1000
++            in_range = (ts_us >= _MIN_DT_US) & (ts_us <= _MAX_DT_US)
++            valid &= in_range
++            ts_us = np.where(in_range, ts_us, 0)
++            return ts_us, ts_us, valid, _us_datetimes
++        # scalar fallback (string-typed and exotic ts columns): per-cell _timestamp.
++        cells = column.to_pylist()
++        ts_us = np.zeros(rows, dtype=np.int64)
++        valid = np.zeros(rows, dtype=bool)
++        for index, cell in enumerate(cells):
++            converted = self._timestamp(cell, source=source)
++            if isinstance(converted, DataQualityWarning):
++                continue
++            valid[index] = True
++            ts_us[index] = (converted - _EPOCH) // _ONE_US
++        return ts_us, ts_us, valid, _us_datetimes
++
++    @staticmethod
++    def _int64_values(column: Any) -> np.ndarray:
++        """Integer column to int64 values (nulls as 0 — mask separately)."""
++
++        import pyarrow as pa
++        import pyarrow.compute as pc
++
++        return pc.fill_null(pc.cast(column, pa.int64()), 0).to_numpy(zero_copy_only=False)
++
++    def _grid_ticks(self, column: Any, rows: int) -> tuple[np.ndarray, np.ndarray]:
++        """Price column → ``(ticks int64, valid)`` under the exact-grid rule.
++
++        Float/int columns vectorize (a finite double is a multiple of the tick in
++        the row-wise ``Decimal(str(value))`` sense iff ``value / tick`` is integral
++        in binary floating point — division by 0.25 is exact); anything else falls
++        back to per-cell ``_price_ticks``. Nulls, NaN and non-finite values are
++        invalid (the row-wise path warned INVALID_PRICE for those too)."""
++
++        import pyarrow as pa
++        import pyarrow.compute as pc
++
++        if column is None:
++            return np.zeros(rows, dtype=np.int64), np.zeros(rows, dtype=bool)
++        column_type = column.type
++        if pa.types.is_floating(column_type) or pa.types.is_integer(column_type):
++            values = pc.cast(column, pa.float64()).to_numpy(zero_copy_only=False)
++            with np.errstate(invalid="ignore", over="ignore"):
++                ticks = values / DEFAULT_TICK_SIZE
++                valid = np.isfinite(ticks) & (ticks == np.floor(ticks))
++            safe = np.where(valid, ticks, 0)
++            return safe.astype(np.int64), valid
++        ticks_out = np.zeros(rows, dtype=np.int64)
++        valid = np.zeros(rows, dtype=bool)
++        for index, cell in enumerate(column.to_pylist()):
++            converted = self._price_ticks(cell, source="")
++            if isinstance(converted, DataQualityWarning):
++                continue
++            ticks_out[index] = converted
++            valid[index] = True
++        return ticks_out, valid
++
++    def _strict_size(self, column: Any, rows: int) -> tuple[np.ndarray, np.ndarray]:
++        """Trade size under the strict row-wise rule: integer cells only (bools and
++        non-int types never qualify), positive. Returns ``(size int64, valid)``."""
++
++        import pyarrow as pa
++
++        if column is None or not pa.types.is_integer(column.type):
++            return np.zeros(rows, dtype=np.int64), np.zeros(rows, dtype=bool)
++        import pyarrow.compute as pc
++
++        valid = pc.is_valid(column).to_numpy(zero_copy_only=False)
++        values = self._int64_values(column)
++        return values, valid & (values > 0)
++
++    def _optional_size(self, columns: list[Any], rows: int) -> np.ndarray:
++        """Quote depth via ``_optional_int(_first(...)) or 0`` semantics: first
++        non-null alias wins; unconvertible cells and nulls become 0; float cells
++        truncate toward zero (non-finite → 0); bool columns never qualify."""
++
++        import pyarrow as pa
++        import pyarrow.compute as pc
++
++        usable = [col for col in columns if not pa.types.is_boolean(col.type)]
++        if not usable:
++            return np.zeros(rows, dtype=np.int64)
++        simple = all(
++            pa.types.is_integer(col.type) or pa.types.is_floating(col.type) for col in usable
++        )
++        if simple:
++            merged = usable[0] if len(usable) == 1 else pc.coalesce(*usable)
++            values = pc.cast(merged, pa.float64()).to_numpy(zero_copy_only=False)
++            finite = np.isfinite(values)
++            return np.where(finite, np.trunc(np.where(finite, values, 0)), 0).astype(np.int64)
++        cell_rows = zip(*(col.to_pylist() for col in usable), strict=True)
++        out = np.zeros(rows, dtype=np.int64)
++        for index, cells in enumerate(cell_rows):
++            first = next((cell for cell in cells if cell is not None), None)
++            out[index] = self._optional_int(first) or 0
++        return out
++
++    @staticmethod
++    def _upper_text(column: Any) -> Any:
++        """Uppercased string array for a text-ish column (bytes cells decode), or
++        None when the column cannot be read as text."""
++
++        import pyarrow as pa
++        import pyarrow.compute as pc
++
++        try:
++            return pc.utf8_upper(pc.cast(column, pa.string()))
++        except Exception:
++            cells = [
++                None if cell is None else DatabentoParquetSource._as_text(cell)
++                for cell in column.to_pylist()
++            ]
++            return pc.utf8_upper(pa.array(cells, type=pa.string()))
++
++    def _effective_sequence(self, batch_columns: dict[str, Any], rows: int) -> np.ndarray:
++        """``_optional_int(sequence) or _optional_int(seq) or 0`` vectorized,
++        falsiness included: a null OR ZERO ``sequence`` falls through to ``seq``."""
++
++        import pyarrow as pa
++        import pyarrow.compute as pc
++
++        result = np.zeros(rows, dtype=np.int64)
++        chosen = np.zeros(rows, dtype=bool)
++        for name in ("sequence", "seq"):
++            column = batch_columns.get(name)
++            if column is None or pa.types.is_boolean(column.type):
++                continue
++            try:
++                values = self._int64_values(column)
++                valid = pc.is_valid(column).to_numpy(zero_copy_only=False)
++            except Exception:
++                cells = column.to_pylist()
++                converted = [self._optional_int(cell) for cell in cells]
++                values = np.array([0 if c is None else c for c in converted], dtype=np.int64)
++                valid = np.array([c is not None for c in converted], dtype=bool)
++            take = ~chosen & valid & (values != 0)
++            result[take] = values[take]
++            chosen |= take
++        return result
++
++    def _spread_mask(self, batch_columns: dict[str, Any], rows: int) -> np.ndarray:
++        """Vectorized ``_is_spread_symbol(row.get("raw_symbol") or row.get("symbol"))``:
++        falsy (null/empty) raw_symbol falls through to symbol; spread = contains '-'."""
++
++        import pyarrow as pa
++        import pyarrow.compute as pc
++
++        def text_column(name: str) -> Any:
++            column = batch_columns.get(name)
++            if column is None:
++                return None
++            try:
++                return pc.cast(column, pa.string())
++            except Exception:
++                return pa.array(
++                    [None if cell is None else self._as_text(cell) for cell in column.to_pylist()],
++                    type=pa.string(),
++                )
++
++        raw = text_column("raw_symbol")
++        sym = text_column("symbol")
++        if raw is None and sym is None:
++            return np.zeros(rows, dtype=bool)
++        if raw is None:
++            merged = sym
++        elif sym is None:
++            merged = pc.if_else(pc.equal(raw, ""), pa.nulls(rows, pa.string()), raw)
++        else:
++            falsy = pc.or_kleene(pc.is_null(raw), pc.equal(raw, ""))
++            merged = pc.if_else(pc.fill_null(falsy, True), sym, raw)
++        contains = pc.fill_null(pc.match_substring(merged, "-"), False)
++        return contains.to_numpy(zero_copy_only=False)
++
++    def _decode_batch(
++        self,
++        batch: Any,
++        *,
++        source: str,
++        is_trade_schema: bool,
++        is_mbp10: bool,
++        is_tob: bool,
++        front_month_id: int | None,
++        ts_kind: str,
++        ts_scale: int,
++        start_us: int | None,
++        end_us: int | None,
++    ) -> tuple[list[DataQualityWarning], _DecodedBatch | None]:
++        import pyarrow.compute as pc
++
++        rows = batch.num_rows
++        if rows == 0:
++            return [], None
++        columns = {name: batch.column(index) for index, name in enumerate(batch.schema.names)}
++
++        ts_us, ts_sort, ts_valid, make_ts = self._ts_arrays(
++            columns["ts_event"], ts_kind, ts_scale, source
++        )
++
++        keep = np.ones(rows, dtype=bool)
++        if self.front_month_only:
++            keep &= ~self._spread_mask(columns, rows)
++            if front_month_id is not None:
++                instrument = columns.get("instrument_id")
++                if instrument is None:
++                    keep &= False
++                else:
++                    inst_valid = pc.is_valid(instrument).to_numpy(zero_copy_only=False)
++                    inst = self._int64_values(instrument)
++                    keep &= inst_valid & (inst == front_month_id)
++
++        side_values: list[str | None]
++        side_column = columns.get("side")
++        if side_column is not None:
++            side_upper = self._upper_text(side_column)
++            buy_mask = pc.fill_null(
++                pc.equal(side_upper, BUY_AGGRESSOR_SIDE.upper()), False
++            ).to_numpy(zero_copy_only=False)
++            side_values = side_upper.to_pylist()
++        else:
++            buy_mask = np.zeros(rows, dtype=bool)
++            side_values = [None] * rows
++
++        if is_trade_schema:
++            trade_rows = keep.copy()
++        elif is_mbp10:
++            import pyarrow as pa
++
++            action_upper = self._upper_text(columns["action"])
++            trade_rows = keep & pc.fill_null(
++                pc.is_in(action_upper, value_set=pa.array(["T", "TRADE"])), False
++            ).to_numpy(zero_copy_only=False)
++        else:
++            trade_rows = np.zeros(rows, dtype=bool)
++
++        if is_tob:
++            quote_rows = keep.copy()
++        elif is_mbp10:
++            has_tob = np.zeros(rows, dtype=bool)
++            for group in TOB_ALIASES:
++                for name in group:
++                    column = columns.get(name)
++                    if column is not None:
++                        has_tob |= pc.is_valid(column).to_numpy(zero_copy_only=False)
++            quote_rows = keep & has_tob
++        else:
++            quote_rows = np.zeros(rows, dtype=bool)
++
++        window = np.ones(rows, dtype=bool)
++        if start_us is not None:
++            window &= ts_us >= start_us
++        if end_us is not None:
++            window &= ts_us < end_us
++
++        sequence = self._effective_sequence(columns, rows)
++
++        warnings: list[DataQualityWarning] = []
++        trade_warn = np.zeros(rows, dtype=bool)
++        quote_warn = np.zeros(rows, dtype=bool)
++        price_ticks = np.zeros(rows, dtype=np.int64)
++        size_values = np.zeros(rows, dtype=np.int64)
++        trade_emit = np.zeros(rows, dtype=bool)
++        if trade_rows.any():
++            price_ticks, price_valid = self._grid_ticks(columns.get("price"), rows)
++            size_values, size_valid = self._strict_size(columns.get("size"), rows)
++            trade_ok = ts_valid & price_valid & size_valid
++            trade_warn = trade_rows & ~trade_ok
++            trade_emit = trade_rows & trade_ok & window
++
++        bid_ticks = np.zeros(rows, dtype=np.int64)
++        ask_ticks = np.zeros(rows, dtype=np.int64)
++        bid_sizes = np.zeros(rows, dtype=np.int64)
++        ask_sizes = np.zeros(rows, dtype=np.int64)
++        quote_emit = np.zeros(rows, dtype=bool)
++        if quote_rows.any():
++            import pyarrow as pa
++
++            def merged_price(aliases: tuple[str, ...]) -> Any:
++                present = [columns[name] for name in aliases if name in columns]
++                if not present:
++                    return None
++                if len(present) == 1:
++                    return present[0]
++                try:
++                    return pc.coalesce(*(pc.cast(col, pa.float64()) for col in present))
++                except Exception:
++                    return pa.array(
++                        [
++                            next((cell for cell in cells if cell is not None), None)
++                            for cells in zip(*(c.to_pylist() for c in present), strict=True)
++                        ]
++                    )
++
++            bid_ticks, bid_valid = self._grid_ticks(merged_price(TOB_ALIASES[0]), rows)
++            ask_ticks, ask_valid = self._grid_ticks(merged_price(TOB_ALIASES[1]), rows)
++            bid_sizes = self._optional_size(
++                [columns[n] for n in BID_SIZE_ALIASES if n in columns], rows
++            )
++            ask_sizes = self._optional_size(
++                [columns[n] for n in ASK_SIZE_ALIASES if n in columns], rows
++            )
++            quote_ok = ts_valid & bid_valid & ask_valid
++            quote_warn = quote_rows & ~quote_ok
++            quote_emit = quote_rows & quote_ok & window
++
++        if trade_warn.any() or quote_warn.any():
++            # Row order, trade item before the same row's quote item — exactly the
++            # row-wise loop's yield order. INVALID_RECORD (bad size) carries the ts.
++            for row in np.flatnonzero(trade_warn | quote_warn).tolist():
++                if trade_warn[row]:
++                    if not ts_valid[row]:
++                        warnings.append(self._warning(DataQualityCode.INVALID_TIMESTAMP, "invalid historical parquet timestamp", source))
++                    elif not price_valid[row]:
++                        warnings.append(self._warning(DataQualityCode.INVALID_PRICE, "invalid historical parquet price", source))
++                    else:
++                        row_ts = make_ts(ts_sort[np.array([row])])[0]
++                        warnings.append(self._warning(DataQualityCode.INVALID_RECORD, "invalid historical parquet record", source, event_ts_utc=row_ts))
++                if quote_warn[row]:
++                    if not ts_valid[row]:
++                        warnings.append(self._warning(DataQualityCode.INVALID_TIMESTAMP, "invalid historical parquet timestamp", source))
++                    else:
++                        warnings.append(self._warning(DataQualityCode.INVALID_PRICE, "invalid historical parquet price", source))
++
++        trade_idx = np.flatnonzero(trade_emit)
++        quote_idx = np.flatnonzero(quote_emit)
++        total = trade_idx.size + quote_idx.size
++        if total == 0:
++            return warnings, None
++
++        zeros_q = np.zeros(quote_idx.size, dtype=np.int64)
++        zeros_t = np.zeros(trade_idx.size, dtype=np.int64)
++        signed = np.where(buy_mask[trade_idx], price_ticks[trade_idx], -price_ticks[trade_idx])
++        cat_ts = np.concatenate((ts_sort[trade_idx], ts_sort[quote_idx]))
++        cat_seq = np.concatenate((sequence[trade_idx], sequence[quote_idx]))
++        cat_ssp = np.concatenate((signed, zeros_q))
++        cat_size = np.concatenate((size_values[trade_idx], zeros_q))
++        # Emission index = 2*row for the trade item, 2*row+1 for the quote item:
++        # the stable tie-break reproducing the row-wise insertion order exactly.
++        cat_emit = np.concatenate((trade_idx * 2, quote_idx * 2 + 1))
++        order = np.lexsort((cat_emit, cat_size, cat_ssp, cat_seq, cat_ts))
++
++        is_quote = np.concatenate(
++            (np.zeros(trade_idx.size, dtype=bool), np.ones(quote_idx.size, dtype=bool))
++        )[order]
++        side_for_trades = [side_values[row] for row in trade_idx.tolist()]
++        cat_side = side_for_trades + [None] * quote_idx.size
++        decoded = _DecodedBatch(
++            is_quote=is_quote,
++            ts_sort=cat_ts[order],
++            seq=cat_seq[order],
++            ssp=cat_ssp[order],
++            size=cat_size[order],
++            price_ticks=np.concatenate((price_ticks[trade_idx], zeros_q))[order],
++            side=[cat_side[position] for position in order.tolist()],
++            bid_ticks=np.concatenate((zeros_t, bid_ticks[quote_idx]))[order],
++            ask_ticks=np.concatenate((zeros_t, ask_ticks[quote_idx]))[order],
++            bid_size=np.concatenate((zeros_t, bid_sizes[quote_idx]))[order],
++            ask_size=np.concatenate((zeros_t, ask_sizes[quote_idx]))[order],
++            make_ts=make_ts,
+         )
+-        sequence = self._optional_int(row.get("sequence")) or self._optional_int(row.get("seq")) or 0
+-        return (ts, sequence, 0, 0), quote
++        return warnings, decoded
++
+ 
+     @staticmethod
+     def _window_row_groups(
+@@ -484,13 +1077,6 @@ class DatabentoParquetSource:
+             return None
+         return max(ranked)[1]
+ 
+-    def _is_off_front_month(self, row: dict[str, Any], front_month_id: int | None) -> bool:
+-        if self._is_spread_symbol(row.get("raw_symbol") or row.get("symbol")):
+-            return True
+-        if front_month_id is None:
+-            return False
+-        return self._optional_int(row.get("instrument_id")) != front_month_id
+-
+     @staticmethod
+     def _as_text(value: Any) -> str | None:
+         """Decode parquet string-ish cells; mixed columns surface as bytes."""
+@@ -501,20 +1087,6 @@ class DatabentoParquetSource:
+             return value.decode("utf-8", errors="replace")
+         return str(value)
+ 
+-    @staticmethod
+-    def _is_spread_symbol(value: Any) -> bool:
+-        text = DatabentoParquetSource._as_text(value)
+-        return text is not None and "-" in text
+-
+-    @staticmethod
+-    def _is_trade_action(value: Any) -> bool:
+-        text = DatabentoParquetSource._as_text(value)
+-        return text is not None and text.upper() in {"T", "TRADE"}
+-
+-    @staticmethod
+-    def _has_top_of_book(row: dict[str, Any]) -> bool:
+-        return any(name in row and row.get(name) is not None for aliases in TOB_ALIASES for name in aliases)
+-
+     @staticmethod
+     def _missing_tob(names: set[str]) -> set[str]:
+         missing = set()
+@@ -571,13 +1143,6 @@ class DatabentoParquetSource:
+         except (TypeError, ValueError):
+             return None
+ 
+-    @staticmethod
+-    def _first(row: dict[str, Any], names: tuple[str, ...]) -> Any:
+-        for name in names:
+-            if row.get(name) is not None:
+-                return row.get(name)
+-        return None
+-
+     @staticmethod
+     def _warning(code: DataQualityCode, message: str, source: str, *, severity: DataQualitySeverity = DataQualitySeverity.WARNING, event_ts_utc: datetime | None = None, **metadata: Any) -> DataQualityWarning:
+         return DataQualityWarning(code=code, message=message, severity=severity, source=source, event_ts_utc=event_ts_utc, metadata=metadata)

@@ -1,0 +1,400 @@
+diff --git a/docs/DECISIONS.md b/docs/DECISIONS.md
+index 9bc40af..f42183c 100644
+--- a/docs/DECISIONS.md
++++ b/docs/DECISIONS.md
+@@ -157,6 +157,29 @@ proven on a FRESH model, then soaked ≥7 trading days before any number is trus
+   deterministic end-to-end. The un-re-gated remainder (38 of 73 days) is accepted
+   risk, bounded by legs (1)+(2). References: D-P-15 (the identity-proof vectorization
+   this adoption completes); PROGRESS §W3b CLOSE (the coverage table + run artifacts).
++- D-P-17 ADOPTED IN-WINDOW (2026-07-11) — INGEST: action-bearing TOB schemas emit
++  trades. `DatabentoParquetSource._decode_batch` classifies `action∈{T,TRADE}` rows as
++  Trade events for `is_tob` schemas (mbp-1/cmbp-1/tbbo) WHEN the file carries an
++  `action` column — exactly the mbp-10 rule (the same row still emits its Quote iff
++  L1 TOB changed; ordering follows the unchanged canonical key (ts, seq,
++  side-signed-price, size): a sell Trade sorts before its row's Quote, a buy Trade
++  after — identical to mbp-10 on identical rows, pinned by test). bbo/cbbo files
++  carry no action column and keep quotes-only behavior. This AMENDS the D-P-15 proof
++  contract line "mbp-1/bbo/tbbo: every row -> Quote only", which was vacuous until
++  now: no mbp1/bbo/tbbo parquet file existed in any store, so no consumer sees a
++  behavior change on existing data (the live path is separate code). Why: the INGEST
++  window converts the MBP-1 batch download (2026-01-11..2026-07-10) into
++  `mbp1.parquet` store days under the honest-naming ruling; without trade
++  classification those days drain quotes-only, the D-036 per-day build (trade-bar
++  clock, `engine_decision.py` Trade-only drive) returns empty datasets, and PDH/PDL
++  prior-day extremes break — i.e. the window's own fresh-day gate (P4b) is
++  unsatisfiable. Scope deviation note: the INGEST work order scoped SC changes to
++  file discovery only (moot — `DAY_FILE_PRIORITY` has been mbp1-aware since W1);
++  this classification change is the minimal amendment that makes honestly-named
++  mbp-1 days first-class, taken in-window and flagged in the close record. Gated by:
++  oracle tests (mbp-1 fixture with T rows → Trade+Quote emission; bbo fixture →
++  quotes-only) + the full SC suite + the P4a overlap identity gate (mbp10 vs
++  converted mbp1 through the reader: trades AND deduped L1 quotes, event-by-event).
+ 
+ ## How to add an entry
+ New ruling in a design exchange → it gets the next D-P id, lands here in the same
+diff --git a/docs/PLATFORM_REFACTOR_PROGRESS.md b/docs/PLATFORM_REFACTOR_PROGRESS.md
+index 492dcbd..f48f7ef 100644
+--- a/docs/PLATFORM_REFACTOR_PROGRESS.md
++++ b/docs/PLATFORM_REFACTOR_PROGRESS.md
+@@ -2229,3 +2229,147 @@ committed tree. SC docs-only; TL untouched.
+ cross-preset appendix at the QL root; `PRESETS_SC_DIFF.txt` (`d92eaf7..tip`, docs only) at the
+ SC root. **NOT pushed (work-order FULL STOP).** Pins: no bump required — no consumer-facing SC
+ change this window.
++
++**PRESETS — PUSHED annotation (recorded 2026-07-11, INGEST P0 doc-op):** the window has since
++been GREENLIT + PUSHED: SC `origin/platform-refactor` = `1a58aa8` (close record rides the
++greenlight) with **ci run 29136911173 (#12) = success**; QL `origin/platform-refactor` =
++`49c2f22` with **ci run 29136917345 (#11) = success**, cold-installing strategy-core resolving
++the pin `3d4193e` on a fresh runner (pin witness). Pins unchanged at `3d4193e` ×2 (no
++consumer-facing SC change; 9.6 convention). TL untouched — no run owed. Both CI ids banked
++here; no debt outstanding.
++
++---
++
++#### Databento batch download — provenance (recorded 2026-07-11, INGEST P0 doc-op)
++
++Portal **batch download** job `GLBX-20260711-EEDSMFU845` (Databento web portal, **$0 —
++plan-covered**, no metered cost): dataset GLBX.MDP3, schema **MBP-1**, encoding DBN +
++zstd, **split by day**, range **2026-01-11 .. 2026-07-10**. Delivered as one zip
++(`Claude-Quant-Lab/data/databento/GLBX-20260711-EEDSMFU845.zip`, ~38.7 GB): **156 daily
++files** `glbx-mdp3-YYYYMMDD.mbp-1.dbn.zst` + 3 job JSONs (`condition.json`,
++`metadata.json`, `manifest.json`). Purpose: extend the local NQ store past the MBP-10 era
++(store ends **2026-02-22**) — overlap 2026-01-11..2026-02-22 enables an identity gate
++against the existing `mbp10.parquet` days before the post-gap days become first-class.
++
++Current window: **INGEST** — convert the batch download into first-class store days
++(`NQ/<date>/mbp1.parquet`), prove L1-projection identity on overlap days against the
++original MBP-10 store through `DatabentoParquetSource`, fresh-day dataset build + route-seam
++check, then full conversion (QL converter window; SC touched ONLY if the reader's file
++discovery hardcodes `mbp10.parquet`).
++
++---
++
++#### INGEST — batch MBP-1 download → first-class store days (2026-07-11; QL converter window + SC D-P-17 deviation + TL catalog fix, CLOSED — LOCAL, not pushed)
++
++**Commits:** SC, base `1a58aa8`: `9692696` (P0 doc-op) → `7340b2d` (D-P-17 trade
++classification + discovery-precedence pins) → `b21316e` (close-verify: era-boundary
++schema-matching prior-day fallback + buy-trade ordering pin + D-P-17 wording) → this close
++record. QL, base `49c2f22`: `8f6f45e` (P2 converter + tests) → `6601dc7` (close-verify:
++schema-pin order-diff message + sanity docstring). TL, base `67e03e4`: `58a5a85`
++(close-verify: replay-catalog mbp-1 gate accepts level-00 TOB names). Pins UNCHANGED at
++`3d4193e` ×2 locally; **bump owed at greenlight** — D-P-17 + the boundary fallback are
++consumer-facing SC code (9.6 convention).
++
++**P1 recon verdicts (banked):** (a) zip = 156 daily `glbx-mdp3-YYYYMMDD.mbp-1.dbn.zst`
++(UTC-day split) + 3 job JSONs; NQ.FUT parent → instrument_id, so each file mixes NQ
++outrights (front + back months) with calendar spreads — same multi-instrument mix as the
++store; prices int64 1e-9; trades ride as action='T' rows (flags=0); per-instrument snapshot
++seed rows (flags=168) open each file. (b) SCHEMA DIFF VERDICT: `DBNStore.to_parquet`
++DEFAULTS in databento 0.81.0 ≡ the store schema exactly on all 20 shared columns (name,
++arrow type, order, semantics — float dollars, tz-aware ns, mapped symbol, ts_recv pandas
++index); only diff = the 54 level-01..09 columns, absent by nature of mbp-1. (c) discovery
++NOT hardcoded — `DAY_FILE_PRIORITY` has been mbp1-aware with mbp10 precedence since W1 →
++the literal P3 is SKIPPED. Reader never reads levels beyond 00 (`DECODE_SELECTED`
++column-pruned read; W3A-READER P2 contract, D-P-15/D-P-16). (d) reuse verdict:
++`process_batch_download.py` built the modern store era; its transform core
++(`DBNStore.from_file → to_df()` defaults → write-time spread filter → `df.to_parquet`) is
++adopted VERBATIM by the new converter. Store paths: ONE physical store (QL
++`data/databento/NQ`; Trade-Dashboard\data is a symlink onto it).
++
++**DEVIATION — D-P-17 (SC code beyond the work order's P3 scope, flagged):** the reader's
++documented contract had mbp-1 parquet = QUOTES-ONLY (no Trade events), and the D-036
++per-day build drives bars/levels/touches from Trade events only — so converted fresh days
++would produce EMPTY datasets and the window's own P4b gate was unsatisfiable; the
++mbp10-masquerade dodge is forbidden by the honest-naming ruling (below). Minimal amendment
++taken in-window: action-bearing TOB schemas (mbp-1/cmbp-1/tbbo) classify T rows as trades,
++exactly the mbp-10 rule; bbo/cbbo (no action column) unchanged. The contract line it amends
++was vacuous — no mbp1/bbo/tbbo parquet existed in any store, so no existing consumer sees
++different behavior. DECISIONS.md D-P-17 + oracle tests (incl. mbp-1 ≡ mbp-10 ordering
++parity on identical rows for both buy and sell trades).
++
++**HONEST-NAMING RULING (recorded):** store day files are named for the schema they contain
++— MBP-1 data lands as `mbp1.parquet`, never as a `mbp10.parquet` masquerade (which would
++have drained through the untouched reader but lied about depth). The reader was amended
++(D-P-17) so honestly-named files are first-class instead.
++
++**P2 (converter, QL `scripts/ingest_databento_batch.py`):** zip-or-dir →
++`NQ/<date>/mbp1.parquet`, the process_batch_download.py core verbatim + `--workers`
++(default 2), resume (exists-AND-loads), per-day `INGEST.log` lines (day, rows, seconds,
++MB, notes), fatal sanity gates (non-empty; ts_recv within the file's UTC day), a written
++**schema pin** against the store fingerprint (off-pin days are deleted, never left), and
++date-range filters. Spreads dropped at write (3,830,522 rows total), back-month outrights
++kept — front-month election stays read-time, matching the store.
++
++**P4 gate results (IDENTITY RESULTS):** (a) OVERLAP IDENTITY — 2026-01-12, 2026-02-12
++(dense), 2026-02-20: original mbp10 vs converted mbp1 through `DatabentoParquetSource`
++(single-file drains, full window, front-month): trade / quote / warning streams **EXACT
++event-by-event** — 35,677,893 events total, 1,163,904 trades bit-exact, 0 warnings; merged
++interleave exact except **7 ns-tied clusters** (2–3 events each, dense days only), every
++one permutation-verified with byte-identical underlying rows — root cause: the reader's
++per-batch sort granularity on differently-sized files (venue fill+cancel pairs share a
++sequence number; a 65,536-row batch boundary can split the cluster; first case: converted
++row 3,407,872 = 52×65,536 at 02-12 14:51:17). Not an ingest defect; log =
++`INGEST_IDENTITY.log` (QL root). (b) FRESH-DAY BUILD — 2026-03-02 through the D-036
++per-day build (tag `7850272e` exact): cache written, **5 rows** (Feb warmed-day range
++3–6), `prev_full_hl` seed exact via the 02-27 walk-back (Sunday 03-01 empty), 147 s /
++3.0 GB RSS. (c) ROUTE-SEAM — key present, run on 2026-03-02: trade_count delta **0**
++(441,575), tob_transitions delta **0** (12,625,748), first-event equal; the ±1 µs sampled
++ts diffs are the check's own float-µs serialization (`route_seam_check.py:55`), price/size
++identical at every sampled position; report `route_seam_report_ingest.json` (QL root).
++
++**Full conversion (COUNTS):** **156/156 days converted, 0 failed** (37 overlap alongside
++untouched mbp10.parquet — precedence keeps them serving the original — + 119 fresh
++2026-02-23..2026-07-10), 1,833,605,368 rows, 43.6 GB, ~39 min wall at workers=2 across the
++staged runs. 48 days carry a benign 1–2-row invalid-price WARN (far-from-market
++cancel-order prices on quote rows — the `price` field of non-trade rows is never consumed
++by the reader; the mbp10 originals carry the same rows). `INGEST.log` (QL root).
++
++**Close verify (3 find-lenses + adversarial refuters):** 7 CONFIRMED (3 major / 4 minor),
++6 refuted. All fixed in-window except one recorded debt:
++- **MAJOR (era boundary, found by two lenses):** `for_trading_day(2026-02-23)` degraded to
++  single-file (prior 02-22 resolves mbp10 ≠ mbp-1), silently dropping the Sunday
++  Globex-open hour (8,413 front-month trades) AND understating the 02-24 PDH seed by
++  19.75 pt vs the QL research carry — the research↔serving seed-drift class. **FIXED**
++  (`b21316e`): schema-MATCHING prior-day fallback before degrading; witnessed live
++  post-fix: two-file composition, zero warnings, first trade 23:00:00 UTC, 02-24 extremes
++  100239/98672 (true full-session values). Degrade-still-works pinned by test.
++- **MAJOR (TL):** replay-catalog mbp-1 live-column gate lacked the `bid_px_00/ask_px_00`
++  aliases the ingested files use → the ENTIRE new era was invisible to TL replay (0
++  sources ≥ 02-23). **FIXED** (`58a5a85`); witnessed post-fix: 156 mbp-1 sources, all 119
++  new-era days discoverable.
++- minor: D-P-17 wording claimed unconditional trade-before-quote (false for buy trades —
++  canonical-key-determined) → FIXED + mbp-1≡mbp-10 ordering parity test.
++- minor: converter schema-pin order-diff message inverted (pure order mismatch → empty
++  message) → FIXED + test.
++- minor: sanity docstring overclaimed PBD-check mirroring → FIXED (docstring; the
++  non-monotonic/dup-ts warns are intentionally dropped as always-firing noise).
++- minor **NAMED DEBT (not fixed):** QL dashboard `replay_client.py` (+ legacy backtest
++  scripts) are mbp10-hardcoded — mbp1-era days are invisible to the QL dashboard replay
++  surface. Off this window's critical path; owed to a future window.
++Refuted (6): converter resume/atomicity, NaT-blindness, duplicate-member race, identity
++permutation-tolerance over-breadth, day-class coverage gap, unfiltered back-month/spread
++divergence — refuter reasoning in the verify journal.
++
++**Gates (final committed trees):** SC suite **205 passed** (202 at D-P-17 + 3 close-verify
++tests; tests + validation, real-store validation harnesses included) + ruff clean (tracked
++dirs). QL suite **830 passed** (822 at PRESETS + 8 window tests) + `ruff check src tests
++scripts` clean. TL backend **511 passed / 1 skipped**. Era-boundary + catalog witnesses
++re-run live post-fix (above).
++
++**Deliverables:** `INGEST_SC_DIFF.txt` (`1a58aa8..tip`) / `INGEST_QL_DIFF.txt`
++(`49c2f22..6601dc7`) / `INGEST_TL_DIFF.txt` (`67e03e4..58a5a85`) at the repo roots;
++`INGEST_IDENTITY.log`, `INGEST.log`, `route_seam_report_ingest.json` at the QL root; the
++identity/P4b harnesses `scratch_ingest_identity.py` / `scratch_ingest_p4b.py` (QL root,
++untracked, re-runnable). **NOT pushed (work-order FULL STOP).** Pins: bump owed at
++greenlight (consumer-facing SC: D-P-17 + boundary fallback); TL/QL runs owed at greenlight
++witness the new pin.
+diff --git a/src/strategy_core/data/databento_parquet.py b/src/strategy_core/data/databento_parquet.py
+index 368fe3e..613de45 100644
+--- a/src/strategy_core/data/databento_parquet.py
++++ b/src/strategy_core/data/databento_parquet.py
+@@ -260,9 +260,12 @@ class DatabentoParquetSource:
+         (``<symbol_dir>/<YYYY-MM-DD>/{mbp10,mbp1,trades}.parquet``), DST-aware via
+         ``SESSION_TIMEZONE``. The two files are partitioned at UTC midnight of
+         ``trading_day`` — the physical file boundary — so rows duplicated across
+-        adjacent day files are never double-emitted. A missing (or schema-mismatched)
+-        prior-day file degrades to a single-file scan and surfaces a
+-        ``MISSING_PRIOR_DAY_FILE`` warning on the event stream.
++        adjacent day files are never double-emitted. When the priority-resolved
++        prior-day file's schema differs from the day's, a schema-MATCHING
++        prior-day file is preferred if present (schema-era boundary); only a
++        missing (or unmatchable-schema) prior-day file degrades to a
++        single-file scan with a ``MISSING_PRIOR_DAY_FILE`` warning on the
++        event stream.
+         """
+ 
+         root = Path(symbol_dir)
+@@ -281,18 +284,35 @@ class DatabentoParquetSource:
+         prev_resolved = cls._resolve_day_file(root, prev_day)
+         warnings: list[DataQualityWarning] = []
+         if prev_resolved is not None and prev_resolved[1] != day_schema:
+-            warnings.append(
+-                cls._warning(
+-                    DataQualityCode.MISSING_PRIOR_DAY_FILE,
+-                    "prior-day file schema differs; trading-day window served from a single file",
+-                    str(day_path),
+-                    trading_day=trading_day.isoformat(),
+-                    prior_day=prev_day.isoformat(),
+-                    prior_schema=prev_resolved[1],
+-                    schema=day_schema,
+-                )
++            # INGEST close-verify fix: at a schema-era boundary (e.g. the prior
++            # day resolves mbp10.parquet while the day is mbp-1-only), a
++            # schema-MATCHING prior-day file may still exist in the folder —
++            # prefer it over degrading, so the prior-evening hour is served and
++            # prior_full_day_extremes stays exact across the boundary.
++            matching = next(
++                (
++                    (root / prev_day.isoformat() / filename, schema)
++                    for filename, schema in DAY_FILE_PRIORITY
++                    if schema == day_schema
++                    and (root / prev_day.isoformat() / filename).exists()
++                ),
++                None,
+             )
+-            prev_resolved = None
++            if matching is not None:
++                prev_resolved = matching
++            else:
++                warnings.append(
++                    cls._warning(
++                        DataQualityCode.MISSING_PRIOR_DAY_FILE,
++                        "prior-day file schema differs; trading-day window served from a single file",
++                        str(day_path),
++                        trading_day=trading_day.isoformat(),
++                        prior_day=prev_day.isoformat(),
++                        prior_schema=prev_resolved[1],
++                        schema=day_schema,
++                    )
++                )
++                prev_resolved = None
+         if prev_resolved is None:
+             if not warnings:
+                 warnings.append(
+@@ -839,7 +859,11 @@ class DatabentoParquetSource:
+ 
+         if is_trade_schema:
+             trade_rows = keep.copy()
+-        elif is_mbp10:
++        elif is_mbp10 or (is_tob and "action" in columns):
++            # INGEST (D-P-17): action-bearing TOB schemas (mbp-1/tbbo) carry every
++            # trade print as an action='T' row — classify them exactly like mbp-10
++            # so mbp1.parquet store days are trade+quote first-class. bbo/cbbo files
++            # have no action column and keep their quotes-only behavior.
+             import pyarrow as pa
+ 
+             action_upper = self._upper_text(columns["action"])
+diff --git a/tests/test_databento_parquet_day_mode.py b/tests/test_databento_parquet_day_mode.py
+index 0724cbc..0a3a54b 100644
+--- a/tests/test_databento_parquet_day_mode.py
++++ b/tests/test_databento_parquet_day_mode.py
+@@ -165,3 +165,67 @@ def test_single_file_global_window_still_applies(tmp_path: Path) -> None:
+     )
+     prices = [trade.price_ticks / 4 for trade in _trades(list(source.events()))]
+     assert prices == [17001.0]
++
++
++def test_day_file_priority_prefers_mbp10_over_mbp1(tmp_path: Path) -> None:
++    # INGEST: overlap days carry both files; mbp10.parquet keeps serving the day.
++    root = tmp_path / "NQ"
++    base = datetime(2026, 2, 18, 14, tzinfo=UTC)
++    _write(root / "2026-02-18" / "mbp10.parquet", [
++        {"ts_event": base, "action": "T", "price": 17000.0, "size": 1, "side": "B", "bid_px_00": 16999.75, "ask_px_00": 17000.25, "sequence": 1},
++    ])
++    _write(root / "2026-02-18" / "mbp1.parquet", [
++        {"ts_event": base, "action": "T", "price": 15000.0, "size": 1, "side": "B", "bid_px_00": 14999.75, "ask_px_00": 15000.25, "sequence": 1},
++    ])
++    source = DatabentoParquetSource.for_trading_day(root, date(2026, 2, 18))
++    assert source.schema == "mbp-10"
++    assert [t.price_ticks for t in _trades(list(source.events()))] == [68000]
++
++
++def test_day_file_priority_falls_back_to_mbp1_when_alone(tmp_path: Path) -> None:
++    root = tmp_path / "NQ"
++    base = datetime(2026, 3, 2, 14, tzinfo=UTC)
++    _write(root / "2026-03-02" / "mbp1.parquet", [
++        {"ts_event": base, "action": "T", "price": 17000.0, "size": 1, "side": "B", "bid_px_00": 16999.75, "ask_px_00": 17000.25, "sequence": 1},
++    ])
++    source = DatabentoParquetSource.for_trading_day(root, date(2026, 3, 2))
++    assert source.schema == "mbp-1"
++    assert [t.price_ticks for t in _trades(list(source.events()))] == [68000]
++
++
++def test_era_boundary_prior_day_falls_back_to_schema_matching_file(tmp_path: Path) -> None:
++    # INGEST close-verify fix: the prior day resolves mbp10.parquet by priority
++    # while the trading day is mbp1-only, but a schema-MATCHING prior mbp1.parquet
++    # exists -> two-file composition serves the prior-evening hour from IT, with
++    # no degrade warning. Distinct prices prove which prior file was read.
++    root = tmp_path / "NQ"
++    prev_evening = datetime(2026, 2, 22, 23, 30, tzinfo=UTC)  # inside [18:00 ET, midnight)
++    day_morning = datetime(2026, 2, 23, 14, tzinfo=UTC)
++
++    def mbp_row(ts: datetime, price: float, seq: int) -> dict:
++        return {"ts_event": ts, "action": "T", "price": price, "size": 1, "side": "B", "bid_px_00": price - 0.25, "ask_px_00": price + 0.25, "sequence": seq}
++
++    _write(root / "2026-02-22" / "mbp10.parquet", [mbp_row(prev_evening, 15000.0, 1)])
++    _write(root / "2026-02-22" / "mbp1.parquet", [mbp_row(prev_evening, 17000.0, 1)])
++    _write(root / "2026-02-23" / "mbp1.parquet", [mbp_row(day_morning, 17010.0, 2)])
++    source = DatabentoParquetSource.for_trading_day(root, date(2026, 2, 23))
++    assert source.schema == "mbp-1"
++    assert [p.name for p in source.paths] == ["mbp1.parquet", "mbp1.parquet"]
++    events = list(source.events())
++    assert not [e for e in events if isinstance(e, DataQualityWarning)]
++    assert [t.price_ticks / 4 for t in _trades(events)] == [17000.0, 17010.0]
++
++
++def test_era_boundary_without_matching_prior_file_still_degrades(tmp_path: Path) -> None:
++    root = tmp_path / "NQ"
++    _write(root / "2026-02-22" / "mbp10.parquet", [
++        {"ts_event": datetime(2026, 2, 22, 23, 30, tzinfo=UTC), "action": "T", "price": 15000.0, "size": 1, "side": "B", "bid_px_00": 14999.75, "ask_px_00": 15000.25, "sequence": 1},
++    ])
++    _write(root / "2026-02-23" / "mbp1.parquet", [
++        {"ts_event": datetime(2026, 2, 23, 14, tzinfo=UTC), "action": "T", "price": 17010.0, "size": 1, "side": "B", "bid_px_00": 17009.75, "ask_px_00": 17010.25, "sequence": 2},
++    ])
++    source = DatabentoParquetSource.for_trading_day(root, date(2026, 2, 23))
++    assert len(source.paths) == 1
++    codes = [w.code for w in source.pending_warnings]
++    assert DataQualityCode.MISSING_PRIOR_DAY_FILE in codes
++    assert [t.price_ticks / 4 for t in _trades(list(source.events()))] == [17010.0]
+diff --git a/tests/test_databento_parquet_source.py b/tests/test_databento_parquet_source.py
+index 4433650..4e86b96 100644
+--- a/tests/test_databento_parquet_source.py
++++ b/tests/test_databento_parquet_source.py
+@@ -62,6 +62,57 @@ def test_front_month_filter_drops_spreads_and_non_dominant_instruments(tmp_path:
+     assert all(event.price_ticks == 68000 for event in events)
+ 
+ 
++def test_mbp1_action_trade_rows_emit_trades_like_mbp10(tmp_path: Path) -> None:
++    # D-P-17: action-bearing TOB schemas (mbp-1/tbbo) classify T rows as trades — the
++    # mbp-10 rule. The same row still emits its Quote iff level-0 state changed, with
++    # the row's Trade item before its Quote item.
++    base = datetime(2026, 3, 2, 14, tzinfo=UTC)
++    rows = [
++        {"ts_event": base, "action": "A", "price": 17000.0, "size": 1, "side": "B", "bid_px_00": 16999.75, "ask_px_00": 17000.25, "sequence": 1},
++        # trade with unchanged book -> Trade emitted, Quote suppressed by TOB dedup
++        {"ts_event": base.replace(minute=1), "action": "T", "price": 17000.25, "size": 2, "side": "B", "bid_px_00": 16999.75, "ask_px_00": 17000.25, "sequence": 2},
++        # trade that moves the book -> Trade then Quote from the same row
++        {"ts_event": base.replace(minute=2), "action": "T", "price": 17000.25, "size": 1, "side": "A", "bid_px_00": 17000.0, "ask_px_00": 17000.5, "sequence": 3},
++    ]
++    for filename, schema in (("mbp1.parquet", "mbp-1"), ("tbbo.parquet", "tbbo")):
++        path = _write(tmp_path / filename, rows)
++        events = list(DatabentoParquetSource(paths=(path,), requested_symbol="NQ.c.0", schema=schema).events())
++        assert [type(event).__name__ for event in events] == ["Quote", "Trade", "Trade", "Quote"]
++        trades = [event for event in events if isinstance(event, Trade)]
++        assert [(t.price_ticks, t.size, t.side) for t in trades] == [(68001, 2, "B"), (68001, 1, "A")]
++
++
++def test_mbp1_buy_trade_quote_ordering_matches_mbp10(tmp_path: Path) -> None:
++    # Close-verify pin: at equal (ts, seq) the canonical key orders a row's
++    # Quote item (ssp=0) BEFORE its BUY Trade item (ssp=+price) — for sells the
++    # Trade sorts first. The invariant is mbp-1 == mbp-10 on identical rows.
++    base = datetime(2026, 3, 2, 14, tzinfo=UTC)
++    rows = [
++        {"ts_event": base, "action": "A", "price": 17000.0, "size": 1, "side": "B", "bid_px_00": 16999.75, "ask_px_00": 17000.25, "sequence": 1},
++        # buy trade that moves the book: same row emits Quote BEFORE Trade
++        {"ts_event": base.replace(minute=1), "action": "T", "price": 17000.25, "size": 1, "side": "B", "bid_px_00": 17000.0, "ask_px_00": 17000.5, "sequence": 2},
++    ]
++    emitted = {}
++    for filename, schema in (("mbp1.parquet", "mbp-1"), ("mbp10.parquet", "mbp-10")):
++        path = _write(tmp_path / filename, rows)
++        events = list(DatabentoParquetSource(paths=(path,), requested_symbol="NQ.c.0", schema=schema).events())
++        emitted[schema] = [type(event).__name__ for event in events]
++    assert emitted["mbp-1"] == emitted["mbp-10"] == ["Quote", "Quote", "Trade"]
++
++
++def test_tob_schema_without_action_column_stays_quotes_only(tmp_path: Path) -> None:
++    # D-P-17 guard: no action column (the bbo/cbbo shape) -> quotes-only, unchanged.
++    base = datetime(2026, 3, 2, 14, tzinfo=UTC)
++    rows = [
++        {"ts_event": base, "bid_px_00": 16999.75, "ask_px_00": 17000.25, "sequence": 1},
++        {"ts_event": base.replace(minute=1), "bid_px_00": 17000.0, "ask_px_00": 17000.5, "sequence": 2},
++    ]
++    for filename, schema in (("mbp1.parquet", "mbp-1"), ("bbo.parquet", "bbo")):
++        path = _write(tmp_path / filename, rows)
++        events = list(DatabentoParquetSource(paths=(path,), requested_symbol="NQ.c.0", schema=schema).events())
++        assert [type(event).__name__ for event in events] == ["Quote", "Quote"]
++
++
+ def test_front_month_count_tie_breaks_to_larger_instrument_id(tmp_path: Path) -> None:
+     path = _write(tmp_path / "tie.parquet", [
+         {"ts_event": datetime(2026, 1, 6, 14, tzinfo=UTC), "price": 17000.0, "size": 9, "side": "B", "instrument_id": 1, "raw_symbol": "NQZ6", "sequence": 1},

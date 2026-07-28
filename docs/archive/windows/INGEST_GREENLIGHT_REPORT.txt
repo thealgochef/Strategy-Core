@@ -1,0 +1,107 @@
+INGEST GREENLIGHT REPORT
+Date: 2026-07-11 (final CI completed 2026-07-11T18:11:40Z)
+Window: INGEST (MBP-1 batch -> 156 mbp1.parquet store days; SC D-P-17 trades-from-TOB-schemas
++ era-boundary prior-day schema-matching fallback; QL ingest_databento_batch converter;
+TL replay-catalog mbp-1 level-00 gate fix)
+Reviewed tips: SC 9d49353 (close record atop b21316e) . QL 6601dc7 . TL 58a5a85.
+Reviewed commits NOT amended (the QL CI fix is a NEW commit atop the chore — see DEVIATIONS).
+
+== STEP 1 — SC PUSH (Strategy-Core, branch platform-refactor) ==
+  local tip:  9d4935346bf42c5d19916e05dbe21dd67c46875c
+  origin tip: 9d4935346bf42c5d19916e05dbe21dd67c46875c   -> MATCH
+  push: 1a58aa8..9d49353  platform-refactor -> platform-refactor
+  ancestor assertions (git merge-base --is-ancestor <sha> origin/platform-refactor):
+    9692696 96926965e3fccdb20916ca1dfc26f78385adc324 (docs: PRESETS pushed annotation,
+             INGEST P0 doc-op): True
+    7340b2d 7340b2d163d3dc930bfc768b40ea7cd8d5bb944b (feat(data): D-P-17 action-bearing
+             TOB schemas classify T rows as trades, INGEST P3'): True
+    b21316e b21316e42f22718dedad2e7511dded60eee09a61 (fix(data): era-boundary fallback
+             + buy-trade ordering pin, INGEST close-verify): True
+    9d49353 9d4935346bf42c5d19916e05dbe21dd67c46875c (docs: INGEST window close record
+             — the tip): True
+
+== STEP 2 — TL PIN CHORE + PUSH (Trade-Lab, branch platform-refactor) ==
+  chore: 3466aff "chore: pin strategy-core @ INGEST land — 3d4193e -> 9d49353
+    (D-P-17 trades-from-TOB + era-boundary fallback)"
+  staged diff: backend/pyproject.toml only (1 insertion, 1 deletion) — the working tree's
+    unrelated modified/untracked files were NOT included.
+  push: 67e03e4..3466aff  platform-refactor -> platform-refactor
+  local tip:  3466afffdcac16ad0eafc45d8a947f7922b751db
+  origin tip: 3466afffdcac16ad0eafc45d8a947f7922b751db   -> MATCH
+  ancestor assertions:
+    58a5a85 58a5a85feaea44c3e00ad28a49c1c4e202d7e18b (fix(replay): mbp-1 live-column
+             gate accepts level-00 names, INGEST close-verify — the reviewed tip): True
+    3466aff 3466afffdcac16ad0eafc45d8a947f7922b751db (the pin chore — the tip): True
+
+== STEP 3 — QL PIN CHORE + PUSH (Quant-Lab, branch platform-refactor) ==
+  chore: 3b470d3 (same pin bump, pyproject.toml only, 1 insertion, 1 deletion)
+  push: 49c2f22..3b470d3, tip MATCH asserted at push time; then the CI fix commit
+    (DEVIATION 1) moved the tip:
+  fix:   5ab6da9 "fix(tests): schema_problems fixtures built with explicit arrow types
+    - portable across pandas 3/pyarrow 25 cold installs (INGEST greenlight CI fix)"
+    (tests/agents/test_ingest_databento_batch.py only; test-only)
+  push: 3b470d3..5ab6da9  platform-refactor -> platform-refactor
+  local tip:  5ab6da99953f72c5431b8bc1cfd0e039d3d132aa
+  origin tip: 5ab6da99953f72c5431b8bc1cfd0e039d3d132aa   -> MATCH
+  ancestor assertions (re-run on the final tip):
+    8f6f45e 8f6f45e575edc4c7120137ec5333ee761cebd691 (feat(scripts):
+             ingest_databento_batch converter, INGEST P2): True
+    6601dc7 6601dc7003babb5da8449aa260e18c523903cde5 (fix(scripts): schema_problems
+             pure-order-mismatch message, INGEST close-verify — the reviewed tip): True
+    3b470d3 3b470d3ce8ec61534d4dfff551904483e209b638 (the pin chore): True
+
+== PINS (both bumped 3d4193e -> 9d49353, committed lines verbatim) ==
+  Trade-Lab backend/pyproject.toml:18 (@ 3466aff):
+  "strategy-core @ git+https://github.com/thealgochef/Strategy-Core.git@9d4935346bf42c5d19916e05dbe21dd67c46875c",
+  Claude-Quant-Lab pyproject.toml:36 (@ 3b470d3, carried unchanged by 5ab6da9):
+    "strategy-core @ git+https://github.com/thealgochef/Strategy-Core.git@9d4935346bf42c5d19916e05dbe21dd67c46875c",
+  Consumer-facing SC this window (D-P-17 trade classification + era-boundary fallback:
+  without them mbp1 days drain quotes-only / lose the Sunday Globex-open hour), so the
+  pin moves per the 9.6 convention.
+
+== STEP 4 — CI ON THE PUSHED TIPS (all three green; all push-triggered, no workflow_dispatch needed) ==
+  SC ci: run id 29162591811 (#13), trigger push, branch platform-refactor,
+    head 9d4935346bf42c5d19916e05dbe21dd67c46875c,
+    conclusion success (completed 2026-07-11T17:58:59Z), job 86570095596.
+    pytest step emits dots-only on CI (the standing SC -q -q tally-suppression gotcha);
+    205 dot/s marks, step + job success.
+  TL backend-ci: run id 29162631478 (#14), trigger push, branch platform-refactor,
+    head 3466afffdcac16ad0eafc45d8a947f7922b751db,
+    conclusion success (completed 2026-07-11T18:00:49Z), job 86570198667.
+    Runner suite: 508 passed, 4 skipped in 11.97s (local-data tests skip on cold runners).
+    PIN RESOLUTION WITNESSED in the cold-install raw log:
+    "Resolved https://github.com/thealgochef/Strategy-Core.git to commit 9d4935346bf42c5d19916e05dbe21dd67c46875c"
+  QL ci: run id 29162951541 (#13), trigger push, branch platform-refactor,
+    head 5ab6da99953f72c5431b8bc1cfd0e039d3d132aa,
+    conclusion success (completed 2026-07-11T18:11:40Z), job 86571023564.
+    Runner suite: 812 passed, 18 skipped in 28.90s (= 830 collected; local full suite
+    830 passed, 0 skipped).
+    PIN RESOLUTION WITNESSED in the cold-install raw log:
+    "Resolved https://github.com/thealgochef/Strategy-Core.git to commit 9d4935346bf42c5d19916e05dbe21dd67c46875c"
+
+== DEVIATIONS ==
+  1. QL CI RED ON THE CHORE TIP, test-only fix pushed atop. Run 29162655755 (#12) on
+     3b470d3 (job 86570259570) failed: 2 failed, 810 passed, 18 skipped —
+     test_schema_problems_pins_store_fingerprint + test_schema_problems_reports_pure_
+     order_mismatch. Root cause: the _exact_frame fixture leaned on pandas->arrow
+     conversion DEFAULTS to land on the pinned store fingerprint; the runner's cold
+     install (pandas 3.0.3 + pyarrow 25.0.0) drifted those defaults to large_string /
+     timestamp[us] vs the local green env (pandas 2.3.1 + pyarrow 20.0.0 -> string /
+     timestamp[ns]). The production schema pin (schema_problems + convert_one delete-on-
+     mismatch) behaved exactly as designed — this was fixture portability, not a code or
+     data defect. Fix 5ab6da9 rebuilds the fixtures as explicit-typed pyarrow tables so
+     the tests exercise schema_problems' comparison rather than pandas defaults.
+     Reviewed commits and the chore NOT amended; local gate re-run before push
+     (830 passed / ruff clean on tracked files). Note: run #12's cold install DID
+     resolve the new pin ("Resolved ... 9d4935346bf...") before pytest failed, so pin
+     resolution was witnessed on both QL runs.
+  2. Notes for the record: (a) gh CLI absent on this box — CI reads/log-greps went
+     through the GitHub REST API with the git-credential-fill token (standing recipe);
+     (b) greenlight CI ids owed to PROGRESS via a pushed annotation at the next doc-op,
+     per the standing pattern; (c) TL/QL runner suites skip local-data tests on cold
+     runners (TL 4, QL 18) — job conclusions are the gate.
+
+== LEDGER ==
+SC tip 9d49353 (pushed, CI green) . TL tip 3466aff (pushed, CI green, pin 9d49353) .
+QL tip 5ab6da9 (pushed, CI green, pin 9d49353) . pins 9d4935346bf42c5d19916e05dbe21dd67c46875c x2.
+FULL STOP.

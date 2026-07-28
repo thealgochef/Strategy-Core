@@ -1,0 +1,204 @@
+719190b test(candles): time-bar parity with the 60s base excluded (TIMEBAR-FIX P5)
+a8fc22b fix(candles): remaining pandas-resolution assumptions + stale pandas-import rule (TIMEBAR-FIX P4)
+fcff9f0 fix(candles): unit-explicit ns extraction — .asi8/.value return the dtype's own unit, which pandas 3 no longer renormalizes (TIMEBAR-FIX P3)
+95df548 test(candles): version-independent guard — ns-integer extraction must not inherit a non-ns dtype unit (TIMEBAR-FIX P2)
+95570df refactor(candles): extract ns-integer helpers in the time batch builder (TIMEBAR-FIX P1)
+
+ src/strategy_core/candles/batch.py      |  6 ++--
+ src/strategy_core/candles/time_batch.py | 57 ++++++++++++++++++++++++++++++---
+ tests/test_time_bar_parity.py           | 20 ++++++++++++
+ tests/test_time_bars.py                 | 42 ++++++++++++++++++++++++
+ 4 files changed, 119 insertions(+), 6 deletions(-)
+
+diff --git a/src/strategy_core/candles/batch.py b/src/strategy_core/candles/batch.py
+index 63dc539..bb2097a 100644
+--- a/src/strategy_core/candles/batch.py
++++ b/src/strategy_core/candles/batch.py
+@@ -8,8 +8,10 @@ trading-day calendar / closed window come from a
+ through :class:`strategy_core.candles.streaming.CandleEngine`; the parity test
+ (``tests/test_candle_parity.py``) locks the two paths together.
+ 
+-This is the ONLY engine module permitted to import pandas (see package rules): the
+-batch path is the research/warm-up fast path, run off the event loop. Emits
++Pandas-import rule (see package rules): the BATCH builders — this module and
++``candles/time_batch.py`` — import pandas; the streaming engines
++(``candles/streaming.py``, ``candles/time_streaming.py``) and ``candles/_buckets.py``
++do not. The batch path is the research/warm-up fast path, run off the event loop. Emits
+ :class:`strategy_core.types.Bar` (not Trade-Lab's ``Candle``) with
+ :class:`strategy_core.types.CloseReason`.
+ """
+diff --git a/src/strategy_core/candles/time_batch.py b/src/strategy_core/candles/time_batch.py
+index 906fcfe..12fbc33 100644
+--- a/src/strategy_core/candles/time_batch.py
++++ b/src/strategy_core/candles/time_batch.py
+@@ -18,8 +18,21 @@ mirroring ``build_tick_bars_from_frame``'s signature shape and input contract
+   incomplete (no later bucket produced a bar); every other bar is ``COMPLETE``.
+ 
+ The parity test (``tests/test_time_bar_parity.py``) locks this against the
+-streaming engine. Like ``candles/batch.py``, this module may import pandas (the
+-research / warm-up fast path, run off the event loop).
++streaming engine. Pandas-import rule: the BATCH builders (``candles/batch.py`` and
++this module) import pandas; the streaming engines and ``candles/_buckets.py`` do
++not. The batch path is the research / warm-up fast path, run off the event loop.
++
++UNIT NOTE — batch buckets in integer NANOSECONDS while the streaming engine buckets
++in integer MICROSECONDS, and the two are provably equivalent: for positive integers
++``floor(x / (a*b)) == floor(floor(x / a) / b)``, so flooring a nanosecond timestamp
++to microseconds (a=1000) and then to buckets (b=interval*1e6 us) lands in the same
++bucket as flooring the nanoseconds directly by interval*1e9 — PROVIDED the ns->us
++step is a TRUNCATION (floor), not a rounding. The streaming engine consumes Python
++``datetime`` objects (us precision), so its inputs are the ns timestamps already
++truncated to us by whatever produced them; the READER-side ns->us conversion being a
++truncation is therefore the unverified premise of real-data batch==stream parity —
++see the TIMEBAR-FIX Part 8 finding (TIMEBAR_FIX_REPORT.md) and the TIMEBAR window
++review finding (ii) in docs/PLATFORM_REFACTOR_PROGRESS.md.
+ """
+ 
+ from __future__ import annotations
+@@ -46,6 +59,42 @@ def _seconds_of(t: time) -> int:
+     return t.hour * 3600 + t.minute * 60 + t.second
+ 
+ 
++def _index_to_ns(values):
++    """Int64 epoch NANOSECONDS for a datetime Series/Index — the ONE place the batch
++    path turns the timestamp column into integers. Lives here (not ``_buckets.py``)
++    because ``_buckets`` must stay pandas-free for the streaming engine.
++
++    Unit-explicit: ``.asi8`` returns integers in the dtype's OWN unit, and pandas 3
++    no longer renormalizes source units to ns (the SC ci 30331205481 red), so the
++    index is forced to nanosecond resolution first and the forced unit is verified
++    loudly — a future pandas change fails with a named unit, never a silent rescale.
++    """
++    import pandas as pd
++
++    index = pd.DatetimeIndex(values).as_unit("ns")
++    if index.unit != "ns":
++        raise ValueError(
++            f"ns extraction expected datetime64[ns] after as_unit('ns'); observed "
++            f"unit {index.unit!r} (dtype {index.dtype})"
++        )
++    return index.asi8
++
++
++def _timestamp_to_ns(ts) -> int:
++    """Epoch NANOSECONDS for a single timestamp — the ONE place the per-day anchor
++    becomes an integer. Unit-explicit for the same reason as ``_index_to_ns``:
++    ``.value`` is the underlying integer in the Timestamp's OWN unit."""
++    import pandas as pd
++
++    stamp = pd.Timestamp(ts).as_unit("ns")
++    if stamp.unit != "ns":
++        raise ValueError(
++            f"ns extraction expected a ns-unit Timestamp after as_unit('ns'); "
++            f"observed unit {stamp.unit!r}"
++        )
++    return int(stamp.value)
++
++
+ def build_time_bars_from_frame(
+     frame: "pd.DataFrame",
+     timeframes_seconds: tuple[int, ...],
+@@ -118,10 +167,10 @@ def build_time_bars_from_frame(
+     # Integer-nanosecond floor-divide so an edge-exact trade buckets identically to
+     # the streaming engine's integer-microsecond arithmetic.
+     day_start_ns = {
+-        td: pd.Timestamp(trading_day_start_utc(td.date(), scheme)).value
++        td: _timestamp_to_ns(trading_day_start_utc(td.date(), scheme))
+         for td in work["trading_day"].unique()
+     }
+-    ts_ns = pd.DatetimeIndex(work["ts_event"]).asi8
++    ts_ns = _index_to_ns(work["ts_event"])
+     start_ns = work["trading_day"].map(day_start_ns).to_numpy(dtype="int64")
+     work["bucket60"] = (ts_ns - start_ns) // (BASE_INTERVAL_SECONDS * _NS_PER_SECOND)
+ 
+diff --git a/tests/test_time_bar_parity.py b/tests/test_time_bar_parity.py
+index 7fcba51..70c0a15 100644
+--- a/tests/test_time_bar_parity.py
++++ b/tests/test_time_bar_parity.py
+@@ -22,6 +22,7 @@ from dataclasses import astuple
+ from datetime import datetime, timedelta, timezone
+ 
+ import pandas as pd
++import pytest
+ 
+ from strategy_core.candles.time_batch import build_time_bars_from_frame
+ from strategy_core.candles.time_streaming import DEFAULT_TIME_TIMEFRAMES, TimeBarEngine
+@@ -194,6 +195,25 @@ def test_parity_dst_fall_back_25h_day() -> None:
+     assert len(h4) == 7  # 25 elapsed hours -> 4H buckets 0..6 all populated
+ 
+ 
++@pytest.mark.parametrize("timeframes", [(300, 3600), (180, 1800, 14400)])
++def test_parity_without_60s_base(timeframes: tuple[int, ...]) -> None:
++    """Timeframe sets EXCLUDING the 60s base (``TimeBarEngine._emit_base == False``):
++    the 60s accumulator still runs as the derivation base but emits nothing, and the
++    two builders must agree bar-for-bar — the deferred TIMEBAR review finding (i).
++    No 60s bar may appear in either output."""
++    trades = _main_stream()
++    frame = _trades_to_frame(trades, tick_size=DEFAULT_TICK_SIZE)
++    streaming = _streaming_bars(trades, timeframes, RESEARCH_SESSION_SCHEME)
++    batch = build_time_bars_from_frame(
++        frame, timeframes, scheme=RESEARCH_SESSION_SCHEME, tick_size=DEFAULT_TICK_SIZE
++    )
++    _assert_bars_equal(streaming, batch)
++    assert streaming and batch
++    assert not [b for b in streaming if b.timeframe_ticks == 60]
++    assert not [b for b in batch if b.timeframe_ticks == 60]
++    assert {b.timeframe_ticks for b in streaming} == set(timeframes)
++
++
+ def test_empty_frame_returns_no_bars() -> None:
+     empty = pd.DataFrame({"ts_event": [], "price": [], "size": []})
+     assert build_time_bars_from_frame(empty, TIMEFRAMES) == []
+diff --git a/tests/test_time_bars.py b/tests/test_time_bars.py
+index 1854225..4cc736a 100644
+--- a/tests/test_time_bars.py
++++ b/tests/test_time_bars.py
+@@ -192,6 +192,48 @@ def test_bar_index_dense_across_skipped_buckets() -> None:
+     assert [b.is_complete for b in bars] == [True, True, False]
+ 
+ 
++# ── ns-extraction unit guard (version-independent) ────────────────────────────
++@pytest.mark.parametrize("unit", ["us", "ms", "s"])
++def test_ns_extraction_does_not_inherit_dtype_unit(unit: str) -> None:
++    """The batch path's datetime->integer helpers must return NANOSECONDS no matter
++    what resolution the datetime dtype carries.
++
++    This is the version-independent form of the pandas-3 cold-runner red (SC ci run
++    30331205481 on tip 8ec6906): pandas 3 preserves a source datetime unit through
++    DataFrame construction, and ``.asi8`` / ``.value`` return integers in the
++    dtype's OWN unit — so a nanosecond assumption collapses every bucket index. A
++    prior reproduction through the PUBLIC input passed on pandas 2 because the
++    module's internal ``to_numpy()`` -> DataFrame round-trip renormalizes to ns
++    there; this guard therefore targets the extraction helpers DIRECTLY with a
++    ``DatetimeIndex.as_unit(...)``-forced non-ns index, which survives to the
++    helper on either pandas major.
++
++    Whole-second timestamps so every parameterized unit represents them exactly;
++    a 60-second separation must yield exactly 60_000_000_000.
++    """
++    from strategy_core.candles.time_batch import _index_to_ns, _timestamp_to_ns
++
++    base = datetime(2025, 6, 2, 22, 0, 0, tzinfo=UTC)
++    later = base + timedelta(seconds=60)
++
++    idx = pd.DatetimeIndex([base, later]).as_unit(unit)
++    assert str(idx.dtype) == f"datetime64[{unit}, UTC]"  # the forced non-ns dtype
++    out = _index_to_ns(idx)
++    assert str(out.dtype) == "int64"
++    assert int(out[1]) - int(out[0]) == 60_000_000_000, (
++        f"_index_to_ns returned unit-{unit} integers, not nanoseconds: "
++        f"delta={int(out[1]) - int(out[0])}"
++    )
++
++    t0 = pd.Timestamp(base).as_unit(unit)
++    t1 = pd.Timestamp(later).as_unit(unit)
++    assert t0.unit == unit
++    delta = _timestamp_to_ns(t1) - _timestamp_to_ns(t0)
++    assert delta == 60_000_000_000, (
++        f"_timestamp_to_ns returned unit-{unit} integers, not nanoseconds: delta={delta}"
++    )
++
++
+ # ── construction guards ───────────────────────────────────────────────────────
+ def test_non_multiple_of_60_rejected() -> None:
+     with pytest.raises(ValueError):

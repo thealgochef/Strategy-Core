@@ -4,7 +4,7 @@ Shared, versioned strategy engine for zero-drift parity between **Quant-Lab** re
 
 `strategy-core` owns the strategy mechanics that must not drift: Databento historical/live normalization boundaries, deterministic event ordering, replay/runtime state, tick bars, sessions, zones, first-touch detection, feature formulas, outcome resolution, honest decision-time entry orchestration, and the versioned `strategy.json` schema/loader.
 
-> Current status, verified 2026-06-08: **engine v3 plus the shared market-data runtime are implemented and unit-tested**. `uv run --python 3.14 python -m pytest -q` passes; `pytest --collect-only -q` reports **135 tests** across 18 test files. Quant-Lab imports this engine for dashboard-utility training and contract emission. Trade-Lab backend now routes replay/live runtime bars, sessions, levels, zones, and touches through a Strategy-Core adapter, but model-bundle activation/parity remains gated; see [`V3_COMPATIBILITY_MATRIX.md`](V3_COMPATIBILITY_MATRIX.md) and [`MIGRATION.md`](MIGRATION.md).
+> Current status: **engine v3 plus the shared market-data runtime are implemented and unit-tested**. The full suite (`tests/` + `validation/`) runs in CI on Python 3.13 via `python -m pytest -q`. Quant-Lab imports this engine for dashboard-utility training and contract emission. Trade-Lab backend now routes replay/live runtime bars, sessions, levels, zones, and touches through a Strategy-Core adapter, but model-bundle activation/parity remains gated; see [`V3_COMPATIBILITY_MATRIX.md`](V3_COMPATIBILITY_MATRIX.md) and [`MIGRATION.md`](MIGRATION.md).
 
 ---
 
@@ -14,7 +14,7 @@ Shared, versioned strategy engine for zero-drift parity between **Quant-Lab** re
 pip install -e .
 pip install -e ".[dev]"      # pytest + pandas for batch candle builder tests
 pip install -e ".[databento]" # optional real Databento SDK integration
-python -m pytest -q          # 135 tests passing as of 2026-06-08
+python -m pytest -q          # full suite; counts tracked by CI, not this README
 python -m pytest --collect-only -q
 ```
 
@@ -97,6 +97,11 @@ validation/          retained validation notes and legacy real-data harnesses
 
 ## Key docs
 
-- [`V3_COMPATIBILITY_MATRIX.md`](V3_COMPATIBILITY_MATRIX.md) — one-page Quant-Lab / Strategy-Core / Trade-Lab compatibility matrix.
-- [`MIGRATION.md`](MIGRATION.md) — current migration status and remaining Trade-Lab tasks.
+- [`docs/PLATFORM_REFACTOR_PROGRESS.md`](docs/PLATFORM_REFACTOR_PROGRESS.md) — the **living execution ledger** for the platform refactor; highest-traffic doc in the repo.
+- [`docs/PLATFORM_REFACTOR_PLAN.md`](docs/PLATFORM_REFACTOR_PLAN.md) — the authoritative refactor spec (edit-frozen by policy).
+- [`docs/DECISIONS.md`](docs/DECISIONS.md) — append-only ruling registry (D-P-xx / 9.x).
+- [`docs/BACKLOG.md`](docs/BACKLOG.md) — tiered open punt-list.
+- [`docs/archive/README.md`](docs/archive/README.md) — archived per-window review artifacts (diffs, greenlight reports, recons).
+- [`V3_COMPATIBILITY_MATRIX.md`](V3_COMPATIBILITY_MATRIX.md) — one-page Quant-Lab / Strategy-Core / Trade-Lab compatibility matrix (frozen 2026-06-10; historical).
+- [`MIGRATION.md`](MIGRATION.md) — v3 migration status snapshot (frozen 2026-06-10; historical).
 - [`validation/README.md`](validation/README.md) — how to interpret retained validation notes.

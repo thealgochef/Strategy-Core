@@ -1,0 +1,228 @@
+DOC-SYNC REPORT — bank the owed ledger in PROGRESS, reconcile the pointers, push
+Generated 2026-07-25.  Scope: SC docs/PLATFORM_REFACTOR_PROGRESS.md only.
+
+BOTTOM LINE
+  Steps 1, 2 and the push half of Step 3 are DONE and verified.
+  Step 3's CI gate is RED — and the red is NOT this commit.  SC `ci` #14 failed at the
+  ruff lint step because the repo declares an UNPINNED `ruff>=0.15` and CI cold-installs;
+  `>=0.15` now resolves to ruff 0.16.0, whose default rule set flags 113 pre-existing
+  findings in the engine source.  PROVEN below: the PREVIOUS tip `9d49353` — the tree CI
+  #13 passed green on 2026-07-11 — produces the IDENTICAL 113 findings under 0.16.0.
+  A docs-only markdown commit cannot and did not cause this.
+  Making CI green needs a change outside this work order's scope.  STOPPED per D-P-11(c).
+
+
+================================================================================
+STEP 1 — THE COMMIT
+================================================================================
+
+  sha      3491363f3ace83649d3deec7c04a37bf7d9c97c8
+  subject  docs: bank INGEST greenlight ids + ledger reconciliation (DOC-SYNC)
+  parent   9d4935346bf42c5d19916e05dbe21dd67c46875c
+  trailer  Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>
+
+  stat     docs/PLATFORM_REFACTOR_PROGRESS.md | 55 +++++++++++++++++++++++++++++++-------
+           1 file changed, 46 insertions(+), 9 deletions(-)
+
+  Scope assertion: exactly ONE file changed, and it is the named doc.  No source, no
+  config, no workflow, no test touched.
+
+  (a) INGEST greenlight annotation — BANKED
+      Header relabelled: "CLOSED — LOCAL, not pushed"
+        -> "CLOSED) [GREENLIT + PUSHED 2026-07-11 — ids in the greenlight annotation at
+            the end of this record; pins bumped 3d4193e -> 9d49353 x2]"
+      Full annotation appended at the end of the INGEST record:
+        SC  9d49353                                      ci         29162591811 (#13) success
+        TL  58a5a85 + pin chore 3466aff                  backend-ci 29162631478 (#14) success
+        QL  6601dc7 + pin chore 3b470d3 + fix 5ab6da9    ci         29162951541 (#13) success
+        QL first run #12 (29162655755) = FAILURE on 3b470d3 — pandas-3 / pyarrow-25
+          fixture-type drift; recorded with the ruling that the PRODUCTION SCHEMA PIN
+          BEHAVED AS DESIGNED (it caught a real type mismatch; the test's construction of
+          the input was what was wrong), and that the fix is TEST-ONLY.
+        D-P-11(c) DEVIATION DISCLOSED: 5ab6da9 was an unreviewed mid-greenlight commit
+          that rode post-review; recorded as a deviation, not as compliance, with the
+          reviewer sign-off artifact named.
+        Pins bumped 3d4193e -> 9d49353 on both consumers; cold-install pin resolution
+          witnessed in both consumers' raw CI logs.
+
+      Both now-false passages replaced:
+        L2269-2271  "Pins UNCHANGED at 3d4193e x2 locally; bump owed at greenlight"
+                    -> "Pins were UNCHANGED ... at close; bumped at the greenlight to
+                        9d49353 x2 ... See the greenlight annotation at the end."
+        L2373-2375  "NOT pushed (work-order FULL STOP). Pins: bump owed at greenlight ...
+                     TL/QL runs owed at greenlight witness the new pin."
+                    -> "At close the window was NOT pushed ..., with the pin bump and the
+                        TL/QL pin-witness runs owed at greenlight; all three were paid at
+                        the 2026-07-11 greenlight — annotation next."
+      Verified: grep "bump owed at greenlight" over the committed tree = ZERO matches.
+      The five surviving "NOT pushed (work-order FULL STOP)" strings (L1511/1824/1949/
+      2105/2233) are OTHER windows' close records, each already carrying its own pushed
+      annotation — accurate as statements of their own moment; deliberately left alone.
+
+  (b) Owner doc commit acknowledgment — RECORDED
+      New end-of-file block:
+        "TL 14ed624 (2026-07-15, feat: add readme — README.md, backend/README.md,
+         backend/.env.example, .claude/scheduled_tasks.lock): owner-authored
+         documentation/config, outside any window's scope, no code change; TL backend-ci
+         run 29470434376 (#15) = success on it."
+      Every commit on platform-refactor across all three repos is now ledger-accounted.
+
+  (c) Pointer reconciliation — ONE pointer, at the top-of-status position
+      NEW, inserted as the first line of the "### Status" block:
+        "**STATUS (DOC-SYNC, 2026-07-25) — THE single current-window pointer.  Every other
+         'Current:' / 'Current window:' claim in this file, above or below, is historical
+         record of its own moment, not live state.**  The platform arc is COMPLETE THROUGH
+         INGEST: every window W1 -> INGEST is GREENLIT + PUSHED, CI green on each pushed
+         tip, and both consumers pin SC 9d49353 x2.  No window is in flight.  Next arc:
+         deployment-model training against the prop-sim objective — not yet opened; as of
+         this doc-op nothing is pre-registered, built, scored, or saved for it (newest
+         bundle on disk remains NQ_W3_20260617T220752Z, 2026-06-17)."
+
+      The two conflicting pointers ARCH_STATE_RECON §3.1 flagged are both superseded:
+        PROGRESS:30   "- **Current:** **PROP-SIM** ..."
+          -> relabelled "- **Window history (SUPERSEDED as a current-window pointer by the
+             DOC-SYNC STATUS line in §Status, 2026-07-25; retained verbatim as the record
+             of its moment — PROP-SIM, PRESETS and INGEST have all since closed and
+             pushed):**"   (content preserved verbatim; only the claim is withdrawn)
+        PROGRESS:1499 "... pins at `f9a1f63`.** Current: **QL-UI-PARITY** (...)"
+          -> "... [HISTORICAL as of the W3b land — the then-current window was
+             QL-UI-PARITY (...); SUPERSEDED by the DOC-SYNC STATUS line above.  The pin
+             figure f9a1f63 in this paragraph is likewise historical: pins moved
+             f9a1f63 -> 1650327 -> 3d4193e -> 9d49353 across SEED / EXEC / INGEST.]"
+
+      Post-commit sweep of the committed tree for current-window claims:
+        L1500  the new STATUS line                                    <- the only live one
+        L1844  "Current window: **COCKPIT** ..."     dated in-record doc-op marker
+        L2011  "Current window: **PROP-SIM** ..."    dated in-record doc-op marker
+        L2157  "Current window: **PRESETS** ..."     dated in-record doc-op marker
+        L2257  "Current window: **INGEST** ..."      dated in-record doc-op marker
+      The four survivors sit inside their own dated records and are explicitly covered by
+      the new STATUS line's "historical record of its own moment" clause.  Left in place
+      as record; they make no live claim.
+
+
+================================================================================
+STEP 2 — DIFF EXPORT
+================================================================================
+
+  command  git -C <QL> diff 3b470d3..5ab6da9 --output=<QL>\5AB6DA9_QL_DIFF.txt
+  path     C:\Users\gonza\Documents\Claude-Quant-Lab\5AB6DA9_QL_DIFF.txt
+  lines    106
+  bytes    4,151
+  stat     tests/agents/test_ingest_databento_batch.py | 63 +++++++++++++-----------
+           1 file changed, 40 insertions(+), 23 deletions(-)
+
+  DEVIATION FROM EXPECTATION (stated, not smoothed over): the work order expected 2 files.
+  The diff is ONE file.  It is test-only as expected — the single file is under tests/,
+  with no src/, script/, config or workflow content — so the "small, test-only"
+  characterisation holds and the reviewer-sign-off purpose is served; only the file count
+  differed.  Untracked at the QL root, as intended for an evidence artifact.
+
+
+================================================================================
+STEP 3 — PUSH + CI
+================================================================================
+
+PUSH — DONE, VERIFIED
+  git push origin platform-refactor
+    To https://github.com/thealgochef/Strategy-Core.git
+       9d49353..3491363  platform-refactor -> platform-refactor
+
+  Ancestor assertion  git merge-base --is-ancestor 9d49353 HEAD  ->  PASS
+                      (9d49353 is an ancestor of the pushed tip; fast-forward, nothing
+                       rewritten, no reviewed commit amended)
+
+  local  HEAD                        = 3491363f3ace83649d3deec7c04a37bf7d9c97c8
+  origin refs/heads/platform-refactor = 3491363f3ace83649d3deec7c04a37bf7d9c97c8
+  MATCH  = YES
+
+
+CI — RED.  NOT GREEN.  NOT CAUSED BY THIS COMMIT.
+  The push AUTO-TRIGGERED the run; no workflow_dispatch was needed.
+
+    workflow    ci
+    run id      30180114922
+    run number  #14
+    head_sha    3491363f3ace83649d3deec7c04a37bf7d9c97c8   (= the pushed tip)
+    event       push
+    status      completed
+    CONCLUSION  FAILURE
+    created     2026-07-25T23:50:26Z
+    completed   2026-07-25T23:50:57Z   (31 s — failed early)
+    html_url    https://github.com/thealgochef/Strategy-Core/actions/runs/30180114922
+
+  Job "strategy-core (cold install + ruff + pytest)" (id 89735137572):
+    1  Set up job                                        success
+    2  Checkout                                          success
+    3  Set up Python 3.13                                success
+    4  Install (cold)                                    success
+    5  Lint (ruff, repo root — config-faithful)          FAILURE   <-- here
+    6  Test (pytest — tests + validation)                skipped
+    The pytest step never ran.  There is no test evidence for this tip, green or red.
+
+  ROOT CAUSE — unpinned linter floor + cold install (raw API log text is 403 without a
+  token, so the cause was established by local reproduction instead):
+
+    .github/workflows/ci.yml:35   pip install -e ".[dev]"
+    .github/workflows/ci.yml:38   ruff check .
+    pyproject.toml:26             "ruff>=0.15",        <-- FLOATING FLOOR
+
+    `ruff>=0.15` resolves today to ruff 0.16.0 (confirmed latest on PyPI).  0.16.0's
+    default rule set flags 113 findings in the tracked engine source that the earlier
+    ruff CI #13 installed on 2026-07-11 did not flag.
+
+  PROOF THAT THE COMMIT IS NOT THE CAUSE — three runs against clean `git archive` exports
+  of the tracked tree (no untracked scratch), in an isolated scratchpad venv:
+
+    ruff 0.16.0  vs  9d49353  (PREVIOUS tip; CI #13 was GREEN on it)   ->  113 errors, exit 1
+    ruff 0.16.0  vs  3491363  (NEW tip;      CI #14 FAILED on it)      ->  113 errors, exit 1
+    ruff 0.15.2  vs  3491363  (NEW tip, pinned-era linter)             ->    0 errors, exit 0
+
+    The 113 findings are IDENTICAL on both tips — same count, same per-rule breakdown:
+      24 RUF100 unused-noqa        17 RUF046 unnecessary-cast-to-int
+      15 BLE001 blind-except       15 I001   unsorted-imports
+      13 RUF022 unsorted-dunder-all 10 UP017 datetime-timezone-utc
+       3 C408 · 3 RUF059 · 2 DTZ001 · 2 FURB162 · 2 PLR1730 · 1 each B017, S110,
+       SIM114, TRY004, UP031, UP037, UP047
+    Zero of them are in a markdown file.  The commit changed one markdown file.
+    The previous tip would fail this run identically if re-dispatched today.
+
+  THIS IS THE SAME FAILURE CLASS THE COMMIT ITSELF DOCUMENTS: an unpinned toolchain floor
+  plus a cold install is a time bomb whose fuse is the calendar, not the diff.  QL hit it
+  on 2026-07-11 via pandas-3/pyarrow-25 (annotation above); SC has now hit it via
+  ruff 0.15 -> 0.16.  The QL instance was test-fixture drift; this one is lint-rule drift.
+
+  WHY I STOPPED INSTEAD OF FIXING IT — every available fix is outside this work order:
+    (i)   pin ruff (e.g. "ruff>=0.15,<0.16" or ==) — edits pyproject.toml, not the one
+          doc file this order scopes, and changes the CI contract;
+    (ii)  apply the lint fixes — 64 auto-fixable, 28 more behind --unsafe-fixes, the rest
+          manual, spread across the engine source; that is a large unreviewed code change
+          landing under a doc-op, against the SC-freeze discipline;
+    (iii) relax the lint step — weakens the gate.
+  D-P-11(c): "any unreviewed commit needed mid-greenlight, however trivial, is
+  stop-and-report first."  This is exactly that case, and the annotation banked in this
+  very commit criticises the last departure from that rule.  Reporting, not acting.
+  Recommendation if asked: (i) — pin the floor, smallest change, restores the gate without
+  touching engine source; treat the 113 findings as their own scoped lint window.
+
+  STANDING RISK, unchanged by any of the above: TL and QL declare `strategy-core` by SHA
+  but nothing pins their own toolchains either.  Their next cold install can red the same
+  way, independently of any code change.
+
+
+================================================================================
+LEDGER
+================================================================================
+  Step 1  commit 3491363, 1 file, +46/-9 ......................... DONE, verified
+  Step 2  5AB6DA9_QL_DIFF.txt, 106 lines, 1 file (not 2) ......... DONE, deviation stated
+  Step 3  push 9d49353..3491363, tips MATCH, ancestor PASS ....... DONE, verified
+  Step 3  SC ci green on the tip ................................. NOT MET — run #14
+          30180114922 = FAILURE at the ruff step; cause is a pre-existing, commit-
+          independent linter-floor drift; fix requires an out-of-scope decision.
+  Step 4  this report ............................................ DONE
+
+  Working trees: SC has the committed doc change (now pushed) and this untracked report.
+  QL has one untracked evidence file (5AB6DA9_QL_DIFF.txt).  TL untouched.
+  No source, config, workflow, or test file was modified in any repo.
+
+FULL STOP.

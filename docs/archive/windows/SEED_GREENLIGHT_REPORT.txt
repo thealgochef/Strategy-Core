@@ -1,0 +1,55 @@
+SEED GREENLIGHT REPORT — verified 2026-07-07 (idempotent verify pass; execution occurred in the prior session)
+Reviewed tips: SC 1650327 · TL 91e4537 · QL 820b532. No reviewed commit amended.
+
+(a) TIPS — local vs origin/platform-refactor (git ls-remote)
+  SC  local:  16503279dc560eebeed3673b27599ca9dce14848  docs: SEED adversarial-verify record — 18/20 confirmed, majors fixed in-window
+      remote: 16503279dc560eebeed3673b27599ca9dce14848  refs/heads/platform-refactor
+      MATCH: yes (tip IS the reviewed SC commit 1650327, unmodified)
+  TL  local:  c92f13b3bc1bc19d4df57640135975d0808f86d2  chore: pin strategy-core @ SEED land — f9a1f63 -> 1650327 (prior-day store-walk)
+      remote: c92f13b3bc1bc19d4df57640135975d0808f86d2  refs/heads/platform-refactor
+      MATCH: yes (pin chore atop reviewed tip 91e4537)
+  QL  local:  75f83dc5c5e5c9343ca03fa026e8f59359a5e635  chore: pin strategy-core @ SEED land — f9a1f63 -> 1650327 (prior-day store-walk)
+      remote: 75f83dc5c5e5c9343ca03fa026e8f59359a5e635  refs/heads/platform-refactor
+      MATCH: yes (pin chore atop reviewed tip 820b532)
+
+(b) ANCESTOR ASSERTIONS (git merge-base --is-ancestor <sha> origin/platform-refactor)
+  SC 60650bb  PASS   (docs: SEED window open — recon verdict + QL-UI-PARITY CI ids)
+  SC f948065  PASS   (feat(data): canonical prior-day extremes store-walk, P1)
+  SC a4969a0  PASS   (fix(data): harden the prior-day walk per the adversarial verify)
+  SC 3a2facc  PASS   (docs: SEED close record)
+  SC 1650327  PASS   (docs: SEED adversarial-verify record; == pushed tip)
+  TL 7445af5  PASS   (feat(replay): training-parity PDH/PDL seed, P2)
+  TL 91e4537  PASS   (fix(replay): seed-drain start/stop/status races)
+  TL c92f13b  PASS   (chore: pin bump; == pushed tip)
+  QL 820b532  PASS   (fix(ml): entering-seed cache stamp, P3)
+  QL 75f83dc  PASS   (chore: pin bump; == pushed tip)
+  10/10 PASS.
+
+(c) PIN LINES AS COMMITTED (quoted verbatim from the origin tips)
+  TL backend/pyproject.toml:18 (at origin/platform-refactor = c92f13b):
+    "strategy-core @ git+https://github.com/thealgochef/Strategy-Core.git@16503279dc560eebeed3673b27599ca9dce14848",
+  QL pyproject.toml:36 (at origin/platform-refactor = 75f83dc):
+    "strategy-core @ git+https://github.com/thealgochef/Strategy-Core.git@16503279dc560eebeed3673b27599ca9dce14848",
+
+(d) CI WITNESS — all three runs on the pushed tips, all push-triggered (no workflow_dispatch needed)
+  SC  workflow "ci"          run id 28839878234  #6  trigger push  head 16503279dc560eebeed3673b27599ca9dce14848  conclusion success
+  TL  workflow "backend-ci"  run id 28839902876  #8  trigger push  head c92f13b3bc1bc19d4df57640135975d0808f86d2  conclusion success
+  QL  workflow "ci"          run id 28839925480  #8  trigger push  head 75f83dc5c5e5c9343ca03fa026e8f59359a5e635  conclusion success
+  Pin-resolution witness (cold-install log lines, fresh runners):
+  TL run 28839902876 [0_backend (cold install + ruff + pytest).txt]:  Resolved https://github.com/thealgochef/Strategy-Core.git to commit 16503279dc560eebeed3673b27599ca9dce14848
+  QL run 28839925480 [0_quant-lab (cold install + ruff + pytest).txt]: Resolved https://github.com/thealgochef/Strategy-Core.git to commit 16503279dc560eebeed3673b27599ca9dce14848
+
+(e) DEVIATIONS / ALREADY-DONE
+  - ALL of steps 1-4 were already executed by the prior session; this pass re-verified every
+    assertion fresh (tips re-fetched, ancestors re-asserted, pins re-read from the ORIGIN tips,
+    CI runs re-queried, both install logs re-downloaded and re-grepped). Nothing was executed
+    beyond verification; no new commits were created this pass.
+  - The only unreviewed commits on the pushed branches are the two pin chores the work order
+    specifies (TL c92f13b, QL 75f83dc; one-file pyproject.toml changes each, matching the
+    W3b-land pin-bump shape). No other unreviewed commit exists.
+  - gh CLI is not installed on this machine; CI queries and log retrieval used the GitHub REST
+    API authenticated with the stored git credential.
+  - CI ids + the pushed-annotation for the SEED PROGRESS record ride the next window's opening
+    doc-op, per the established pattern (recorded in session memory).
+
+STATUS: GREEN — all steps verified complete; nothing BLOCKED.

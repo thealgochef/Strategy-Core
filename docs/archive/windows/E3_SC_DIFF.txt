@@ -1,0 +1,1193 @@
+﻿diff --git a/docs/PLATFORM_REFACTOR_PROGRESS.md b/docs/PLATFORM_REFACTOR_PROGRESS.md
+index 7e0310f..22285ef 100644
+--- a/docs/PLATFORM_REFACTOR_PROGRESS.md
++++ b/docs/PLATFORM_REFACTOR_PROGRESS.md
+@@ -26,7 +26,8 @@ deviations.
+ 
+ - **Active phase:** **Phase E — E1+E2 DONE locally (see the E-WINDOW bullet below); Phase D COMPLETE and PUSHED** (D1b greenlit 2026-06-10: SC pushed to `2cb27dc`, TL pin chore `5ede158` pushed; decision 9.6 pin convention honored). D-window record: **D1b (flip + delete)** (SC `945f381` + TL `94610ff`): the dashboard now SERVES the streaming honest resolver — resolutions adapt to served `Outcome`s (entry = the real trade print, NEW `entry_price` field; TL-side correctness; SC ZERO-BASED `bars_to_resolution`; `resolved_ts` from the new SC `StreamResolution.resolved_ts_utc`), drops surface explicitly (`prediction.dropped` WS frame + snapshot `dropped` ring + `RuntimeUpdate.dropped` + IntelligencePanel badge w/ reason, NO chart marker), and the legacy `OutcomeTracker` + its 16 tests + the gate-B characterization harness are DELETED; `ResolutionType.SESSION_END`/`NO_RESOLUTION` REMOVED (grep-proven zero refs). Gates: TL suite **419** (= 420 − 16 tracker + 13 adapter + 1 dropped-frame + 1 swallow pin); seam-by-name **4** (acceptance 3 incl. the D2 guard + replay 1); TL ruff clean; frontend typecheck + vitest **142** + build green; SC suite **152** + ruff + frozen b3 regressions **2** (fixtures untouched). 6-agent adversarial verify on the exact commits: **5 PASS (high) + 1 finding REPAIRED in-window** (the `_track_outcomes` per-item swallow guard). Prior D-window state (D1a DARK SC `c7564fd` + TL `c7f2a84`; D2 TL `73aa7df`) unchanged beneath. Decision 9.6 unchanged (pin DECLARED c615e40; enforcement DEFERRED; QL cold-install debt open).
+ - **E-WINDOW (E1+E2) DONE and PUSHED at the E greenlight 2026-06-10** (SC `8e5c017` + QL `baecf66` + TL `9b00eb5` on `platform-refactor`, followed by the greenlight chore commits QL `e10d226` + TL `ef8a189` — pin bumps to SC `8e5c017` + CI branch filters — and the SC greenlight doc commit): two-axis versioning live end-to-end. `ENGINE_VERSION` → `PLATFORM_VERSION` (`"strategy_core_platform_v1"`, clean rename, no alias); `CONTRACT_VERSION` → `"trade_lab_contract_v2"` (shape break); contract field `engine_version` → `platform_version` + NEW required `strategy_version`; `strategy_id` re-pointed to the REGISTRY ROUTER KEY. QL emits via `get_strategy` (unknown id fail-closes EMISSION), flips `supported_by_runtime=True` (full contract), and MIGRATED the deployed store in place (3 v3 bundles → v2 w/ backups; the 3 legacy/v1/v2-engine bundles deliberately NOT migrated — see D-E-c); TL gates BOTH registry entries on the platform hook + the 4-check strategy gate (resolve / version-equality / servable-flag / serving-id guard), and `Prediction.contract_id` re-sources to the active bundle id (values byte-compatible). QL CI rider pays the 9.6 debt (cold-install workflow authored; **ENFORCED pending its first green run post-push**); QL tooling aligned py313. REAL-BUNDLE GATE: exactly the 3 migrated bundles discoverable; all 3 activate incl. hot-swap; un-migrated .bak copy rejected on contract_version. Gates: SC **154** + ruff + b3 regressions **2** (fixtures untouched) + decision-fn **2** UNCHANGED; QL **740** (739+1) + ruff (src/tests clean; 13 pre-existing scratch findings stand); TL **424** (419+5) + seam-by-name **4** + ruff + frontend untouched.
+-- **Next step:** E3 (contract envelope split — the E3 ledger carries D-E-h's four hardening items + the C1/C2/C3 recon scout) or F1 per the owner's call. The owner watches the FIRST 9.6-enforcing QL CI run on GitHub (the workflow now triggers on platform-refactor pushes; green = 9.6 ENFORCED).
++- **E3 DONE LOCALLY (full stop before push), 2026-06-10** — SC `dc14652` + QL `523ff98` + TL `3d79bc4` on `platform-refactor`; diffs exported as `E3_SC_DIFF.txt`/`E3_QL_DIFF.txt`/`E3_TL_DIFF.txt`. Contract v3 envelope/section split per the ratified consumer classification; loader section hook; QL emits the section from the plugin's SectionModel + migration #2 executed on the real store (3 MIGRATED + 3 SKIP); TL validates the section at both registry entries, threads the typed section to its two section reads, and closes ALL FOUR D-E-h ledger items. See the E3 deviations (D-E3-a..j) and the status row.
++- **Next step:** owner review of the E3 diffs → E3 greenlight (push + the pin bumps) — then F1 per the owner's call. The owner watches the FIRST 9.6-enforcing QL CI run on GitHub (the workflow now triggers on platform-refactor pushes; green = 9.6 ENFORCED).
+ - **Drift-net status:** **S-B3a DONE (fold-collapse + dedup-into-plugin), byte-identical.** The runtime's `level_state`, `_zones_for_snapshot`, `_touched_zone_keys`/`_zone_key`/`_touch_zone_key_from_touch` are DELETED; `RuntimeUpdate.levels` ← `plugin.on_event` return, snapshot/update `zones` ← `plugin.snapshot_zones`, snapshot `levels` ← `plugin.current_levels`, dedup = plugin-owned `_fired_keys`, touches flow back VERBATIM. Proven against the **FROZEN, UNTOUCHED** B3 digests: `test_b3_golive_plugin_regression` + `test_b3_multiday_reset_plugin_regression` **2 passed** (3,284,775 trades, 8 reset boundaries — every per-trade `to_dict()` + snapshot byte-identical). Full SC suite **144**; TL acceptance+replay **3**; decision-fn gates **2** (UNCHANGED); ruff clean. 5-agent adversarial verify: **5 PASS (all high confidence)**. Verified 2026-06-09 on the final tree.
+ - **Last-verified date:** 2026-06-10
+ - **Note (release, decision 9.6) — AMENDED 2026-06-10 (E greenlight):** BOTH consumers pin SC at `8e5c017` (the E1 commit). Pin history: TL `cbf9b99 → c615e40` (`0e1c7ce`, C-window) `→ c7564fd` (`4bb9290`, D-window) `→ 945f381` (`5ede158`, D1b greenlight) `→ 8e5c017` (`ef8a189`, E greenlight); QL `c615e40` (`9b8e798`, declared) `→ 8e5c017` (`e10d226`, the long-deferred bump, E greenlight). PIN CONVENTION unchanged: the pin tracks the latest SC commit with CONSUMER-FACING content; doc-only SC commits do not move it. **STATUS: ENFORCED pending the first green CI run** — QL now has the cold-install workflow (`.github/workflows/ci.yml`, the E-window rider) AND it is reachable: both CI workflows trigger on `platform-refactor` pushes as of the greenlight chore commits (QL `e10d226`, TL `ef8a189`), so the first 9.6-enforcing run fires on this push rather than waiting for merge day. The former NAMED DEBT (QL cold-install resolution check) is PAID by that workflow; green run = ENFORCED.
+@@ -896,6 +897,145 @@ False); deployed-bundle migration in scope; `contract_id` stamping re-sourced.
+   (`section.py:131,153`) vs TL's `^(\d+)t$` `parse_bar_type` would REJECT a
+   section-defaulted contract — plus the `closed_window` contract↔runtime scheme
+   round-trip gap (`section.py:91-93`). All four are E3-band hardening items.
++  **AMENDED at E3: ALL FOUR CLOSED** — see D-E3-g below.
++
++### Phase E — E3 deviations / clarifications (envelope/section split, contract v3; cross-repo, 3 commits)
++
++Ratified design implemented: classification by CONSUMER — platform-consumed fields
++stay flat on the ENVELOPE (`contract_version`/`platform_version`/`strategy_id`/
++`strategy_version`/`training_mode`/`supported_by_runtime`/`instrument`/`tick_size`/
++`point_value`/`model`/`class_map`/`feature_set` SHELL (names/order_is_contractual/
++nan_policy)/`label_policy` (+ NEW `barrier_mode`)/`inference`/`data_requirements`/
++`provenance`); plugin-consumed fields move into ONE `section` subtree typed by the
++plugin's `SectionModel` (`session_scheme`/`level_scheme`/`touch_rule`/
++`feature_windows`/`research_session_experiment` + the interaction/approach feature
++partition MOVED out of `feature_set`). `CONTRACT_VERSION` → `"trade_lab_contract_v3"`
++(shape break #2, same fail-closed-at-first-check + in-place-migration pattern as v2).
++E3 is BEHAVIOR-PRESERVING: the runtime still configures from wiring constants
++(`default_touch_reversal_section()`); bundle sections are consumed only where their
++fields were consumed before; the E2 serving guard (check iv) stays.
++
++- **D-E3-a (the classification table as applied).** Envelope/section assignment is
++  exactly the ratified list above. `label_policy` and `inference` are ENVELOPE
++  (TL's resolver build `runtime.py:_build_honest_resolver` and the inference gate
++  consume them — platform reads), so `TouchReversalSection` LOST its Phase-A
++  `label_policy`/`inference` fields and GAINED `interaction_features`/
++  `approach_features`. The partition validator moved with the partition: the
++  section-LOCAL check (disjoint + duplicate-free) is a `model_validator` on
++  `TouchReversalSection`; the envelope cross-check (partition == `feature_set.names`)
++  is the new single-sourced `validate_feature_partition` helper, run at the TWO
++  validation sites — QL emission and TL activation.
++- **D-E3-b (the loader carrier, defined precisely).** New opt-in loader kwarg
++  `validate_section_via_registry: bool = False`. When True, after envelope
++  validation: `get_strategy(contract.strategy_id)` (fail-closed; the §9.1
++  registry-time SectionModel assertion is now LOAD-BEARING) →
++  `SectionModel.model_validate(section)` → the typed instance is attached to the
++  returned contract as the private NON-FIELD attribute `_section_model`
++  (`PrivateAttr`, settable on the frozen model) and read via the
++  `StrategyContract.section_model` property. A `(contract, typed_section)` tuple
++  return was ratified OUT; the loader keeps its plain single-return call shape, and
++  reading `section_model` on a hooklessly loaded contract raises `ContractError`
++  (fail closed — an unvalidated section is never handed back as typed). The
++  registry import is LAZY inside the hook branch (the loader stays import-light;
++  callers own the plugin-registration import, D-B3c).
++- **D-E3-c (closed_window placement — interpretation recorded).** The prompt's
++  "contract SessionWindow gains OPTIONAL closed_window" is implemented as the
++  contract **SessionScheme** gaining `closed_window: SessionWindow | None = None`
++  (the start/end PAIR is carried AS a SessionWindow; `crosses_midnight` is not
++  meaningful for it and stays False) — the runtime `types.SessionScheme.closed_window`
++  is scheme-level, so a per-window field could not express the CT scheme.
++  `_contract_scheme_from_runtime` / `_runtime_scheme_from_section` are now
++  drop-nothing BOTH directions; the `TRADE_LAB_CT_SESSION_SCHEME` round-trip
++  (16:00–18:00 closed window) is pinned by `test_session_scheme_round_trips_drop_nothing`.
++- **D-E3-d (the forward_bar_type landmine death — refines the prompt's wording).**
++  `label_policy` left the section, so the section default no longer carries ANY
++  `forward_bar_type` — the D-E-h(iv) landmine died by the MOVE, not by an edit. The
++  surviving `"tick"` literal in the section default (`touch_rule.bar_type`) was
++  fixed to the canonical production bar literal `f"{DEFAULT_TICK_COUNT}t"` ("147t",
++  constant-sourced). The envelope's `forward_bar_type` has no SC-side default at
++  all: the QL emitter sources it per-run (`du.bar_type`, production "147t").
++- **D-E3-e (emission re-sourcing + recorded wire-shape facts).** QL's emitter
++  builds a configured `TouchReversalSection` INSTANCE (`_build_touch_reversal_section`):
++  the plugin's `default_touch_reversal_section()` supplies every structural value;
++  ONLY per-run config is overridden (`du.bar_type`, the two windows,
++  `level_proximity_pts`, the selected feature partition, the session-experiment
++  scope); `section_instance.model_dump(mode="json", exclude_none=True)` IS the
++  emitted subtree, and `barrier_mode` is sourced from the PLUGIN's `label_policy()`
++  declaration. Two recorded projections: (1) `direction_from_side` keeps the shipped
++  lowercase `low->long/high->short` form (still sourced from `DIRECTION_FROM_SIDE`;
++  the plugin default's uppercase enum-value form is a cosmetic divergence,
++  unconsumed by the plugin); (2) newly-emitted session blocks carry
++  `crosses_midnight` ALWAYS (model_dump), while pre-E3 emission omitted it when
++  False and MIGRATED bundles keep their old block shape verbatim — all three forms
++  are SectionModel-identical after validation.
++- **D-E3-f (migration #2).** `scripts/migrate_contracts_v3.py`, same proven
++  pattern, with D-E-c's narrowing applied UP FRONT: ONLY
++  `contract_version == "trade_lab_contract_v2"` bundles migrate; the store's
++  legacy/v1 bundles SKIP with precise reasons and stay fail-closed at the loader's
++  first check. Backups `strategy.json.pre_v3.bak` (never overwritten); restructure
++  preserves kept fields byte-for-byte (five section fields + the feature_set
++  partition moved verbatim; `barrier_mode: "fixed_points"` injected after
++  `resolution`; `section` appended last); idempotent. EXECUTED against the real
++  store: **3 MIGRATED** (`NQ_20260603_233847`/`NQ_20260604_012623`/`NQ_20260604_015413`)
++  **+ 3 SKIP** (not migratable); re-run **6 SKIP**. All 3 migrated bundles re-load
++  through the SC loader WITH the section hook + partition cross-check. The
++  git-tracked `NQ_20260603_233847/strategy.json` migration is committed.
++- **D-E3-g (the four D-E-h ledger items CLOSED).** (a) TL activation now runs the
++  metadata cross-check FAIL-CLOSED (`_validate_against_metadata` → raise
++  `ModelValidationError` on mismatch); (b) checksum sidecar ABSENT →
++  `logger.warning` (was silent; fired visibly on all 3 real-store activations —
++  the store still has no sidecars); (c) `ModelStatus.validation_ok`/`_detail` =
++  the active bundle's REAL activation-time result carried on `ActiveModel` (no
++  longer hardcoded True); (iv) closed by D-E3-c + D-E3-d. NOTE on the Phase-D
++  Barrier debt: `barrier_mode` gives the CONTRACT a binding for the barrier
++  interpretation ("fixed_points"|"r_relative", enum-constrained, default
++  fixed_points; sourced from the plugin's declaration at emission) — the
++  PROTOCOL-level gap (the `Barrier` Protocol cannot reach `trap_mfe_min`) is NOT
++  in E3 scope and stays a named debt.
++- **D-E3-h (KNOWN TL COUPLING — recorded, deliberately accepted).** Generic TL
++  code duck-types touch-section attributes: `model_registry` imports the touch
++  section's `validate_feature_partition`; `inference_engine._direction_from_section`
++  reads `section.touch_rule.direction_from_side`; `feature_functions` reads
++  `section.feature_windows`. Acceptable single-strategy behavior; the F-era cleanup
++  moves these reads into the plugin.
++- **D-E3-i (test churn, enumerated — the complete list).** SC: `test_contract.py`
++  fixture → v3 envelope+section (strategy_id = the real router key); v1-rejection
++  test re-targeted v2; RETIRED `test_feature_set_names_not_union_raises` (the
++  FeatureSet validator moved); `test_feature_set_validator_independently` →
++  `test_section_partition_duplicates_rejected`; +8 new (missing-section, hook
++  positive carrier, section_model-without-hook fails, section unknown-key rejected
++  + hookless still loads, section missing-group rejected, unknown strategy_id at
++  the hook, partition cross-check, barrier_mode enum); `test_touch_reversal_plugin.py`
++  section fixture drops label_policy/inference + gains the partition; +1 round-trip
++  pin. **SC 154 → 162.** QL: `nodrift` — structural map drops the section-bound
++  leaves + gains plugin-sourced `label_policy.barrier_mode`; allowlist drops the 7
++  section-bound entries; coverage guard gains the `_PLUGIN_SECTION_FIELDS` source
++  (+ stale/pairwise-disjoint checks); section-bound reads → `contract["section"]`;
++  loader round-trips run the section hook and read `section_model`; +2 new
++  (section-sourcing honesty incl. the partition cross-check; emission fail-closed
++  on partition mismatch). `repoint` — section-bound reads repointed; round-trip
++  reads `section_model`. `acceptance_cli` — `bar_type` + research-scope reads →
++  the section subtree; fixture hand-migrated v3. **QL 740 → 742.** TL: fixture
++  hand-migrated v3 (values byte-preserved; `barrier_mode` added;
++  `forward_bar_type` stays "147t"); `test_strategy_contract` — the
++  all-sections parse test loads hook-on and reads `section_model`; unsupported
++  literal v1 → v2; the feature_set partition-mismatch loader negative →
++  the section-hook rejection; `test_feature_functions` — fixture loads hook-on,
++  section threaded through `LevelContext.from_contract`/`build_feature_vector`
++  (signature change: both now take the typed section);
++  `test_platform_version_binding` +4 new (invalid section at discovery AND
++  activation; partition cross-check mismatch at activation; metadata mismatch
++  rejected at activation; missing sidecar warns on the real activation path);
++  `test_inference_engine` +1 (typed section + real validation result on
++  ActiveModel). **TL 424 → 429.**
++- **D-E3-j (REAL-BUNDLE GATE, post-migration — verbatim in the window report).**
++  Discovery lists EXACTLY the 3 migrated bundles (the legacy/v1 bundles skip on
++  contract_version v1, the v2-era backup-shaped contract on v2); all 3 ACTIVATE
++  sequentially (= hot-swap) with typed `TouchReversalSection`s (bar_type 147t;
++  per-bundle partitions 2+3 / 3+3 / 3+2), real validation results, and the new
++  sidecar-absent warnings; an un-migrated v2 `.bak` copy (temp-dir probe) is
++  skipped at discovery and REJECTED at activation on
++  `unsupported contract_version 'trade_lab_contract_v2'`.
+ 
+ ## Status table
+ 
+@@ -915,7 +1055,7 @@ False); deployed-bundle migration in scope; `contract_id` stamping re-sourced.
+ | D | D2 | Confirm TL holds no local candle/session/level recompute, then assert it via test | DONE (pushed at the D1b greenlight) | 2026-06-10 | TL `73aa7df` | TL suite 420 passed 0 skipped (443 collected − 24 deleted engine tests + 1 new guard); strengthened guard + seam green; src-wide grep zero engine names; ruff clean | CandleEngine/_MutableCandle/CandleUpdate + SessionLevelEngine/_SessionRange/_DaySummary/LevelUpdate/SESSION_LEVELS/LEVEL_ORIGIN deleted, DTO types kept; guard = src-wide reintroduction ban + SessionClassifier confinement + DTO-surface pin with documented carve-outs; sessions.py NOT deleted (seed.py debt); httpx2→dev rider. Deviations D-D2-a..c + named debts |
+ | E | E1 | Introduce platform_version alongside ENGINE_VERSION, both stamped, loader fail-closes on either | DONE (pushed at the E greenlight) | 2026-06-10 | SC `8e5c017` + QL `baecf66` + TL `9b00eb5` | SC suite 154 (+2 negatives) + ruff + frozen b3 regressions 2 (fixtures untouched) + decision-fn gates 2 UNCHANGED; QL suite 740 + ruff; TL suite 424 + seam 4 + ruff | RATIFIED DEVIATION from the step wording: not "alongside" — a CLEAN RENAME (ENGINE_VERSION → PLATFORM_VERSION "strategy_core_platform_v1", no alias) + contract v2 shape break (engine_version→platform_version field, + required strategy_version); deployed store migrated in place w/ backups (3 v3 bundles; non-v3 deliberately not migratable — D-E-c). D-E-a..c,f |
+ | E | E2 | Add per-plugin strategy_version/strategy_id, fail-closed via registry-lookup equality; turn strategy_id into a router | DONE (pushed at the E greenlight) | 2026-06-10 | same window/commits as E1 | TL suite 424 (incl. 5 new gate negatives, both-entry coverage); REAL-BUNDLE GATE: exactly 3 migrated bundles discoverable, all 3 activate incl. hot-swap via the serving-guard registry, un-migrated .bak copy rejected on contract_version | strategy_id = registry ROUTER KEY end-to-end: QL emission resolves get_strategy (unknown id refuses to EMIT), TL gates both registry entries (resolve / version-equality / servable-flag / serving-id guard); contract_id stamping re-sourced to the active bundle id (byte-compatible); supported_by_runtime meaningful (QL True, TL refuses False, QL acceptance flipped). D-E-b,d,e,g,h |
+-| E | E3 | Decompose the flat StrategyContract into StrategyEnvelope + typed SectionModel; emit from the plugin | NOT STARTED |  |  |  |  |
++| E | E3 | Decompose the flat StrategyContract into StrategyEnvelope + typed SectionModel; emit from the plugin | DONE (LOCAL — full stop before push) | 2026-06-10 | SC `dc14652` + QL `523ff98` + TL `3d79bc4` | SC suite 162 (+8 contract-v3 negatives, +1 round-trip pin, −1 retired FeatureSet validator test) + frozen b3 digest regressions 2 (fixtures untouched) + decision-fn gates 2 UNCHANGED + ruff; QL suite 742 (740+2) + ruff; TL suite 429 (424+5) + seam-by-name 4 + ruff + frontend untouched; migration #2 on the real store (3 MIGRATED + 3 SKIP, idempotent re-run 6 SKIP); REAL-BUNDLE GATE: exactly 3 discoverable, all 3 activate incl. hot-swap w/ typed sections, v2 .bak copy rejected on contract_version | CONTRACT v3 (shape break #2): envelope = platform-consumed flat keys (+ label_policy.barrier_mode, + SessionScheme.closed_window); ONE "section" subtree typed by the plugin's SectionModel via the loader's opt-in validate_section_via_registry hook (non-field section_model carrier); partition + its validator moved to TouchReversalSection + the validate_feature_partition cross-check at the two validation sites; QL emits the section FROM a configured plugin SectionModel instance; TL validates the section at BOTH registry entries + threads ActiveModel.section to the two read paths; D-E-h ledger items (a)(b)(c)(iv) ALL CLOSED. Deviations D-E3-a..j. |
+ | F | F1 | Extend the candle data shape with a BarSpec/kind and add CloseReason.INTERVAL, with TICK behavior unchanged | NOT STARTED |  |  |  |  |
+ | F | F2 | Mirror the TIME close trigger into the vectorized batch path and pin it with a new parity test | NOT STARTED |  |  |  |  |
+ | F | F3 | Validate archetype 2 (HTF-FVG/iFVG) end-to-end on the same interface as a NEW plugin, behind its own strategy_id | NOT STARTED |  |  |  |  |
+@@ -925,6 +1065,47 @@ False); deployed-bundle migration in scope; `contract_id` stamping re-sourced.
+ 
+ ## Change log (newest first)
+ 
++- **2026-06-10** — **E3 (contract v3 — envelope/section split + emission from the
++  plugin + the D-E-h ledger) landed as LOCAL commits across all THREE repos → E3
++  DONE locally — FULL STOP before push** (SC `dc14652` + QL `523ff98` + TL
++  `3d79bc4` on `platform-refactor`; diffs exported as `E3_SC_DIFF.txt` /
++  `E3_QL_DIFF.txt` / `E3_TL_DIFF.txt`). SC: `StrategyContract` becomes the
++  platform ENVELOPE + ONE raw `section` subtree; the five plugin-consumed groups
++  + the feature partition move into `TouchReversalSection` (partition validator
++  with them; new `validate_feature_partition` cross-check for the two validation
++  sites); loader gains the opt-in `validate_section_via_registry` hook with the
++  NON-FIELD `section_model` carrier (single-return shape preserved, hookless
++  access fails closed); `LabelPolicy.barrier_mode`
++  (`fixed_points|r_relative`, default fixed_points); contract `SessionScheme`
++  gains the optional `closed_window` pair — scheme adapters now round-trip
++  drop-nothing BOTH directions (CT scheme pinned); the section-default
++  `touch_rule.bar_type` "tick" → constant-sourced "147t" and the
++  `forward_bar_type` landmine died with `label_policy`'s move to the envelope;
++  `CONTRACT_VERSION` → v3 (shape break #2). QL: the emitter builds a configured
++  `TouchReversalSection` INSTANCE (plugin default + per-run overrides) and
++  `model_dump()`s it as the section subtree; `barrier_mode` sourced from the
++  plugin's `label_policy()` declaration; the partition cross-check runs AT
++  EMISSION; `scripts/migrate_contracts_v3.py` EXECUTED on the real store —
++  **3 MIGRATED + 3 SKIP (not migratable), idempotent re-run 6 SKIP**, backups
++  `strategy.json.pre_v3.bak`, the tracked bundle's migration committed. TL: BOTH
++  `model_registry` entries load with the section hook (discovery
++  skips-with-warning, activation raises); `ActiveModel` carries the TYPED
++  `section` + the REAL metadata cross-check result; the partition cross-check
++  runs at ACTIVATION; LEDGER (a) metadata cross-check FAIL-CLOSED at activation,
++  (b) absent checksum sidecar now WARNS, (c) `ModelStatus.validation_ok` is the
++  real result, (iv) closed SC-side; the two section read paths
++  (`inference_engine` direction map, `feature_functions` windows/bands) thread
++  `ActiveModel.section` (the duck-typed touch coupling recorded, D-E3-h).
++  REAL-BUNDLE GATE (post-migration): exactly the 3 migrated bundles
++  discoverable; all 3 activate incl. hot-swap with typed sections; an
++  un-migrated v2 `.bak` copy rejected on contract_version. Gates on the final
++  trees: SC **162** + ruff + frozen b3 digest regressions **2** (fixtures
++  untouched) + decision-fn gates **2** UNCHANGED; QL **742** (740+2) + ruff; TL
++  **429** (424+5) + seam-by-name **4** + ruff + frontend UNTOUCHED. Deviations
++  **D-E3-a..j**. PLAN unmodified. PIN NOTE: SC `dc14652` is CONSUMER-FACING for
++  BOTH consumers (the loader hook kwarg, the section model reshape, and the
++  v3 CONTRACT_VERSION are all consumer-imported) — both pins bump to the final
++  pushed SC sha AT GREENLIGHT as chore commits, per the standing pin convention.
+ - **2026-06-10** — **E GREENLIGHT executed and PUSHED (all three repos)** after the
+   6-lens adversarial verify (6/6 PASS high; journal `wf_a70536bc-ba9`) and owner review
+   of the exported diffs. No reviewed commit amended; greenlight work = new commits:
+diff --git a/src/strategy_core/__init__.py b/src/strategy_core/__init__.py
+index 90067ec..d7146c3 100644
+--- a/src/strategy_core/__init__.py
++++ b/src/strategy_core/__init__.py
+@@ -64,7 +64,15 @@ PLATFORM_VERSION = "strategy_core_platform_v1"
+ #: v1 -> v2 (E1): engine_version field renamed platform_version + required
+ #: strategy_version added — a SHAPE break; v1 bundles fail closed at the loader's
+ #: first check and are migrated in place (QL scripts/migrate_contracts_v2.py).
+-CONTRACT_VERSION = "trade_lab_contract_v2"
++#: v2 -> v3 (E3): the flat contract DECOMPOSES into the platform-consumed ENVELOPE
++#: (flat keys) + ONE strategy-owned "section" subtree typed by the plugin's
++#: SectionModel — session_scheme/level_scheme/touch_rule/feature_windows/
++#: research_session_experiment move INTO the section, the interaction/approach
++#: feature partition moves out of feature_set INTO the section, label_policy gains
++#: barrier_mode, and the contract SessionScheme gains the optional closed_window
++#: pair. A SHAPE break (#2): v2 bundles fail closed at the loader's first check and
++#: are migrated in place (QL scripts/migrate_contracts_v3.py, same proven pattern).
++CONTRACT_VERSION = "trade_lab_contract_v3"
+ 
+ # ── Public API re-exports ───────────────────────────────────────────────────
+ from strategy_core.candles.batch import build_tick_bars_from_frame
+diff --git a/src/strategy_core/contract/loader.py b/src/strategy_core/contract/loader.py
+index b39b0aa..8cec1d2 100644
+--- a/src/strategy_core/contract/loader.py
++++ b/src/strategy_core/contract/loader.py
+@@ -12,6 +12,19 @@ rejected *after* the contract-version check and *before* full model validation -
+ this is the fail-close-on-platform-mismatch binding Trade-Lab uses to refuse a
+ bundle built by a platform version it cannot reproduce (spec §6; the engine axis
+ renamed at E1, decision 9.3).
++
++Contract v3 (E3) adds the opt-in ``validate_section_via_registry`` hook: after
++envelope validation, the contract's raw ``section`` subtree is validated against
++``get_strategy(contract.strategy_id).SectionModel`` (the §9.1 registry-time
++SectionModel assertion is what makes this resolvable for every registered
++plugin). THE CARRIER, precisely: the typed section instance is attached to the
++returned contract as the private non-field attribute ``_section_model`` and read
++via ``StrategyContract.section_model`` — the loader keeps its plain
++single-return call shape (no ``(contract, section)`` tuple, no wrapper object),
++and hookless callers are untouched (reading ``section_model`` without the hook
++raises :class:`ContractError`). The ENVELOPE is validated ALWAYS; only the
++section typing is opt-in. Callers own the plugin-registration import (the
++registry is deliberately empty on a bare ``import strategy_core``, D-B3c).
+ """
+ 
+ from __future__ import annotations
+@@ -30,17 +43,24 @@ def load_strategy_contract(
+     path: Path | str,
+     *,
+     expected_platform_version: str | None = None,
++    validate_section_via_registry: bool = False,
+ ) -> StrategyContract:
+     """Parse and validate a ``strategy.json`` from disk.
+ 
+     Raises :class:`ContractError` (never a bare ``ValidationError``) on any parse
+     failure, an unexpected ``contract_version``, a ``platform_version`` that does
+-    not match ``expected_platform_version`` (when supplied), or a feature/class
+-    mismatch, so callers have a single exception type to fail closed on.
++    not match ``expected_platform_version`` (when supplied), a feature/class
++    mismatch, or — when ``validate_section_via_registry`` is True — a
++    ``strategy_id`` unknown to the registry or a ``section`` subtree the plugin's
++    ``SectionModel`` rejects, so callers have a single exception type to fail
++    closed on. With the section hook on, the typed section instance rides the
++    returned contract via ``contract.section_model`` (see the module docstring
++    for the exact carrier semantics).
+ 
+     Ported from ``strategy_contract.py:183-217`` with the
+     ``expected_platform_version`` fail-close hook added between the
+-    contract-version check and model validation.
++    contract-version check and model validation, and the E3
++    ``validate_section_via_registry`` hook after it.
+     """
+ 
+     path = Path(path)
+@@ -76,4 +96,20 @@ def load_strategy_contract(
+     except ValueError as exc:
+         raise ContractError(f"invalid strategy contract: {exc}") from exc
+ 
++    if validate_section_via_registry:
++        # Imported lazily: the loader stays import-light for hookless callers and
++        # the registry chain stays out of a bare `import strategy_core`. Resolution
++        # uses whatever plugins the CALLER registered (the explicit registration
++        # import, D-B3c); get_strategy fail-closes on an unknown id.
++        from strategy_core.strategies.registry import get_strategy
++
++        plugin_cls = get_strategy(contract.strategy_id)
++        try:
++            typed_section = plugin_cls.SectionModel.model_validate(dict(contract.section))
++        except ValueError as exc:
++            raise ContractError(
++                f"invalid strategy section for {contract.strategy_id!r}: {exc}"
++            ) from exc
++        contract._section_model = typed_section
++
+     return contract
+diff --git a/src/strategy_core/contract/schema.py b/src/strategy_core/contract/schema.py
+index 29faa32..795e95b 100644
+--- a/src/strategy_core/contract/schema.py
++++ b/src/strategy_core/contract/schema.py
+@@ -20,15 +20,26 @@ the platform that produced its labels/features, plus required
+ :mod:`strategy_core` (the package ``__init__``) rather than restated, so the
+ version stamps live in one place.
+ 
++Contract v3 (E3 — the envelope/section split, PLAN §2.4): ``StrategyContract`` is
++now the platform-consumed ENVELOPE only. The plugin-consumed groups
++(``session_scheme``/``level_scheme``/``touch_rule``/``feature_windows``/
++``research_session_experiment`` + the interaction/approach feature partition)
++moved into ONE ``section`` subtree, carried here as a RAW mapping and typed by
++the owning plugin's ``SectionModel`` (validated via the loader's opt-in
++``validate_section_via_registry`` hook). Classification rule: a field lives in
++the envelope iff the PLATFORM consumes it; a field the plugin consumes lives in
++its section.
++
+ Ported from:
+ ``backend/src/trade_lab/domain/contracts/strategy_contract.py:1-218`` (Trade-Lab).
+ """
+ 
+ from __future__ import annotations
+ 
+-from typing import Any
++from collections.abc import Mapping
++from typing import Any, Literal
+ 
+-from pydantic import BaseModel, ConfigDict, Field, model_validator
++from pydantic import BaseModel, ConfigDict, Field, PrivateAttr, model_validator
+ 
+ from strategy_core import CONTRACT_VERSION, PLATFORM_VERSION
+ 
+@@ -78,24 +89,20 @@ class Model(_ContractModel):
+ 
+ 
+ class FeatureSet(_ContractModel):
+-    """Contractual feature vector. Ported from ``strategy_contract.py:37-52``."""
++    """Contractual feature vector SHELL. Ported from ``strategy_contract.py:37-52``.
++
++    Contract v3 (E3): the interaction/approach partition is PLUGIN semantics, so it
++    moved into the strategy-owned section (``TouchReversalSection`` for archetype 1)
++    together with its partition validator. The cross-check that the section's
++    partition is exactly ``names`` runs at the two validation sites (QL emission,
++    TL activation) via the section's ``validate_feature_partition`` helper — the
++    envelope alone cannot check it because the partition no longer lives here.
++    """
+ 
+     names: tuple[str, ...] = Field(min_length=1, max_length=256)
+     order_is_contractual: bool
+-    interaction_features: tuple[str, ...] = Field(max_length=256)
+-    approach_features: tuple[str, ...] = Field(max_length=256)
+     nan_policy: str = Field(min_length=1, max_length=32)
+ 
+-    @model_validator(mode="after")
+-    def _names_partition_into_interaction_and_approach(self) -> FeatureSet:
+-        split = (*self.interaction_features, *self.approach_features)
+-        if set(split) != set(self.names) or len(split) != len(self.names):
+-            raise ValueError(
+-                "feature_set.names must be exactly the union of interaction_features "
+-                "and approach_features"
+-            )
+-        return self
+-
+ 
+ class SessionWindow(_ContractModel):
+     """Named session window (contract form). Ported from ``strategy_contract.py:55-58``."""
+@@ -106,11 +113,20 @@ class SessionWindow(_ContractModel):
+ 
+ 
+ class SessionScheme(_ContractModel):
+-    """Session/trading-day scheme (contract form). Ported from ``strategy_contract.py:61-64``."""
++    """Session/trading-day scheme (contract form). Ported from ``strategy_contract.py:61-64``.
++
++    Contract v3 (E3): gains the OPTIONAL ``closed_window`` — a start/end pair
++    (carried as a :class:`SessionWindow`; its ``crosses_midnight`` flag is not
++    meaningful for a closed window and stays at its ``False`` default) — so the
++    runtime ``types.SessionScheme.closed_window`` (e.g. the Chicago-clock
++    ``TRADE_LAB_CT_SESSION_SCHEME``'s 16:00-18:00 halt) round-trips drop-nothing
++    through ``_contract_scheme_from_runtime`` / ``_runtime_scheme_from_section``.
++    """
+ 
+     timezone: str = Field(min_length=1, max_length=64)
+     trading_day_boundary: str = Field(min_length=1, max_length=8)
+     sessions: dict[str, SessionWindow]
++    closed_window: SessionWindow | None = None
+ 
+ 
+ class LevelScheme(_ContractModel):
+@@ -160,6 +176,13 @@ class LabelPolicy(_ContractModel):
+     """
+ 
+     resolution: str = Field(min_length=1, max_length=32)
++    #: Contract v3 (E3): how the tp/sl/trap thresholds are interpreted —
++    #: "fixed_points" (absolute points off the entry, today's only implemented
++    #: barrier, ``FixedPointsBarrier``) or "r_relative" (thresholds expressed in
++    #: R-multiples; declared for forward compatibility, no producer emits it yet).
++    #: Closes the Phase-D named debt that the Barrier abstraction had no contract
++    #: field to bind to.
++    barrier_mode: Literal["fixed_points", "r_relative"] = "fixed_points"
+     entry_reference: str = Field(min_length=1, max_length=64)
+     decision_offset_minutes: int = Field(gt=0, le=1440)
+     tp_points: float = Field(gt=0.0)
+@@ -247,7 +270,7 @@ class ClassMap(_ContractModel):
+ 
+ 
+ class StrategyContract(_ContractModel):
+-    """A fully parsed, validated ``strategy.json`` for one model bundle.
++    """The platform-consumed ENVELOPE of a ``strategy.json`` (contract v3, E3).
+ 
+     Two-axis version binding (decision 9.3, contract v2): ``platform_version``
+     (ex ``engine_version``) binds the bundle to the shared platform that produced
+@@ -257,6 +280,15 @@ class StrategyContract(_ContractModel):
+     name; bundle identity stays the directory name). Consumers fail-close on a
+     mismatch of either axis (loader hook for the platform; activation gate for
+     the strategy).
++
++    Envelope/section split (contract v3, E3): every field declared here is
++    PLATFORM-consumed. The plugin-consumed groups live in the ONE ``section``
++    subtree — a RAW mapping at this layer (the envelope stays strategy-agnostic),
++    typed by ``get_strategy(strategy_id).SectionModel`` when the loader is called
++    with ``validate_section_via_registry=True``. The typed instance then rides
++    this object as the private ``_section_model`` attribute, exposed read-only via
++    :attr:`section_model` (a deliberate NON-FIELD carrier: the loader keeps its
++    plain single-return call shape and hookless callers never see it).
+     """
+ 
+     contract_version: str = Field(min_length=1, max_length=64)
+@@ -269,17 +301,33 @@ class StrategyContract(_ContractModel):
+     tick_size: float = Field(gt=0.0)
+     point_value: float = Field(gt=0.0)
+     model: Model
+-    feature_set: FeatureSet
+     class_map: ClassMap
+-    session_scheme: SessionScheme
+-    level_scheme: LevelScheme
+-    touch_rule: TouchRule
+-    feature_windows: FeatureWindows
++    feature_set: FeatureSet
+     label_policy: LabelPolicy
+     inference: InferencePolicy
+     data_requirements: DataRequirements
+     provenance: Provenance
+-    research_session_experiment: ResearchSessionExperiment | None = None
++    #: The strategy-owned subtree, raw. The envelope never interprets it; the
++    #: loader's registry hook (or the owning plugin) validates it as SectionModel.
++    section: Mapping[str, Any]
++
++    _section_model: Any = PrivateAttr(default=None)
++
++    @property
++    def section_model(self) -> BaseModel:
++        """The typed, plugin-validated section instance (loader-hook carrier).
++
++        Populated ONLY by ``load_strategy_contract(...,
++        validate_section_via_registry=True)``. Accessing it on a hooklessly loaded
++        contract raises :class:`ContractError` (fail closed — never hand back an
++        unvalidated section as if it were typed).
++        """
++        if self._section_model is None:
++            raise ContractError(
++                "contract section has not been registry-validated; load with "
++                "validate_section_via_registry=True to populate section_model"
++            )
++        return self._section_model
+ 
+     @property
+     def feature_count(self) -> int:
+diff --git a/src/strategy_core/strategies/touch_reversal/plugin.py b/src/strategy_core/strategies/touch_reversal/plugin.py
+index 4002ea0..0337162 100644
+--- a/src/strategy_core/strategies/touch_reversal/plugin.py
++++ b/src/strategy_core/strategies/touch_reversal/plugin.py
+@@ -95,8 +95,10 @@ def _runtime_scheme_from_section(scheme: Any) -> SessionScheme:
+     ``section.session_scheme`` is the ``contract.schema.SessionScheme`` (string clock
+     times); ``StrategyLevelState`` needs the ``strategy_core.types.SessionScheme``
+     (``datetime.time`` objects). The scheme still ORIGINATES from the section (R2) — only
+-    its representation is converted. ``closed_window`` is ``None`` (the contract form
+-    carries no closed window; the canonical research scheme drops nothing).
++    its representation is converted. Drop-nothing BOTH directions as of E3: the contract
++    form's optional ``closed_window`` start/end pair (new at contract v3) parses back to
++    the runtime's ``tuple[time, time]``, so a scheme WITH a closed window (e.g.
++    ``TRADE_LAB_CT_SESSION_SCHEME``) round-trips exactly.
+     """
+     return SessionScheme(
+         timezone=scheme.timezone,
+@@ -109,7 +111,14 @@ def _runtime_scheme_from_section(scheme: Any) -> SessionScheme:
+             )
+             for name, window in scheme.sessions.items()
+         },
+-        closed_window=None,
++        closed_window=(
++            (
++                time.fromisoformat(scheme.closed_window.start),
++                time.fromisoformat(scheme.closed_window.end),
++            )
++            if getattr(scheme, "closed_window", None) is not None
++            else None
++        ),
+     )
+ 
+ 
+diff --git a/src/strategy_core/strategies/touch_reversal/section.py b/src/strategy_core/strategies/touch_reversal/section.py
+index a96c413..6e4b9e0 100644
+--- a/src/strategy_core/strategies/touch_reversal/section.py
++++ b/src/strategy_core/strategies/touch_reversal/section.py
+@@ -1,56 +1,60 @@
+ """The ``touch_reversal`` plugin's typed contract SECTION (PLAN §2.4 / §4.3).
+ 
+-The contract split (PLAN §2.4) lifts the strategy-specific groups out of the flat
+-``StrategyContract`` (``contract/schema.py:246-278``) into a per-plugin ``SectionModel``
+-the strategy OWNS. For archetype 1 that section is ``TouchReversalSection``: it RE-PARENTS
+-the existing canonical sub-models (each already an ``extra="forbid"`` ``_ContractModel``)
+-into one section, so this is a re-parent, not a rewrite — and the platform never owns a
+-second copy of these fields to drift.
+-
+-Phase A note (PLAN §7 / Step A3): this is declaration-only and unwired. The platform
+-loader is NOT yet split into envelope + section (that is Phase E / Step E3); nothing
+-calls ``model_validate`` on this section in production yet. It exists so the plugin can
+-declare ``SectionModel = TouchReversalSection`` and the §9.1 registry-time assertion has
+-a real pydantic ``BaseModel`` subclass to check.
++The contract split (PLAN §2.4, executed at E3 / contract v3) lifts the
++strategy-specific groups out of the flat ``StrategyContract`` into a per-plugin
++``SectionModel`` the strategy OWNS. For archetype 1 that section is
++``TouchReversalSection``: it RE-PARENTS the existing canonical sub-models (each
++already an ``extra="forbid"`` ``_ContractModel``) into one section, so this is a
++re-parent, not a rewrite — and the platform never owns a second copy of these
++fields to drift.
++
++Classification by CONSUMER (the E3 ratified rule): the section holds exactly what
++the PLUGIN consumes — ``session_scheme``, ``level_scheme``, ``touch_rule``,
++``feature_windows``, the optional ``research_session_experiment``, and the
++interaction/approach feature PARTITION (moved out of the envelope's
++``feature_set``, which keeps only the platform-consumed shell). ``label_policy``
++and ``inference`` are PLATFORM-consumed (TL builds the honest resolver and the
++inference gate from them) and therefore live in the ENVELOPE, not here.
++
++As of E3 this section is LOAD-BEARING: the loader's
++``validate_section_via_registry`` hook validates every bundle's ``section``
++subtree against this model (resolved via ``get_strategy(strategy_id).SectionModel``
++— the §9.1 registry-time assertion made that resolvable), and the QL emitter
++emits the subtree FROM a configured instance of this model.
+ """
+ 
+ from __future__ import annotations
+ 
++from collections.abc import Sequence
++
++from pydantic import Field, model_validator
++
+ # Re-parent the CURRENT canonical contract sub-models (no rewrite). ``_ContractModel``
+ # is the shared ``extra="forbid", frozen=True`` base; importing it keeps the section's
+ # unknown-key fail-close identical to every other contract section.
+ from strategy_core.constants import (
+-    DECISION_OFFSET_MINUTES,
+     DEFAULT_APPROACH_WINDOW_MINUTES,
+-    DEFAULT_CONFIDENCE_GATE,
+     DEFAULT_INTERACTION_WINDOW_MINUTES,
+-    DEFAULT_SL_POINTS,
+-    DEFAULT_TP_POINTS,
+-    DEFAULT_TRAP_MFE_MIN,
++    DEFAULT_TICK_COUNT,
+     DIRECTION_FROM_SIDE,
+-    INFERENCE_ELIGIBLE_SESSION,
++    INTERACTION_FEATURES,
+     LEVEL_AVAILABLE_FROM_GUARD,
+-    LABEL_ENTRY_REFERENCE,
+-    LABEL_FORWARD_CUTOFF,
+-    LABEL_NO_RESOLUTION_DROPPED,
+-    LABEL_RESOLUTION,
+     LARGE_TRADE_THRESHOLD,
+     LEVEL_PROXIMITY_PTS,
+     MID_PRICE_SOURCE,
+     PDH_PDL_SOURCE,
+     RESEARCH_SESSION_SCHEME,
++    RUNTIME_APPROACH_FEATURES,
+     SESSION_LEVELS,
+     TOUCH_SCOPE,
+     TOUCH_TYPE,
+-    TRADEABLE_REVERSAL,
+     WITHIN_BAND_PTS,
+     ZONE_PROXIMITY_PTS,
+     ZONE_REPRESENTATIVE_PRICE,
+ )
+ from strategy_core.contract.schema import (
++    ContractError,
+     FeatureWindows,
+-    InferencePolicy,
+-    LabelPolicy,
+     LevelScheme,
+     ResearchSessionExperiment,
+     SessionScheme,
+@@ -60,36 +64,74 @@ from strategy_core.contract.schema import (
+ )
+ from strategy_core.types import SessionScheme as RuntimeSessionScheme
+ 
+-__all__ = ["TouchReversalSection", "default_touch_reversal_section"]
++__all__ = [
++    "TouchReversalSection",
++    "default_touch_reversal_section",
++    "validate_feature_partition",
++]
+ 
+ 
+ class TouchReversalSection(_ContractModel):
+     """The archetype-1 (touch / zone-reversal) strategy-owned contract section (PLAN §2.4).
+ 
+-    Holds exactly the strategy-specific groups that move out of the flat contract:
+-    ``session_scheme``, ``level_scheme``, ``touch_rule``, ``feature_windows``,
+-    ``label_policy`` (barrier mode is ``fixed_points`` for this strategy), ``inference``,
+-    and the optional ``research_session_experiment``. ``extra="forbid"`` (via
++    Holds exactly the strategy-specific groups that moved out of the flat contract
++    at E3: ``session_scheme``, ``level_scheme``, ``touch_rule``, ``feature_windows``,
++    the interaction/approach feature partition (ex ``feature_set``), and the
++    optional ``research_session_experiment``. ``extra="forbid"`` (via
+     ``_ContractModel``) so any unknown key still fails closed.
++
++    The partition validator here checks what the section can check ALONE (the two
++    tuples are disjoint and duplicate-free); the cross-check against the ENVELOPE's
++    ``feature_set.names`` is :func:`validate_feature_partition`, run at the two
++    validation sites (QL emission, TL activation).
+     """
+ 
+     session_scheme: SessionScheme
+     level_scheme: LevelScheme
+     touch_rule: TouchRule
+     feature_windows: FeatureWindows
+-    label_policy: LabelPolicy
+-    inference: InferencePolicy
++    interaction_features: tuple[str, ...] = Field(max_length=256)
++    approach_features: tuple[str, ...] = Field(max_length=256)
+     research_session_experiment: ResearchSessionExperiment | None = None
+ 
++    @model_validator(mode="after")
++    def _partition_is_disjoint_and_duplicate_free(self) -> TouchReversalSection:
++        split = (*self.interaction_features, *self.approach_features)
++        if len(set(split)) != len(split):
++            raise ValueError(
++                "interaction_features and approach_features must be disjoint and "
++                "duplicate-free"
++            )
++        return self
++
++
++def validate_feature_partition(
++    feature_names: Sequence[str], section: TouchReversalSection
++) -> None:
++    """The envelope<->section feature-partition cross-check (contract v3, E3).
++
++    The section's ``interaction_features + approach_features`` must be EXACTLY the
++    envelope's ``feature_set.names`` (same elements, same count — the moved
++    semantics of the pre-v3 ``FeatureSet`` partition validator). Single-sourced
++    here so the TWO validation sites (QL emission, TL activation) cannot drift.
++    Raises :class:`ContractError` on a mismatch.
++    """
++    split = (*section.interaction_features, *section.approach_features)
++    if set(split) != set(feature_names) or len(split) != len(feature_names):
++        raise ContractError(
++            "feature_set.names must be exactly the union of the section's "
++            "interaction_features and approach_features"
++        )
++
+ 
+ def _contract_scheme_from_runtime(scheme: RuntimeSessionScheme) -> SessionScheme:
+     """Adapt a runtime ``types.SessionScheme`` (``datetime.time``) into its CONTRACT form
+     (``"HH:MM"`` strings). The inverse of ``plugin._runtime_scheme_from_section``, so a
+     section built from the runtime's scheme round-trips back to exactly that scheme (W5).
+ 
+-    The contract form carries no ``closed_window``; the canonical research scheme has none,
+-    so the round-trip is identity for it. (A scheme with a non-``None`` ``closed_window``
+-    would not round-trip — not a production case; the touch strategy uses the research scheme.)
++    Drop-nothing BOTH directions as of E3: a non-``None`` runtime ``closed_window``
++    is carried as the contract scheme's optional ``closed_window`` start/end pair
++    (closing the recorded round-trip gap for ``TRADE_LAB_CT_SESSION_SCHEME``).
+     """
+     return SessionScheme(
+         timezone=scheme.timezone,
+@@ -102,6 +144,14 @@ def _contract_scheme_from_runtime(scheme: RuntimeSessionScheme) -> SessionScheme
+             )
+             for name, window in scheme.sessions.items()
+         },
++        closed_window=(
++            SessionWindow(
++                start=scheme.closed_window[0].strftime("%H:%M"),
++                end=scheme.closed_window[1].strftime("%H:%M"),
++            )
++            if scheme.closed_window is not None
++            else None
++        ),
+     )
+ 
+ 
+@@ -114,9 +164,17 @@ def default_touch_reversal_section() -> TouchReversalSection:
+     ``touch_rule.zone_proximity_pts == ZONE_PROXIMITY_PTS`` (the ``build_zones`` default,
+     so the section-driven DETECTION zones match the default-proximity zones
+     ``StrategyLevelState.zones()`` builds for the snapshot). Every value is
+-    single-sourced from ``strategy_core.constants`` — no restated literals — so this is the
+-    same section the QL emitter will generate from the plugin (a later phase). The non-detection
+-    fields are descriptive and do not affect the plugin's touch output.
++    single-sourced from ``strategy_core.constants`` — no restated literals — and the QL
++    emitter generates its emitted section from THIS default (overriding only the
++    per-run config values). The non-detection fields are descriptive and do not affect
++    the plugin's touch output.
++
++    E3 ledger fix: ``touch_rule.bar_type`` defaults to the canonical production bar
++    literal (``f"{DEFAULT_TICK_COUNT}t"`` = ``"147t"``, the same form Trade-Lab's
++    ``parse_bar_type`` accepts), not the pre-E3 ``"tick"`` placeholder. The old
++    ``label_policy.forward_bar_type="tick"`` landmine died with ``label_policy``'s
++    move to the ENVELOPE (the section carries no label policy; the emitter sources
++    ``forward_bar_type`` per-run).
+     """
+     return TouchReversalSection(
+         session_scheme=_contract_scheme_from_runtime(RESEARCH_SESSION_SCHEME),
+@@ -127,7 +185,7 @@ def default_touch_reversal_section() -> TouchReversalSection:
+         ),
+         touch_rule=TouchRule(
+             type=TOUCH_TYPE,
+-            bar_type="tick",
++            bar_type=f"{DEFAULT_TICK_COUNT}t",
+             zone_proximity_pts=ZONE_PROXIMITY_PTS,
+             zone_representative_price=ZONE_REPRESENTATIVE_PRICE,
+             scope=TOUCH_SCOPE,
+@@ -143,20 +201,6 @@ def default_touch_reversal_section() -> TouchReversalSection:
+             large_trade_threshold=LARGE_TRADE_THRESHOLD,
+             mid_price_source=MID_PRICE_SOURCE,
+         ),
+-        label_policy=LabelPolicy(
+-            resolution=LABEL_RESOLUTION,
+-            entry_reference=LABEL_ENTRY_REFERENCE,
+-            decision_offset_minutes=DECISION_OFFSET_MINUTES,
+-            tp_points=DEFAULT_TP_POINTS,
+-            sl_points=DEFAULT_SL_POINTS,
+-            trap_mfe_min=DEFAULT_TRAP_MFE_MIN,
+-            forward_bar_type="tick",
+-            forward_cutoff=LABEL_FORWARD_CUTOFF,
+-            no_resolution_dropped=LABEL_NO_RESOLUTION_DROPPED,
+-        ),
+-        inference=InferencePolicy(
+-            eligible_class=TRADEABLE_REVERSAL,
+-            eligible_session=INFERENCE_ELIGIBLE_SESSION,
+-            confidence_gate=DEFAULT_CONFIDENCE_GATE,
+-        ),
++        interaction_features=INTERACTION_FEATURES,
++        approach_features=RUNTIME_APPROACH_FEATURES,
+     )
+diff --git a/tests/test_contract.py b/tests/test_contract.py
+index a4a8011..6d58a67 100644
+--- a/tests/test_contract.py
++++ b/tests/test_contract.py
+@@ -1,11 +1,15 @@
+ """Tests for the promoted ``strategy.json`` contract schema + loader.
+ 
+-Covers the canonical fail-closed flow ported from Trade-Lab plus the two-axis
++Covers the canonical fail-closed flow ported from Trade-Lab, the two-axis
+ version binding (spec §6 / decision 9.3): ``platform_version`` (ex
+-``engine_version``) and the required ``strategy_version``. All inputs are built inline from a
+-single complete valid contract dict so each negative case differs from the valid
+-baseline by exactly one mutation; the dict is written to a ``tmp_path`` json file so
+-the loader's real disk-read / JSON-parse path is exercised.
++``engine_version``) and the required ``strategy_version``, and the contract-v3
++envelope/section split (E3): the plugin-consumed groups live in the ``section``
++subtree, validated against the registered plugin's ``SectionModel`` via the
++loader's opt-in ``validate_section_via_registry`` hook. All inputs are built
++inline from a single complete valid contract dict so each negative case differs
++from the valid baseline by exactly one mutation; the dict is written to a
++``tmp_path`` json file so the loader's real disk-read / JSON-parse path is
++exercised.
+ """
+ 
+ from __future__ import annotations
+@@ -17,37 +21,47 @@ from typing import Any
+ 
+ import pytest
+ 
++# The explicit registration import: the section hook resolves strategy_id via the
++# registry, which is deliberately empty on a bare `import strategy_core` (D-B3c).
++import strategy_core.strategies.touch_reversal  # noqa: F401
+ from strategy_core import CONTRACT_VERSION, PLATFORM_VERSION
+ from strategy_core.contract.loader import load_strategy_contract
+ from strategy_core.contract.schema import (
+     ClassMap,
+     ContractError,
+-    FeatureSet,
+     StrategyContract,
+ )
++from strategy_core.strategies.touch_reversal.section import (
++    TouchReversalSection,
++    validate_feature_partition,
++)
++
++INTERACTION_FEATURES = (
++    "int_time_beyond_level",
++    "int_time_within_2pts",
++    "int_absorption_ratio",
++)
++APPROACH_FEATURES = (
++    "app_large_trade_vol_pct",
++    "app_avg_trade_size",
++    "app_max_spread",
++)
+ 
+ 
+ def _valid_contract_dict() -> dict[str, Any]:
+-    """A complete, valid contract dict: every section present, all validators satisfied.
++    """A complete, valid v3 contract dict: the platform ENVELOPE (flat keys) + the
++    strategy-owned ``section`` subtree, all validators satisfied.
+ 
+-    The 6 feature names partition exactly into interaction + approach; the class_map
+-    is contiguous-from-zero with unique labels; ``platform_version`` matches the package.
++    ``strategy_id`` is the real router key (``touch_reversal``) so the section hook
++    can resolve it; the section subtree validates under ``TouchReversalSection``;
++    the class_map is contiguous-from-zero with unique labels; ``platform_version``
++    matches the package.
+     """
+ 
+-    interaction_features = (
+-        "int_time_beyond_level",
+-        "int_time_within_2pts",
+-        "int_absorption_ratio",
+-    )
+-    approach_features = (
+-        "app_large_trade_vol_pct",
+-        "app_avg_trade_size",
+-        "app_max_spread",
+-    )
+     return {
+         "contract_version": CONTRACT_VERSION,
+         "platform_version": PLATFORM_VERSION,
+-        "strategy_id": "nq_reversal_v1",
++        "strategy_id": "touch_reversal",
+         "strategy_version": "1",
+         "training_mode": "dashboard_utility",
+         "supported_by_runtime": True,
+@@ -59,62 +73,31 @@ def _valid_contract_dict() -> dict[str, Any]:
+             "loss_function": "MultiClass",
+             "file": "model.cbm",
+         },
+-        "feature_set": {
+-            "names": list(interaction_features) + list(approach_features),
+-            "order_is_contractual": True,
+-            "interaction_features": list(interaction_features),
+-            "approach_features": list(approach_features),
+-            "nan_policy": "zero_fill",
+-        },
+         "class_map": {
+             "0": "tradeable_reversal",
+             "1": "trap_reversal",
+             "2": "aggressive_blowthrough",
+         },
+-        "session_scheme": {
+-            "timezone": "US/Eastern",
+-            "trading_day_boundary": "18:00",
+-            "sessions": {
+-                "asia": {"start": "18:00", "end": "01:00", "crosses_midnight": True},
+-                "london": {"start": "01:00", "end": "08:00"},
+-                "ny_rth": {"start": "09:30", "end": "16:15"},
+-            },
+-        },
+-        "level_scheme": {
+-            "pdh_pdl_source": "prior_rth",
+-            "session_levels": ["asia_high", "asia_low"],
+-            "available_from_guard": True,
+-        },
+-        "touch_rule": {
+-            "type": "first_touch",
+-            "bar_type": "tick",
+-            "zone_proximity_pts": 3.0,
+-            "zone_representative_price": "mean",
+-            "scope": "trading_day",
+-            "direction_from_side": {"LOW": "LONG", "HIGH": "SHORT"},
+-        },
+-        "feature_windows": {
+-            "interaction_window_minutes": 5,
+-            "approach_window_minutes": 90,
+-            "within_band_pts": 2.0,
+-            "level_proximity_pts": 0.5,
+-            "large_trade_threshold": 10,
+-            "mid_price_source": "trade_price",
++        "feature_set": {
++            "names": list(INTERACTION_FEATURES) + list(APPROACH_FEATURES),
++            "order_is_contractual": True,
++            "nan_policy": "zero_fill",
+         },
+         "label_policy": {
+             "resolution": "forward_window",
++            "barrier_mode": "fixed_points",
+             "entry_reference": "touch_price",
+             "decision_offset_minutes": 5,
+             "tp_points": 15.0,
+             "sl_points": 30.0,
+             "trap_mfe_min": 5.0,
+-            "forward_bar_type": "tick",
++            "forward_bar_type": "147t",
+             "forward_cutoff": "rth_end",
+             "no_resolution_dropped": True,
+         },
+         "inference": {
+             "eligible_class": "tradeable_reversal",
+-            "eligible_session": "ny_rth",
++            "eligible_session": "ny",
+             "confidence_gate": 0.6,
+         },
+         "data_requirements": {
+@@ -127,6 +110,40 @@ def _valid_contract_dict() -> dict[str, Any]:
+             "dataset_config_hash": "abc123",
+             "catboost": {"iterations": 500, "depth": 6},
+         },
++        "section": {
++            "session_scheme": {
++                "timezone": "US/Eastern",
++                "trading_day_boundary": "18:00",
++                "sessions": {
++                    "asia": {"start": "19:00", "end": "02:45", "crosses_midnight": True},
++                    "london": {"start": "03:00", "end": "08:00"},
++                    "ny": {"start": "09:00", "end": "17:00"},
++                },
++            },
++            "level_scheme": {
++                "pdh_pdl_source": "prior_day_full",
++                "session_levels": ["asia_high", "asia_low"],
++                "available_from_guard": True,
++            },
++            "touch_rule": {
++                "type": "first_touch",
++                "bar_type": "147t",
++                "zone_proximity_pts": 3.0,
++                "zone_representative_price": "mean",
++                "scope": "trading_day",
++                "direction_from_side": {"LOW": "LONG", "HIGH": "SHORT"},
++            },
++            "feature_windows": {
++                "interaction_window_minutes": 5,
++                "approach_window_minutes": 90,
++                "within_band_pts": 2.0,
++                "level_proximity_pts": 0.5,
++                "large_trade_threshold": 10,
++                "mid_price_source": "trade_price",
++            },
++            "interaction_features": list(INTERACTION_FEATURES),
++            "approach_features": list(APPROACH_FEATURES),
++        },
+     }
+ 
+ 
+@@ -182,11 +199,12 @@ def test_wrong_platform_version_with_expected_raises(tmp_path: Path) -> None:
+         load_strategy_contract(path, expected_platform_version=PLATFORM_VERSION)
+ 
+ 
+-def test_v1_contract_version_fails_closed_at_the_first_check(tmp_path: Path) -> None:
+-    # The E1 shape break: a pre-migration v1 bundle dies on contract_version BEFORE
+-    # any field-shape complaint (platform hook + model_validate never reached).
++def test_v2_contract_version_fails_closed_at_the_first_check(tmp_path: Path) -> None:
++    # The E3 shape break (#2): a pre-migration v2 bundle dies on contract_version
++    # BEFORE any field-shape complaint (platform hook + model_validate never
++    # reached) — the same fail-closed-at-first-check pattern as the E1 v1 break.
+     payload = _valid_contract_dict()
+-    payload["contract_version"] = "trade_lab_contract_v1"
++    payload["contract_version"] = "trade_lab_contract_v2"
+     path = _write(tmp_path, payload)
+ 
+     with pytest.raises(ContractError, match="unsupported contract_version"):
+@@ -224,16 +242,101 @@ def test_non_contiguous_class_map_raises(tmp_path: Path) -> None:
+         load_strategy_contract(path)
+ 
+ 
+-def test_feature_set_names_not_union_raises(tmp_path: Path) -> None:
++def test_missing_section_rejected(tmp_path: Path) -> None:
++    # v3: the section subtree is a REQUIRED envelope field even for hookless loads.
+     payload = _valid_contract_dict()
+-    # Drop one approach feature from names so names != interaction + approach.
+-    payload["feature_set"]["names"] = payload["feature_set"]["names"][:-1]
++    del payload["section"]
+     path = _write(tmp_path, payload)
+ 
+-    with pytest.raises(ContractError):
++    with pytest.raises(ContractError, match="section"):
+         load_strategy_contract(path)
+ 
+ 
++def test_section_hook_returns_typed_instance(tmp_path: Path) -> None:
++    # The E3 carrier: with the hook on, the typed section rides the returned
++    # contract via .section_model; the loader's single-return shape is unchanged.
++    path = _write(tmp_path, _valid_contract_dict())
++
++    contract = load_strategy_contract(path, validate_section_via_registry=True)
++
++    assert isinstance(contract, StrategyContract)
++    section = contract.section_model
++    assert isinstance(section, TouchReversalSection)
++    assert section.touch_rule.bar_type == "147t"
++    assert section.interaction_features == INTERACTION_FEATURES
++
++
++def test_section_model_unavailable_without_hook(tmp_path: Path) -> None:
++    # Fail closed: a hookless load never hands back an unvalidated section as typed.
++    contract = load_strategy_contract(_write(tmp_path, _valid_contract_dict()))
++
++    with pytest.raises(ContractError, match="validate_section_via_registry"):
++        _ = contract.section_model
++
++
++def test_section_failing_section_model_rejected_with_hook(tmp_path: Path) -> None:
++    # A section subtree the plugin's SectionModel rejects (unknown key -> the
++    # _ContractModel extra="forbid" fail-close) dies at the hook.
++    payload = _valid_contract_dict()
++    payload["section"]["bogus_key"] = 1
++    path = _write(tmp_path, payload)
++
++    with pytest.raises(ContractError, match="invalid strategy section"):
++        load_strategy_contract(path, validate_section_via_registry=True)
++
++    # Hookless, the same contract loads: the envelope never interprets the section.
++    contract = load_strategy_contract(path)
++    assert contract.section["bogus_key"] == 1
++
++
++def test_section_missing_group_rejected_with_hook(tmp_path: Path) -> None:
++    payload = _valid_contract_dict()
++    del payload["section"]["touch_rule"]
++    path = _write(tmp_path, payload)
++
++    with pytest.raises(ContractError, match="invalid strategy section"):
++        load_strategy_contract(path, validate_section_via_registry=True)
++
++
++def test_unknown_strategy_id_fails_closed_with_hook(tmp_path: Path) -> None:
++    payload = _valid_contract_dict()
++    payload["strategy_id"] = "does_not_exist"
++    path = _write(tmp_path, payload)
++
++    with pytest.raises(ContractError, match="unknown strategy_id"):
++        load_strategy_contract(path, validate_section_via_registry=True)
++
++
++def test_feature_partition_cross_check(tmp_path: Path) -> None:
++    # The envelope<->section cross-check (run at the two validation sites): the
++    # section partition must be exactly feature_set.names.
++    contract = load_strategy_contract(
++        _write(tmp_path, _valid_contract_dict()), validate_section_via_registry=True
++    )
++    validate_feature_partition(contract.feature_set.names, contract.section_model)
++
++    with pytest.raises(ContractError, match="exactly the union"):
++        validate_feature_partition(
++            contract.feature_set.names[:-1], contract.section_model
++        )
++
++
++def test_barrier_mode_enum_constrained(tmp_path: Path) -> None:
++    # barrier_mode admits exactly the two ratified values and defaults fixed_points.
++    payload = _valid_contract_dict()
++    del payload["label_policy"]["barrier_mode"]
++    contract = load_strategy_contract(_write(tmp_path, payload))
++    assert contract.label_policy.barrier_mode == "fixed_points"
++
++    payload["label_policy"]["barrier_mode"] = "r_relative"
++    contract = load_strategy_contract(_write(tmp_path, payload))
++    assert contract.label_policy.barrier_mode == "r_relative"
++
++    payload["label_policy"]["barrier_mode"] = "percent"
++    with pytest.raises(ContractError):
++        load_strategy_contract(_write(tmp_path, payload))
++
++
+ def test_unreadable_path_raises(tmp_path: Path) -> None:
+     missing = tmp_path / "does_not_exist.json"
+ 
+@@ -269,17 +372,13 @@ def test_class_map_duplicate_labels_raise() -> None:
+         ClassMap.model_validate({"0": "dup", "1": "dup"})
+ 
+ 
+-def test_feature_set_validator_independently() -> None:
+-    with pytest.raises(ValueError):
+-        FeatureSet.model_validate(
+-            {
+-                "names": ["a", "b", "c"],
+-                "order_is_contractual": True,
+-                "interaction_features": ["a"],
+-                "approach_features": ["b"],  # missing "c" -> not a partition
+-                "nan_policy": "zero_fill",
+-            }
+-        )
++def test_section_partition_duplicates_rejected() -> None:
++    # The MOVED partition validator (ex FeatureSet): the section alone rejects a
++    # non-disjoint/duplicated partition; the names cross-check is the helper above.
++    payload = _valid_contract_dict()["section"]
++    payload["approach_features"] = ["int_time_beyond_level", "app_max_spread"]
++    with pytest.raises(ValueError, match="disjoint"):
++        TouchReversalSection.model_validate(payload)
+ 
+ 
+ def test_models_are_frozen(tmp_path: Path) -> None:
+diff --git a/tests/test_touch_reversal_plugin.py b/tests/test_touch_reversal_plugin.py
+index 5bc988c..29ee6aa 100644
+--- a/tests/test_touch_reversal_plugin.py
++++ b/tests/test_touch_reversal_plugin.py
+@@ -16,12 +16,15 @@ from datetime import UTC, date, datetime
+ import pytest
+ from pydantic import ValidationError
+ 
+-from strategy_core.constants import DEFAULT_TICK_SIZE, ZONE_PROXIMITY_PTS
++from strategy_core.constants import (
++    DEFAULT_TICK_SIZE,
++    RESEARCH_SESSION_SCHEME,
++    TRADE_LAB_CT_SESSION_SCHEME,
++    ZONE_PROXIMITY_PTS,
++)
+ from strategy_core.contract.schema import (
+     ContractError,
+     FeatureWindows,
+-    InferencePolicy,
+-    LabelPolicy,
+     LevelScheme,
+     SessionScheme,
+     SessionWindow,
+@@ -32,8 +35,12 @@ from strategy_core.decisions.zones import build_zones
+ from strategy_core.strategies.registry import get_strategy
+ from strategy_core.strategies.touch_reversal.plugin import (  # noqa: F401 -- import registers the plugin
+     TouchReversalPlugin,
++    _runtime_scheme_from_section,
++)
++from strategy_core.strategies.touch_reversal.section import (
++    TouchReversalSection,
++    _contract_scheme_from_runtime,
+ )
+-from strategy_core.strategies.touch_reversal.section import TouchReversalSection
+ from strategy_core.types import Bar, CloseReason, Direction, Level, Side
+ 
+ 
+@@ -92,21 +99,15 @@ def _section() -> TouchReversalSection:
+             large_trade_threshold=10,
+             mid_price_source="trade_price",
+         ),
+-        label_policy=LabelPolicy(
+-            resolution="mae_first",
+-            entry_reference="realistic_at_decision",
+-            decision_offset_minutes=5,
+-            tp_points=15.0,
+-            sl_points=30.0,
+-            trap_mfe_min=5.0,
+-            forward_bar_type="tick",
+-            forward_cutoff="17:00_US/Eastern_ny_close",
+-            no_resolution_dropped=True,
++        interaction_features=(
++            "int_time_beyond_level",
++            "int_time_within_2pts",
++            "int_absorption_ratio",
+         ),
+-        inference=InferencePolicy(
+-            eligible_class="tradeable_reversal",
+-            eligible_session="ny",
+-            confidence_gate=0.70,
++        approach_features=(
++            "app_large_trade_vol_pct",
++            "app_avg_trade_size",
++            "app_max_spread",
+         ),
+     )
+ 
+@@ -220,3 +221,23 @@ def test_plugin_declarations_match_engine_constants() -> None:
+     # The barrier projects fixed points off the entry, direction-aware.
+     assert policy.barrier.stop_price(100.0, Direction.LONG) == 70.0
+     assert policy.barrier.target_price(100.0, Direction.LONG) == 115.0
++
++
++def test_session_scheme_round_trips_drop_nothing() -> None:
++    """E3: contract<->runtime scheme adaptation drops nothing in either direction.
++
++    The research scheme (closed_window=None) round-trips identically as before, and
++    the CT scheme's 16:00-18:00 closed window — the recorded pre-E3 round-trip gap —
++    now survives ``_contract_scheme_from_runtime`` -> ``_runtime_scheme_from_section``.
++    """
++    for runtime_scheme in (RESEARCH_SESSION_SCHEME, TRADE_LAB_CT_SESSION_SCHEME):
++        contract_form = _contract_scheme_from_runtime(runtime_scheme)
++        assert _runtime_scheme_from_section(contract_form) == runtime_scheme
++
++    ct_contract = _contract_scheme_from_runtime(TRADE_LAB_CT_SESSION_SCHEME)
++    assert ct_contract.closed_window is not None
++    assert (ct_contract.closed_window.start, ct_contract.closed_window.end) == (
++        "16:00",
++        "18:00",
++    )
++    assert _contract_scheme_from_runtime(RESEARCH_SESSION_SCHEME).closed_window is None

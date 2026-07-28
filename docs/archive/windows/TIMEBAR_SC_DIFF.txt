@@ -1,0 +1,1132 @@
+7992323 test(candles): wall-clock ceiling on the 8-TF time-bar build — 1.0s vs ~0.085s observed (TIMEBAR C6)
+48fdf60 test(candles): time-bar rule units — anchoring, exact bucket edge, DST 23h/25h, bar_id kinds, TICK default, dense index (TIMEBAR C5)
+20153a3 test(candles): time-bar batch<->streaming parity lock — 8 TFs, day roll, empty buckets, truncation, both DST days (TIMEBAR C4)
+1eca72f feat(candles): vectorized build_time_bars_from_frame — one 60s aggregation, upward groupby per timeframe (TIMEBAR C3)
+228ce28 feat(candles): streaming TimeBarEngine — 60s base + aggregate-upward, day-anchored DST-correct buckets (TIMEBAR C2)
+fc0881c feat(candles): Bar gains kind (BarKind, appended last, default TICK); make_bar_id branches TIME->'s' (TIMEBAR C1)
+
+ src/strategy_core/candles/_buckets.py       |  39 ++++
+ src/strategy_core/candles/_ids.py           |  35 +++-
+ src/strategy_core/candles/time_batch.py     | 214 ++++++++++++++++++++++
+ src/strategy_core/candles/time_streaming.py | 274 ++++++++++++++++++++++++++++
+ src/strategy_core/strategies/protocols.py   |  12 +-
+ src/strategy_core/types.py                  |  20 ++
+ tests/test_time_bar_parity.py               | 222 ++++++++++++++++++++++
+ tests/test_time_bars.py                     | 204 +++++++++++++++++++++
+ 8 files changed, 1003 insertions(+), 17 deletions(-)
+
+diff --git a/src/strategy_core/candles/_buckets.py b/src/strategy_core/candles/_buckets.py
+new file mode 100644
+index 0000000..70f2c1e
+--- /dev/null
++++ b/src/strategy_core/candles/_buckets.py
+@@ -0,0 +1,39 @@
++"""Shared trading-day anchoring for the TIME-bar builders (Phase F).
++
++Both the streaming and batch time builders bucket a trade by
++
++    bucket_index = floor((ts_utc - day_boundary_utc) / interval_seconds)
++
++where ``day_boundary_utc`` is the ABSOLUTE UTC instant the trading day opened.
++Single-sourced here so the two paths cannot drift on the anchor.
++"""
++
++from __future__ import annotations
++
++from datetime import date, datetime, timedelta
++from zoneinfo import ZoneInfo
++
++from strategy_core.types import SessionScheme
++
++__all__ = ["trading_day_start_utc"]
++
++_UTC = ZoneInfo("UTC")
++
++
++def trading_day_start_utc(trading_day: date, scheme: SessionScheme) -> datetime:
++    """The UTC instant ``trading_day`` opens: ``scheme.trading_day_boundary``
++    (18:00 for the research scheme) in the scheme timezone on the calendar day
++    PRECEDING ``trading_day``.
++
++    Anchoring buckets at this absolute instant — rather than at local wall-clock
++    labels — is what makes 23- and 25-hour DST trading days bucket correctly:
++    elapsed seconds since the anchor are true elapsed seconds, so the day simply
++    contains fewer or more buckets. (Not DST-ambiguous itself: the 18:00 boundary
++    always exists; US DST flips at 02:00.) Mirrors
++    ``StrategyLevelState._trading_day_start_available`` (``runtime/levels.py``).
++    """
++    tz = ZoneInfo(scheme.timezone)
++    local = datetime.combine(
++        trading_day - timedelta(days=1), scheme.trading_day_boundary, tzinfo=tz
++    )
++    return local.astimezone(_UTC)
+diff --git a/src/strategy_core/candles/_ids.py b/src/strategy_core/candles/_ids.py
+index 3ad6fbf..b765490 100644
+--- a/src/strategy_core/candles/_ids.py
++++ b/src/strategy_core/candles/_ids.py
+@@ -3,25 +3,40 @@
+ A bar id is the join key the rest of the stack uses to reconcile a streaming
+ bar with its batch-built twin, so the two builders MUST format it identically.
+ Single-sourced here and imported by both ``candles/batch.py`` and
+-``candles/streaming.py``.
++``candles/streaming.py`` (tick) and ``candles/time_batch.py`` /
++``candles/time_streaming.py`` (time).
+ 
+-Ported verbatim from Trade-Lab's ``make_bar_id``:
+-``Trade-Lab/backend/src/trade_lab/domain/candles.py:195-196``.
++Ported verbatim from Trade-Lab's ``make_bar_id``
++(``Trade-Lab/backend/src/trade_lab/domain/candles.py:195-196``) for the TICK
++kind; Phase F adds the TIME branch (``s`` unit suffix, interval seconds).
+ """
+ 
+ from __future__ import annotations
+ 
+ from datetime import date
+ 
++from strategy_core.types import BarKind
++
+ __all__ = ["make_bar_id"]
+ 
+ 
+-def make_bar_id(timeframe_ticks: int, trading_day: date, bar_index: int) -> str:
+-    """Format the canonical bar id ``f"{tf}t:{trading_day}:{bar_index}"``.
++def make_bar_id(
++    timeframe_ticks: int,
++    trading_day: date,
++    bar_index: int,
++    kind: BarKind = BarKind.TICK,
++) -> str:
++    """Format the canonical bar id, branching on ``kind``.
++
++    * ``TICK`` -> ``f"{tf}t:{trading_day}:{bar_index}"`` — byte-identical to the
++      original (``candles.py:195-196``); ``kind`` defaults to TICK so every
++      pre-Phase-F call site keeps producing the exact same ids.
++    * ``TIME`` -> ``f"{tf}s:{trading_day}:{bar_index}"`` — the same shape with an
++      ``s`` unit suffix; ``timeframe_ticks`` carries the interval in seconds
++      (the ``BarSpec.size`` convention).
+ 
+-    Exactly reproduces ``make_bar_id`` (``candles.py:195-196``): the timeframe in
+-    ticks followed by a ``t`` literal, the ISO trading day, and the per-day
+-    bar index, colon-separated. ``date.isoformat()`` is used for the day so the
+-    string is identical across the batch and streaming paths.
++    ``date.isoformat()`` is used for the day so the string is identical across
++    the batch and streaming paths.
+     """
+-    return f"{timeframe_ticks}t:{trading_day.isoformat()}:{bar_index}"
++    unit = "s" if kind is BarKind.TIME else "t"
++    return f"{timeframe_ticks}{unit}:{trading_day.isoformat()}:{bar_index}"
+diff --git a/src/strategy_core/candles/time_batch.py b/src/strategy_core/candles/time_batch.py
+new file mode 100644
+index 0000000..906fcfe
+--- /dev/null
++++ b/src/strategy_core/candles/time_batch.py
+@@ -0,0 +1,214 @@
++"""Vectorized (pandas + numpy) TIME-bar builder over a trades DataFrame (Phase F).
++
++The batch twin of :class:`~strategy_core.candles.time_streaming.TimeBarEngine`,
++mirroring ``build_tick_bars_from_frame``'s signature shape and input contract
++(``ts_event`` UTC, ``price`` points, ``size``). Same architect-ratified rules:
++
++* ``bucket = floor((ts_utc - day_start_utc) / interval)`` anchored at the trading-day
++  boundary INSTANT (:func:`~strategy_core.candles._buckets.trading_day_start_utc`) —
++  DST-correct by construction; here computed in integer nanoseconds.
++* DERIVE ONCE, AGGREGATE UPWARD: one 60s aggregation over trades; every requested
++  timeframe (60s included) is a groupby over those 60s rows via
++  ``hbucket = bucket60 * 60 // interval`` — never a second pass over trades.
++  Higher OHLC = first open / max high / min low / last close over constituent 60s
++  rows; volume / trade_count are sums over the 60s rows that EXIST (skipped empty
++  minutes contribute nothing).
++* NO EMPTY BARS; ``bar_index`` dense over emitted bars per (timeframe, trading_day).
++* COMPLETENESS: the last bar of each (timeframe, trading_day) is ``END_OF_DAY``
++  incomplete (no later bucket produced a bar); every other bar is ``COMPLETE``.
++
++The parity test (``tests/test_time_bar_parity.py``) locks this against the
++streaming engine. Like ``candles/batch.py``, this module may import pandas (the
++research / warm-up fast path, run off the event loop).
++"""
++
++from __future__ import annotations
++
++from datetime import time
++from typing import TYPE_CHECKING
++
++from strategy_core.candles._buckets import trading_day_start_utc
++from strategy_core.candles._ids import make_bar_id
++from strategy_core.candles.time_streaming import BASE_INTERVAL_SECONDS
++from strategy_core.constants import DEFAULT_TICK_SIZE, RESEARCH_SESSION_SCHEME
++from strategy_core.types import Bar, BarKind, CloseReason, SessionScheme
++
++if TYPE_CHECKING:
++    import pandas as pd
++
++__all__ = ["build_time_bars_from_frame"]
++
++_NS_PER_SECOND = 1_000_000_000
++
++
++def _seconds_of(t: time) -> int:
++    """Seconds-of-day for a local wall-clock ``time`` (same as ``batch.py``)."""
++    return t.hour * 3600 + t.minute * 60 + t.second
++
++
++def build_time_bars_from_frame(
++    frame: "pd.DataFrame",
++    timeframes_seconds: tuple[int, ...],
++    *,
++    scheme: SessionScheme = RESEARCH_SESSION_SCHEME,
++    tick_size: float = DEFAULT_TICK_SIZE,
++) -> list[Bar]:
++    """Vectorized equivalent of feeding ``frame``'s trades through ``TimeBarEngine``.
++
++    ``frame`` must have ``ts_event`` (UTC), ``price`` (tick-aligned points) and
++    ``size`` — the exact ``build_tick_bars_from_frame`` input contract, with the
++    same coercion, tick rounding, trading-day derivation, closed-window drop and
++    stable sort. Returns bars over timeframes in ascending order; for a fixed
++    timeframe in ``(trading_day, bar_index)`` order — identical to the streaming
++    engine's emission for the same trades.
++    """
++    import warnings
++
++    import numpy as np
++    import pandas as pd
++
++    if not timeframes_seconds:
++        raise ValueError("time timeframes must be non-empty")
++    for seconds in timeframes_seconds:
++        if seconds < BASE_INTERVAL_SECONDS or seconds % BASE_INTERVAL_SECONDS:
++            raise ValueError(
++                "time timeframes must be positive multiples of "
++                f"{BASE_INTERVAL_SECONDS}s (got {seconds})"
++            )
++
++    if frame is None or len(frame) == 0:
++        return []
++
++    # ── identical trade normalization to batch.py (coerce ts, points -> ticks) ──
++    ts = frame["ts_event"]
++    if not pd.api.types.is_datetime64_any_dtype(ts):
++        ts = pd.to_datetime(ts, utc=True, unit="ns")
++    elif ts.dt.tz is None:
++        ts = ts.dt.tz_localize("UTC")
++    else:
++        ts = ts.dt.tz_convert("UTC")
++
++    price_ticks = np.rint(frame["price"].to_numpy(dtype="float64") / tick_size).astype("int64")
++    work = pd.DataFrame(
++        {
++            "ts_event": ts.to_numpy(),
++            "price_ticks": price_ticks,
++            "size": frame["size"].to_numpy(dtype="int64"),
++        }
++    )
++    work["ts_event"] = pd.to_datetime(work["ts_event"], utc=True)
++
++    local = work["ts_event"].dt.tz_convert(scheme.timezone)
++    sod = local.dt.hour * 3600 + local.dt.minute * 60 + local.dt.second
++    cal_date = local.dt.tz_localize(None).dt.floor("D")
++    boundary_sod = _seconds_of(scheme.trading_day_boundary)
++    roll = (sod >= boundary_sod).astype("int64")
++    work["trading_day"] = cal_date + pd.to_timedelta(roll, unit="D")
++
++    if scheme.closed_window is not None:
++        closed_start_sod = _seconds_of(scheme.closed_window[0])
++        closed_end_sod = _seconds_of(scheme.closed_window[1])
++        closed = (sod >= closed_start_sod) & (sod < closed_end_sod)
++        work = work[~closed]
++    work = work.sort_values("ts_event", kind="stable").reset_index(drop=True)
++    if work.empty:
++        return []
++
++    # ── 60s bucketing anchored at each trading day's boundary instant ──────────
++    # Integer-nanosecond floor-divide so an edge-exact trade buckets identically to
++    # the streaming engine's integer-microsecond arithmetic.
++    day_start_ns = {
++        td: pd.Timestamp(trading_day_start_utc(td.date(), scheme)).value
++        for td in work["trading_day"].unique()
++    }
++    ts_ns = pd.DatetimeIndex(work["ts_event"]).asi8
++    start_ns = work["trading_day"].map(day_start_ns).to_numpy(dtype="int64")
++    work["bucket60"] = (ts_ns - start_ns) // (BASE_INTERVAL_SECONDS * _NS_PER_SECOND)
++
++    # ── the ONE aggregation over trades: the 60s series ────────────────────────
++    minute = (
++        work.groupby(["trading_day", "bucket60"], sort=True)
++        .agg(
++            open_ts=("ts_event", "first"),
++            close_ts=("ts_event", "last"),
++            open_ticks=("price_ticks", "first"),
++            close_ticks=("price_ticks", "last"),
++            high_ticks=("price_ticks", "max"),
++            low_ticks=("price_ticks", "min"),
++            volume=("size", "sum"),
++            trade_count=("price_ticks", "size"),
++        )
++        .reset_index()
++    )
++
++    # ── every timeframe aggregates the 60s rows (60s itself: hbucket == bucket60) ─
++    bars: list[Bar] = []
++    for interval in sorted(set(timeframes_seconds)):
++        minute["hbucket"] = minute["bucket60"] * BASE_INTERVAL_SECONDS // interval
++        agg = (
++            minute.groupby(["trading_day", "hbucket"], sort=True)
++            .agg(
++                open_ts=("open_ts", "first"),
++                close_ts=("close_ts", "last"),
++                open_ticks=("open_ticks", "first"),
++                close_ticks=("close_ticks", "last"),
++                high_ticks=("high_ticks", "max"),
++                low_ticks=("low_ticks", "min"),
++                volume=("volume", "sum"),
++                trade_count=("trade_count", "sum"),
++            )
++            .reset_index()
++        )
++        day_group = agg.groupby("trading_day", sort=True)
++        agg["bar_index"] = day_group.cumcount()
++        # END_OF_DAY iff no later bucket in the same day produced a bar == the
++        # day's last emitted row (matches the streaming day-roll / finalize).
++        is_last = day_group.cumcount(ascending=False).to_numpy() == 0
++
++        td_dates = agg["trading_day"].dt.date.to_numpy()
++        bar_index_arr = agg["bar_index"].to_numpy().tolist()
++        open_ticks_arr = agg["open_ticks"].to_numpy().tolist()
++        high_ticks_arr = agg["high_ticks"].to_numpy().tolist()
++        low_ticks_arr = agg["low_ticks"].to_numpy().tolist()
++        close_ticks_arr = agg["close_ticks"].to_numpy().tolist()
++        volume_arr = agg["volume"].to_numpy().tolist()
++        trade_count_arr = agg["trade_count"].to_numpy().tolist()
++        with warnings.catch_warnings():
++            warnings.simplefilter("ignore")  # nanosecond discard, as in batch.py
++            open_dt = agg["open_ts"].dt.to_pydatetime()
++            close_dt = agg["close_ts"].dt.to_pydatetime()
++        bars.extend(
++            Bar(
++                timeframe_ticks=interval,
++                trading_day=td,
++                bar_index=bi,
++                bar_id=make_bar_id(interval, td, bi, BarKind.TIME),
++                open_ts_utc=ots,
++                close_ts_utc=cts,
++                open_ticks=ot,
++                high_ticks=ht,
++                low_ticks=lt,
++                close_ticks=ct,
++                volume=vol,
++                trade_count=tc,
++                is_complete=not last,
++                is_partial=bool(last),
++                close_reason=CloseReason.END_OF_DAY if last else CloseReason.COMPLETE,
++                kind=BarKind.TIME,
++            )
++            for td, bi, ots, cts, ot, ht, lt, ct, vol, tc, last in zip(
++                td_dates,
++                bar_index_arr,
++                open_dt,
++                close_dt,
++                open_ticks_arr,
++                high_ticks_arr,
++                low_ticks_arr,
++                close_ticks_arr,
++                volume_arr,
++                trade_count_arr,
++                is_last,
++                strict=True,
++            )
++        )
++    return bars
+diff --git a/src/strategy_core/candles/time_streaming.py b/src/strategy_core/candles/time_streaming.py
+new file mode 100644
+index 0000000..3a34eaf
+--- /dev/null
++++ b/src/strategy_core/candles/time_streaming.py
+@@ -0,0 +1,274 @@
++"""Streaming, event-at-a-time TIME-bar builder (Phase F).
++
++Mirrors :class:`~strategy_core.candles.streaming.CandleEngine`'s shape — per-timeframe
++current bar, freeze-and-restart on a trading-day change as ``END_OF_DAY`` (incomplete),
++a ``finalize_trading_day`` twin, and the same :class:`CandleUpdate` result type — with
++the TIME close trigger instead of the trade-count one. The batch builder in
++``candles/time_batch.py`` produces an identical :class:`~strategy_core.types.Bar`
++sequence; the parity test (``tests/test_time_bar_parity.py``) locks the two together.
++
++Architect-ratified design:
++
++* A TIME bar carries ``kind=BarKind.TIME`` and ``timeframe_ticks = interval SECONDS``
++  (the ``BarSpec.size`` convention; 0 is an existing "unspecified" sentinel and is
++  unavailable). ``bar_id`` is ``f"{seconds}s:{trading_day}:{bar_index}"``.
++* BUCKETING is anchored at the trading-day boundary INSTANT:
++  ``bucket = floor((ts_utc - day_start_utc) / interval)`` with ``day_start_utc`` from
++  :func:`~strategy_core.candles._buckets.trading_day_start_utc` — DST-correct because
++  elapsed time from an absolute instant is used, never wall-clock labels.
++* NO EMPTY BARS: a bucket with no trades produces no bar. ``bar_index`` is DENSE over
++  EMITTED bars per ``(timeframe, trading_day)`` starting at 0 (the tick allocator's
++  rule), not the wall-clock bucket ordinal.
++* DERIVE ONCE, AGGREGATE UPWARD: trades fold into the 60s accumulator only; each
++  CLOSED 60s bar feeds the higher-timeframe accumulators (every interval is an
++  integer multiple of 60). Higher OHLC = first open / max high / min low / last
++  close over constituent 60s bars; volume / trade_count are sums over the 60s bars
++  that EXIST.
++* COMPLETENESS: a bar is ``COMPLETE`` iff a LATER bucket in the same trading day and
++  timeframe produced a bar (observable: a later bar OPENED); otherwise it freezes
++  ``END_OF_DAY`` incomplete at the day roll / ``finalize_trading_day``. Bars are
++  emitted when a later bucket opens, never on a wall clock.
++
++Producers deliver trades in wire order (``TRADE_BAR_ORDER``); like the tick engine,
++this engine never sorts. A late out-of-order trade would fold into the currently open
++bar rather than its true bucket, exactly as it would join the wrong tick bar.
++"""
++
++from __future__ import annotations
++
++from dataclasses import dataclass
++from datetime import date, datetime
++
++from strategy_core.candles._buckets import trading_day_start_utc
++from strategy_core.candles._ids import make_bar_id
++from strategy_core.candles.streaming import CandleUpdate
++from strategy_core.constants import RESEARCH_SESSION_SCHEME
++from strategy_core.decisions.sessions import trading_day_for
++from strategy_core.types import Bar, BarKind, CloseReason, SessionScheme, Trade
++
++__all__ = ["TimeBarEngine", "BASE_INTERVAL_SECONDS", "DEFAULT_TIME_TIMEFRAMES"]
++
++#: The base derivation interval: trades aggregate into 60s bars once; every higher
++#: timeframe aggregates those (never a second pass over the trade stream).
++BASE_INTERVAL_SECONDS = 60
++#: The ratified timeframe set, in seconds: 1m 3m 5m 10m 15m 30m 1H 4H.
++DEFAULT_TIME_TIMEFRAMES = (60, 180, 300, 600, 900, 1800, 3600, 14400)
++
++_US_PER_SECOND = 1_000_000
++
++
++@dataclass(slots=True)
++class _MutableTimeBar:
++    """Mutable in-progress TIME bar. Mirrors ``streaming._MutableCandle`` plus the
++    wall-clock ``bucket`` it occupies (the close trigger; NOT the emitted index)."""
++
++    interval_seconds: int
++    trading_day: date
++    bucket: int
++    bar_index: int
++    bar_id: str
++    open_ts_utc: datetime
++    close_ts_utc: datetime
++    open_ticks: int
++    high_ticks: int
++    low_ticks: int
++    close_ticks: int
++    volume: int
++    trade_count: int
++
++    def freeze(self, *, complete: bool, reason: CloseReason | None) -> Bar:
++        """Materialize an immutable TIME :class:`Bar`; ``is_partial == not complete``."""
++        return Bar(
++            timeframe_ticks=self.interval_seconds,
++            trading_day=self.trading_day,
++            bar_index=self.bar_index,
++            bar_id=self.bar_id,
++            open_ts_utc=self.open_ts_utc,
++            close_ts_utc=self.close_ts_utc,
++            open_ticks=self.open_ticks,
++            high_ticks=self.high_ticks,
++            low_ticks=self.low_ticks,
++            close_ticks=self.close_ticks,
++            volume=self.volume,
++            trade_count=self.trade_count,
++            is_complete=complete,
++            is_partial=not complete,
++            close_reason=reason,
++            kind=BarKind.TIME,
++        )
++
++
++class TimeBarEngine:
++    """Build all configured TIME bars concurrently from a stream of trades.
++
++    Only :class:`~strategy_core.types.Trade` events are accepted (quotes/status are
++    not prints), and the trading day comes from
++    :func:`strategy_core.decisions.sessions.trading_day_for` under ``scheme`` —
++    both exactly as :class:`~strategy_core.candles.streaming.CandleEngine`.
++    """
++
++    def __init__(
++        self,
++        timeframes_seconds: tuple[int, ...] = DEFAULT_TIME_TIMEFRAMES,
++        *,
++        scheme: SessionScheme = RESEARCH_SESSION_SCHEME,
++    ) -> None:
++        if not timeframes_seconds:
++            raise ValueError("time timeframes must be non-empty")
++        for seconds in timeframes_seconds:
++            if seconds < BASE_INTERVAL_SECONDS or seconds % BASE_INTERVAL_SECONDS:
++                raise ValueError(
++                    "time timeframes must be positive multiples of "
++                    f"{BASE_INTERVAL_SECONDS}s (got {seconds})"
++                )
++        self.timeframes = tuple(sorted(set(timeframes_seconds)))
++        self._scheme = scheme
++        # The 60s accumulator always runs (it is the derivation base); its bars are
++        # only EMITTED when 60 was actually requested.
++        self._emit_base = BASE_INTERVAL_SECONDS in self.timeframes
++        self._higher = tuple(tf for tf in self.timeframes if tf != BASE_INTERVAL_SECONDS)
++        self._trading_day: date | None = None
++        self._day_start_utc: datetime | None = None
++        self._minute: _MutableTimeBar | None = None
++        self._current: dict[int, _MutableTimeBar] = {}
++        self._next_index: dict[tuple[int, date], int] = {}
++
++    # ── public API (CandleEngine mirror) ──────────────────────────────────────
++    def process_trade(self, trade: Trade) -> CandleUpdate:
++        """Fold one trade into the 60s accumulator; cascade closed 60s bars upward."""
++        trading_day = trading_day_for(trade.event_ts_utc, self._scheme)
++        if trading_day is None:  # closed window -> skipped, like the tick engine
++            return self.snapshot_update(())
++        completed: list[Bar] = []
++        if self._trading_day is not None and trading_day != self._trading_day:
++            # Trading-day rollover: freeze every open bar END_OF_DAY (incomplete)
++            # and start fresh on the new day.
++            completed.extend(self._roll_day())
++        if self._trading_day != trading_day:
++            self._trading_day = trading_day
++            self._day_start_utc = trading_day_start_utc(trading_day, self._scheme)
++        # Integer-microsecond arithmetic so a trade landing EXACTLY on a bucket edge
++        # buckets identically to the batch builder's integer-nanosecond floor-divide.
++        delta = trade.event_ts_utc - self._day_start_utc  # type: ignore[operator]
++        elapsed_us = (delta.days * 86_400 + delta.seconds) * _US_PER_SECOND + delta.microseconds
++        bucket = elapsed_us // (BASE_INTERVAL_SECONDS * _US_PER_SECOND)
++        minute = self._minute
++        if minute is not None and bucket > minute.bucket:
++            # A later bucket produced a bar -> the open 60s bar closes COMPLETE.
++            completed.extend(self._close_minute(complete=True))
++            minute = None
++        if minute is None:
++            self._minute = _MutableTimeBar(
++                interval_seconds=BASE_INTERVAL_SECONDS,
++                trading_day=trading_day,
++                bucket=bucket,
++                bar_index=(idx := self._allocate_bar_index(BASE_INTERVAL_SECONDS, trading_day)),
++                bar_id=make_bar_id(BASE_INTERVAL_SECONDS, trading_day, idx, BarKind.TIME),
++                open_ts_utc=trade.event_ts_utc,
++                close_ts_utc=trade.event_ts_utc,
++                open_ticks=trade.price_ticks,
++                high_ticks=trade.price_ticks,
++                low_ticks=trade.price_ticks,
++                close_ticks=trade.price_ticks,
++                volume=trade.size,
++                trade_count=1,
++            )
++        else:
++            minute.close_ts_utc = trade.event_ts_utc
++            minute.close_ticks = trade.price_ticks
++            if trade.price_ticks > minute.high_ticks:
++                minute.high_ticks = trade.price_ticks
++            if trade.price_ticks < minute.low_ticks:
++                minute.low_ticks = trade.price_ticks
++            minute.volume += trade.size
++            minute.trade_count += 1
++        return self.snapshot_update(tuple(completed))
++
++    def snapshot_update(self, completed: tuple[Bar, ...]) -> CandleUpdate:
++        """Pair ``completed`` with every in-progress bar frozen incomplete
++        (``close_reason=None``), ascending timeframe — the CandleEngine mirror."""
++        current: list[Bar] = []
++        if self._emit_base and self._minute is not None:
++            current.append(self._minute.freeze(complete=False, reason=None))
++        for tf in self._higher:
++            open_bar = self._current.get(tf)
++            if open_bar is not None:
++                current.append(open_bar.freeze(complete=False, reason=None))
++        return CandleUpdate(completed=completed, current=tuple(current))
++
++    def finalize_trading_day(self) -> tuple[Bar, ...]:
++        """Explicitly close every open bar END_OF_DAY (incomplete) — the
++        ``CandleEngine.finalize_trading_day`` twin. The trailing partial 60s bar
++        still folds into its higher-timeframe bars first, exactly as the batch
++        builder counts it as a constituent of the day's final higher bars."""
++        return tuple(self._roll_day())
++
++    # ── internals ─────────────────────────────────────────────────────────────
++    def _close_minute(self, *, complete: bool) -> list[Bar]:
++        """Freeze the open 60s bar and cascade it into the higher timeframes.
++
++        The cascade can itself close a higher bar COMPLETE (the 60s bar landed in a
++        later higher-timeframe bucket of the same day). Emission order is the closed
++        higher bars (ascending timeframe) after the 60s bar itself; order is
++        irrelevant to parity, which sorts by (timeframe, day, index).
++        """
++        minute = self._minute
++        assert minute is not None
++        self._minute = None
++        reason = CloseReason.COMPLETE if complete else CloseReason.END_OF_DAY
++        out: list[Bar] = []
++        if self._emit_base:
++            out.append(minute.freeze(complete=complete, reason=reason))
++        for tf in self._higher:
++            hbucket = minute.bucket * BASE_INTERVAL_SECONDS // tf
++            open_bar = self._current.get(tf)
++            if open_bar is not None and hbucket > open_bar.bucket:
++                out.append(open_bar.freeze(complete=True, reason=CloseReason.COMPLETE))
++                open_bar = None
++            if open_bar is None:
++                idx = self._allocate_bar_index(tf, minute.trading_day)
++                self._current[tf] = _MutableTimeBar(
++                    interval_seconds=tf,
++                    trading_day=minute.trading_day,
++                    bucket=hbucket,
++                    bar_index=idx,
++                    bar_id=make_bar_id(tf, minute.trading_day, idx, BarKind.TIME),
++                    open_ts_utc=minute.open_ts_utc,
++                    close_ts_utc=minute.close_ts_utc,
++                    open_ticks=minute.open_ticks,
++                    high_ticks=minute.high_ticks,
++                    low_ticks=minute.low_ticks,
++                    close_ticks=minute.close_ticks,
++                    volume=minute.volume,
++                    trade_count=minute.trade_count,
++                )
++            else:
++                open_bar.close_ts_utc = minute.close_ts_utc
++                open_bar.close_ticks = minute.close_ticks
++                if minute.high_ticks > open_bar.high_ticks:
++                    open_bar.high_ticks = minute.high_ticks
++                if minute.low_ticks < open_bar.low_ticks:
++                    open_bar.low_ticks = minute.low_ticks
++                open_bar.volume += minute.volume
++                open_bar.trade_count += minute.trade_count
++        return out
++
++    def _roll_day(self) -> list[Bar]:
++        """Freeze everything open as END_OF_DAY: the partial 60s bar first (still
++        cascading into its higher bars), then every open higher bar."""
++        out: list[Bar] = []
++        if self._minute is not None:
++            out.extend(self._close_minute(complete=False))
++        for tf in self._higher:
++            open_bar = self._current.pop(tf, None)
++            if open_bar is not None:
++                out.append(open_bar.freeze(complete=False, reason=CloseReason.END_OF_DAY))
++        return out
++
++    def _allocate_bar_index(self, timeframe: int, trading_day: date) -> int:
++        """Dense monotonic per-``(timeframe, trading_day)`` index from 0 — the tick
++        allocator's rule, so skipped empty buckets never leave index holes."""
++        key = (timeframe, trading_day)
++        bar_index = self._next_index.get(key, 0)
++        self._next_index[key] = bar_index + 1
++        return bar_index
+diff --git a/src/strategy_core/strategies/protocols.py b/src/strategy_core/strategies/protocols.py
+index e46a709..435a761 100644
+--- a/src/strategy_core/strategies/protocols.py
++++ b/src/strategy_core/strategies/protocols.py
+@@ -37,10 +37,9 @@ from __future__ import annotations
+ from collections.abc import Mapping, Sequence
+ from dataclasses import dataclass
+ from datetime import date, datetime, time
+-from enum import StrEnum
+ from typing import Any, Protocol, runtime_checkable
+ 
+-from strategy_core.types import Bar, Level, Quote, Touch, Trade, Zone
++from strategy_core.types import Bar, BarKind, Level, Quote, Touch, Trade, Zone
+ 
+ __all__ = [
+     "BarKind",
+@@ -58,11 +57,10 @@ __all__ = [
+ 
+ 
+ # ── Declared data needs (tick AND time) ──────────────────────────────────────
+-class BarKind(StrEnum):
+-    """How a bar closes. ``StrEnum`` so ``BarKind.TICK == "tick"`` (PLAN §2.1(3))."""
+-
+-    TICK = "tick"  # close on trade_count == size      (CURRENT engine)
+-    TIME = "time"  # close on wall-clock interval edge  (NEW close trigger, Phase F)
++# Phase F: ``BarKind`` moved to ``strategy_core.types`` (its canonical home, so
++# ``Bar.kind`` can carry it without a strategies->types import cycle) and is
++# re-exported here unchanged — same class object, so every existing
++# ``from strategy_core.strategies.protocols import BarKind`` still resolves.
+ 
+ 
+ @dataclass(frozen=True, slots=True)
+diff --git a/src/strategy_core/types.py b/src/strategy_core/types.py
+index 4d1520c..b22d5bd 100644
+--- a/src/strategy_core/types.py
++++ b/src/strategy_core/types.py
+@@ -21,6 +21,7 @@ from enum import StrEnum
+ __all__ = [
+     "Side",
+     "Direction",
++    "BarKind",
+     "CloseReason",
+     "Trade",
+     "Quote",
+@@ -48,6 +49,19 @@ class Direction(StrEnum):
+     SHORT = "SHORT"
+ 
+ 
++class BarKind(StrEnum):
++    """How a bar closes. ``StrEnum`` so ``BarKind.TICK == "tick"`` (PLAN §2.1(3)).
++
++    Canonical home (Phase F): defined here so :class:`Bar` can carry it without a
++    ``strategies``->``types`` import cycle; ``strategies.protocols`` re-exports it,
++    so every existing ``from strategy_core.strategies.protocols import BarKind``
++    keeps resolving to this same class.
++    """
++
++    TICK = "tick"  # close on trade_count == size       (the original engine)
++    TIME = "time"  # close on wall-clock interval edge  (Phase F time bars)
++
++
+ class CloseReason(StrEnum):
+     """Why a bar closed. Mirrors Trade-Lab ``CandleCloseReason`` exactly."""
+ 
+@@ -110,6 +124,12 @@ class Bar:
+     is_complete: bool
+     is_partial: bool
+     close_reason: CloseReason | None = None
++    #: Appended LAST and defaulted so every pre-Phase-F construction site (positional
++    #: or keyword) stays valid and every existing tick bar is unchanged. For a TIME
++    #: bar, ``timeframe_ticks`` carries the interval in SECONDS (the ``BarSpec.size``
++    #: convention) — 0 is unavailable as a marker because it is an existing
++    #: "unspecified" sentinel in the decision layer.
++    kind: BarKind = BarKind.TICK
+ 
+     def high_points(self, tick_size: float) -> float:
+         return self.high_ticks * tick_size
+diff --git a/tests/test_time_bar_parity.py b/tests/test_time_bar_parity.py
+new file mode 100644
+index 0000000..7fcba51
+--- /dev/null
++++ b/tests/test_time_bar_parity.py
+@@ -0,0 +1,222 @@
++"""Parity lock: the batch and streaming TIME-bar builders must agree exactly.
++
++The streaming :class:`~strategy_core.candles.time_streaming.TimeBarEngine`
++(event-at-a-time, the live/replay path) and the vectorized
++:func:`~strategy_core.candles.time_batch.build_time_bars_from_frame` (research /
++warm-up path) are two implementations of the same day-anchored time bar. This test
++feeds the SAME deterministic synthetic trade streams through both and asserts the
++resulting :class:`~strategy_core.types.Bar` lists are field-for-field identical —
++the exact ``tests/test_candle_parity.py`` harness applied to the time path.
++
++All timestamps are fixed, timezone-aware UTC datetimes (never ``now()``/random).
++Coverage, per the architect's spec: all eight ratified timeframes; a stream crossing
++the 18:00 ET trading-day boundary; stretches containing empty buckets (sparse
++spacing AND a multi-hour dead-time jump); a truncated final bucket; and both DST
++transition days in the scheme timezone (the 23-hour spring-forward and 25-hour
++fall-back trading days).
++"""
++
++from __future__ import annotations
++
++from dataclasses import astuple
++from datetime import datetime, timedelta, timezone
++
++import pandas as pd
++
++from strategy_core.candles.time_batch import build_time_bars_from_frame
++from strategy_core.candles.time_streaming import DEFAULT_TIME_TIMEFRAMES, TimeBarEngine
++from strategy_core.constants import DEFAULT_TICK_SIZE, RESEARCH_SESSION_SCHEME
++from strategy_core.types import Bar, BarKind, SessionScheme, Trade
++
++UTC = timezone.utc
++
++TIMEFRAMES = DEFAULT_TIME_TIMEFRAMES  # all eight: 1m 3m 5m 10m 15m 30m 1H 4H
++
++
++def _zigzag_trades(start: datetime, count: int, spacing: timedelta) -> list[Trade]:
++    """Deterministic zig-zag price walk (rises 7, dips 3, rises 2, ...) with sizes
++    cycling 1..4, one trade per ``spacing`` — the tick parity test's generator shape."""
++    trades: list[Trade] = []
++    price_ticks = 80_000
++    for i in range(count):
++        price_ticks += (7, -3, 2, -5, 4)[i % 5]
++        trades.append(
++            Trade(event_ts_utc=start + spacing * i, price_ticks=price_ticks, size=1 + (i % 4))
++        )
++    return trades
++
++
++def _main_stream() -> list[Trade]:
++    """The headline stream: three stitched segments.
++
++    * A — 300 trades every 150s from 2025-06-02 13:30 UTC. Sparser than a minute, so
++      empty 60s buckets occur throughout; crosses 22:00 UTC (18:00 ET), exercising the
++      mid-stream trading-day roll.
++    * B — a 200-trade burst every 7s (+123456 us so sub-second offsets are exercised)
++      starting 41s after A ends, i.e. dense multi-trade minutes.
++    * C — after a 5-hour dead-time jump (empty buckets at EVERY timeframe, including
++      whole empty 1H buckets), 50 trades every 90s. Ends mid-bucket at every
++      timeframe — the truncated final bucket.
++    """
++    a_start = datetime(2025, 6, 2, 13, 30, 0, tzinfo=UTC)
++    trades = _zigzag_trades(a_start, 300, timedelta(seconds=150))
++    b_start = trades[-1].event_ts_utc + timedelta(seconds=41, microseconds=123_456)
++    trades += _zigzag_trades(b_start, 200, timedelta(seconds=7))
++    c_start = trades[-1].event_ts_utc + timedelta(hours=5)
++    trades += _zigzag_trades(c_start, 50, timedelta(seconds=90))
++    return trades
++
++
++def _trades_to_frame(trades: list[Trade], *, tick_size: float) -> pd.DataFrame:
++    return pd.DataFrame(
++        {
++            "ts_event": [t.event_ts_utc for t in trades],
++            "price": [t.price_ticks * tick_size for t in trades],
++            "size": [t.size for t in trades],
++        }
++    )
++
++
++def _streaming_bars(
++    trades: list[Trade], timeframes: tuple[int, ...], scheme: SessionScheme
++) -> list[Bar]:
++    engine = TimeBarEngine(timeframes, scheme=scheme)
++    bars: list[Bar] = []
++    for trade in trades:
++        bars.extend(engine.process_trade(trade).completed)
++    bars.extend(engine.finalize_trading_day())
++    return bars
++
++
++def _sort_key(bar: Bar) -> tuple[int, str, int]:
++    return (bar.timeframe_ticks, bar.trading_day.isoformat(), bar.bar_index)
++
++
++def _assert_bars_equal(streaming: list[Bar], batch: list[Bar]) -> None:
++    assert len(streaming) == len(batch), (
++        f"bar count differs: streaming={len(streaming)} batch={len(batch)}"
++    )
++    s_sorted = sorted(streaming, key=_sort_key)
++    b_sorted = sorted(batch, key=_sort_key)
++    for s, b in zip(s_sorted, b_sorted, strict=True):
++        assert astuple(s) == astuple(b), f"bar mismatch:\n streaming={s}\n    batch={b}"
++
++
++def _run_parity(trades: list[Trade]) -> list[Bar]:
++    """Drive both builders over ``trades`` across all eight timeframes, assert
++    field-for-field equality, and return the (streaming) bars for extra checks."""
++    frame = _trades_to_frame(trades, tick_size=DEFAULT_TICK_SIZE)
++    streaming = _streaming_bars(trades, TIMEFRAMES, RESEARCH_SESSION_SCHEME)
++    batch = build_time_bars_from_frame(
++        frame, TIMEFRAMES, scheme=RESEARCH_SESSION_SCHEME, tick_size=DEFAULT_TICK_SIZE
++    )
++    _assert_bars_equal(streaming, batch)
++    return streaming
++
++
++def test_parity_main_stream_all_timeframes() -> None:
++    """Sparse + burst + dead-time stream over all eight timeframes, crossing the
++    18:00 ET boundary, with empty buckets and a truncated final bucket."""
++    bars = _run_parity(_main_stream())
++
++    # The stream really crosses the boundary -> two ET trading days.
++    trading_days = {b.trading_day for b in bars}
++    assert len(trading_days) == 2, f"expected 2 ET trading days, got {trading_days}"
++
++    # Every timeframe emitted, all TIME-kind, seconds-suffixed ids.
++    per_tf = {tf: [b for b in bars if b.timeframe_ticks == tf] for tf in TIMEFRAMES}
++    assert all(per_tf.values()), "every timeframe must emit at least one bar"
++    assert all(b.kind is BarKind.TIME for b in bars)
++    assert all(b.bar_id.startswith(f"{b.timeframe_ticks}s:") for b in bars)
++
++    # No empty bars, ever.
++    assert all(b.trade_count > 0 for b in bars)
++
++    # Empty 60s buckets exist (150s spacing + the 5h jump) yet bar_index stays
++    # dense: per (timeframe, day) the indexes are exactly 0..n-1.
++    for tf in TIMEFRAMES:
++        for day in trading_days:
++            idx = sorted(b.bar_index for b in per_tf[tf] if b.trading_day == day)
++            assert idx == list(range(len(idx))), f"bar_index not dense for {tf}s {day}"
++
++    # The 5h dead-time jump left whole 1H wall-buckets empty on the second day:
++    # fewer 3600s bars than spanned wall hours proves buckets were skipped.
++    h1 = per_tf[3600]
++    spanned_hours = (
++        max(b.close_ts_utc for b in h1) - min(b.open_ts_utc for b in h1)
++    ).total_seconds() / 3600
++    assert len(h1) < spanned_hours, "expected skipped (empty) 1H buckets"
++
++    # Truncated final bucket: per timeframe the last bar of the last day is the
++    # END_OF_DAY partial; every non-final bar is COMPLETE.
++    last_day = max(trading_days)
++    for tf in TIMEFRAMES:
++        day_bars = sorted(
++            (b for b in per_tf[tf] if b.trading_day == last_day), key=_sort_key
++        )
++        assert day_bars[-1].is_partial and day_bars[-1].close_reason.value == "end_of_day"
++        assert all(b.is_complete and b.close_reason.value == "complete" for b in day_bars[:-1])
++
++    # Aggregate-upward conservation: per day, volume/trade_count sums agree across
++    # every timeframe (skipped empty minutes contribute nothing at any level).
++    for day in trading_days:
++        sums = {
++            tf: (
++                sum(b.volume for b in per_tf[tf] if b.trading_day == day),
++                sum(b.trade_count for b in per_tf[tf] if b.trading_day == day),
++            )
++            for tf in TIMEFRAMES
++        }
++        assert len(set(sums.values())) == 1, f"volume/trade_count not conserved: {sums}"
++
++
++def test_parity_dst_spring_forward_23h_day() -> None:
++    """The 2025-03-09 spring-forward trading day (Sat 18:00 EST -> Sun 18:00 EDT,
++    23 real hours). Trades every 20 minutes span the whole day including the 02:00 ET
++    jump; parity must hold and the day must fit inside 23 hours of buckets."""
++    start = datetime(2025, 3, 8, 23, 0, 0, tzinfo=UTC)  # Sat 18:00 EST == day open
++    trades = _zigzag_trades(start, 69, timedelta(minutes=20))  # 68*20min = 22h40m span
++    bars = _run_parity(trades)
++    day_bars = [b for b in bars if b.timeframe_ticks == 60]
++    assert {b.trading_day.isoformat() for b in bars} == {"2025-03-09"}
++    assert len(day_bars) == 69  # 20-min spacing -> every trade its own 60s bar
++
++
++def test_parity_dst_fall_back_25h_day() -> None:
++    """The 2025-11-02 fall-back trading day (Sat 18:00 EDT -> Sun 18:00 EST, 25 real
++    hours). The repeated 01:00-02:00 ET wall-clock hour buckets correctly because
++    bucketing counts elapsed time from the absolute day-open instant."""
++    start = datetime(2025, 11, 1, 22, 0, 0, tzinfo=UTC)  # Sat 18:00 EDT == day open
++    trades = _zigzag_trades(start, 75, timedelta(minutes=20))  # 74*20min = 24h40m span
++    bars = _run_parity(trades)
++    assert {b.trading_day.isoformat() for b in bars} == {"2025-11-02"}
++    h4 = [b for b in bars if b.timeframe_ticks == 14400]
++    assert len(h4) == 7  # 25 elapsed hours -> 4H buckets 0..6 all populated
++
++
++def test_empty_frame_returns_no_bars() -> None:
++    empty = pd.DataFrame({"ts_event": [], "price": [], "size": []})
++    assert build_time_bars_from_frame(empty, TIMEFRAMES) == []
++
++
++def test_build_wall_clock_within_ceiling() -> None:
++    """Regression guard on build cost: streaming + batch across all eight timeframes
++    over the 550-trade main stream must finish inside 1.0s wall-clock.
++
++    Observed on the development machine (Windows, Python 3.13): ~0.014s streaming +
++    ~0.04-0.07s batch, ~0.055-0.085s total across warm runs. The 1.0s ceiling is
++    ~12x the worst observed figure — chosen to catch an algorithmic regression (an
++    accidental per-timeframe pass over the trade stream, a quadratic emit), not to
++    flap on machine noise.
++    """
++    import time
++
++    trades = _main_stream()
++    frame = _trades_to_frame(trades, tick_size=DEFAULT_TICK_SIZE)
++    start = time.perf_counter()
++    _streaming_bars(trades, TIMEFRAMES, RESEARCH_SESSION_SCHEME)
++    build_time_bars_from_frame(
++        frame, TIMEFRAMES, scheme=RESEARCH_SESSION_SCHEME, tick_size=DEFAULT_TICK_SIZE
++    )
++    elapsed = time.perf_counter() - start
++    assert elapsed < 1.0, f"time-bar build took {elapsed:.3f}s (ceiling 1.0s)"
+diff --git a/tests/test_time_bars.py b/tests/test_time_bars.py
+new file mode 100644
+index 0000000..1854225
+--- /dev/null
++++ b/tests/test_time_bars.py
+@@ -0,0 +1,204 @@
++"""Unit tests for the Phase-F time-bar RULES themselves (not parity).
++
++Covers, per the architect's spec: bucket anchoring at the trading-day boundary; a
++trade landing exactly on a bucket edge; the DST 23-hour and 25-hour trading days;
++``bar_id`` format for both kinds; ``kind`` defaulting to TICK on every existing
++construction path; and dense ``bar_index`` across skipped buckets. All timestamps
++are fixed aware datetimes — no files, no ``now()``, no RNG.
++"""
++
++from __future__ import annotations
++
++from datetime import date, datetime, timedelta, timezone
++
++import pandas as pd
++import pytest
++
++from strategy_core.candles._buckets import trading_day_start_utc
++from strategy_core.candles._ids import make_bar_id
++from strategy_core.candles.batch import build_tick_bars_from_frame
++from strategy_core.candles.streaming import CandleEngine
++from strategy_core.candles.time_streaming import TimeBarEngine
++from strategy_core.constants import DEFAULT_TICK_SIZE, RESEARCH_SESSION_SCHEME
++from strategy_core.types import Bar, BarKind, Trade
++
++UTC = timezone.utc
++
++
++def _trade(ts: datetime, price_ticks: int = 80_000, size: int = 1) -> Trade:
++    return Trade(event_ts_utc=ts, price_ticks=price_ticks, size=size)
++
++
++def _all_bars(engine: TimeBarEngine, trades: list[Trade]) -> list[Bar]:
++    bars: list[Bar] = []
++    for trade in trades:
++        bars.extend(engine.process_trade(trade).completed)
++    bars.extend(engine.finalize_trading_day())
++    return bars
++
++
++# ── boundary anchoring ────────────────────────────────────────────────────────
++def test_day_anchor_is_prior_calendar_day_boundary_in_scheme_tz() -> None:
++    """Trading day D opens at 18:00 ET on calendar day D-1, expressed in UTC (EDT
++    in June -> 22:00 UTC; EST in January -> 23:00 UTC)."""
++    assert trading_day_start_utc(date(2025, 6, 3), RESEARCH_SESSION_SCHEME) == datetime(
++        2025, 6, 2, 22, 0, tzinfo=UTC
++    )
++    assert trading_day_start_utc(date(2025, 1, 7), RESEARCH_SESSION_SCHEME) == datetime(
++        2025, 1, 6, 23, 0, tzinfo=UTC
++    )
++
++
++def test_buckets_anchor_at_day_open() -> None:
++    """The first second of the trading day is bucket 0 for every timeframe: a trade
++    AT the 18:00 ET open lands in 60s bar 0 and 4H bar 0."""
++    day_open = datetime(2025, 6, 2, 22, 0, 0, tzinfo=UTC)  # 18:00 EDT
++    engine = TimeBarEngine((60, 14400))
++    bars = _all_bars(engine, [_trade(day_open), _trade(day_open + timedelta(seconds=59))])
++    assert [b.bar_id for b in bars] == ["60s:2025-06-03:0", "14400s:2025-06-03:0"]
++    assert all(b.trade_count == 2 for b in bars)  # both trades in bucket 0
++
++
++# ── exact bucket edge ─────────────────────────────────────────────────────────
++def test_trade_exactly_on_bucket_edge_opens_the_later_bar() -> None:
++    """Buckets are half-open [edge, next_edge): a trade at exactly +60.000000s
++    belongs to bucket 1, closing bucket 0's bar COMPLETE — identically in both
++    builders (integer-us streaming vs integer-ns batch arithmetic)."""
++    day_open = datetime(2025, 6, 2, 22, 0, 0, tzinfo=UTC)
++    trades = [
++        _trade(day_open + timedelta(seconds=1), price_ticks=80_000),
++        _trade(day_open + timedelta(seconds=60), price_ticks=80_004),  # exact edge
++    ]
++    streaming = _all_bars(TimeBarEngine((60,)), trades)
++    assert [b.bar_id for b in streaming] == ["60s:2025-06-03:0", "60s:2025-06-03:1"]
++    assert streaming[0].trade_count == 1 and streaming[0].is_complete
++    assert streaming[1].trade_count == 1 and streaming[1].is_partial
++
++    from strategy_core.candles.time_batch import build_time_bars_from_frame
++
++    frame = pd.DataFrame(
++        {
++            "ts_event": [t.event_ts_utc for t in trades],
++            "price": [t.price_ticks * DEFAULT_TICK_SIZE for t in trades],
++            "size": [t.size for t in trades],
++        }
++    )
++    batch = build_time_bars_from_frame(frame, (60,))
++    assert [b.bar_id for b in batch] == ["60s:2025-06-03:0", "60s:2025-06-03:1"]
++
++
++# ── DST day lengths ───────────────────────────────────────────────────────────
++def test_dst_spring_forward_day_has_23_hours_of_buckets() -> None:
++    """Trading day 2025-03-09 (spring forward) spans 23 real hours: a trade one
++    second before the Sun 18:00 EDT close lands in 60s wall-bucket 1379 (23h*60-1),
++    NOT 1439 — and the next second rolls the trading day."""
++    day_open = datetime(2025, 3, 8, 23, 0, 0, tzinfo=UTC)  # Sat 18:00 EST
++    engine = TimeBarEngine((60,))
++    last_in_day = day_open + timedelta(hours=23, seconds=-1)
++    bars = _all_bars(engine, [_trade(day_open), _trade(last_in_day)])
++    assert [b.trading_day.isoformat() for b in bars] == ["2025-03-09", "2025-03-09"]
++    # Dense indexes 0 and 1, but the WALL buckets are 0 and 1379: the second bar
++    # opened 22:59:59 after the anchor.
++    elapsed = bars[1].open_ts_utc - trading_day_start_utc(date(2025, 3, 9), RESEARCH_SESSION_SCHEME)
++    assert int(elapsed.total_seconds()) // 60 == 23 * 60 - 1
++    # One second later is the next trading day (18:00 EDT boundary).
++    rolled = engine.process_trade(_trade(day_open + timedelta(hours=23)))
++    assert not rolled.completed  # prior bars were already finalized above
++    assert rolled.current[0].trading_day.isoformat() == "2025-03-10"
++
++
++def test_dst_fall_back_day_has_25_hours_of_buckets() -> None:
++    """Trading day 2025-11-02 (fall back) spans 25 real hours: one second before the
++    Sun 18:00 EST close is 60s wall-bucket 1499 (25h*60-1), and the repeated
++    01:00-02:00 ET wall hour maps to two DISTINCT bucket ranges."""
++    day_open = datetime(2025, 11, 1, 22, 0, 0, tzinfo=UTC)  # Sat 18:00 EDT
++    anchor = trading_day_start_utc(date(2025, 11, 2), RESEARCH_SESSION_SCHEME)
++    assert anchor == day_open
++    last_in_day = day_open + timedelta(hours=25, seconds=-1)
++    engine = TimeBarEngine((60,))
++    bars = _all_bars(engine, [_trade(day_open), _trade(last_in_day)])
++    assert [b.trading_day.isoformat() for b in bars] == ["2025-11-02", "2025-11-02"]
++    assert int((bars[1].open_ts_utc - anchor).total_seconds()) // 60 == 25 * 60 - 1
++    # The repeated wall hour: 01:30 EDT (05:30 UTC) and 01:30 EST (06:30 UTC) are
++    # the same local label but 60 buckets apart — elapsed time disambiguates them.
++    first_0130 = datetime(2025, 11, 2, 5, 30, 0, tzinfo=UTC)
++    second_0130 = datetime(2025, 11, 2, 6, 30, 0, tzinfo=UTC)
++    b1 = int((first_0130 - anchor).total_seconds()) // 60
++    b2 = int((second_0130 - anchor).total_seconds()) // 60
++    assert b2 - b1 == 60
++
++
++# ── bar_id format, both kinds ─────────────────────────────────────────────────
++def test_bar_id_format_for_both_kinds() -> None:
++    day = date(2026, 1, 5)
++    assert make_bar_id(147, day, 3) == "147t:2026-01-05:3"
++    assert make_bar_id(147, day, 3, BarKind.TICK) == "147t:2026-01-05:3"
++    assert make_bar_id(3600, day, 0, BarKind.TIME) == "3600s:2026-01-05:0"
++
++
++# ── kind defaults to TICK on every existing construction path ─────────────────
++def test_kind_defaults_to_tick_everywhere() -> None:
++    """Direct construction (positional and keyword), the streaming tick engine, and
++    the batch tick builder all yield ``kind=TICK`` untouched."""
++    ts = datetime(2025, 6, 2, 14, 0, 0, tzinfo=UTC)
++    positional = Bar(147, date(2025, 6, 2), 0, "147t:2025-06-02:0", ts, ts, 1, 1, 1, 1, 1, 1, True, False)
++    assert positional.kind is BarKind.TICK
++    keyword = Bar(
++        timeframe_ticks=147, trading_day=date(2025, 6, 2), bar_index=0,
++        bar_id="147t:2025-06-02:0", open_ts_utc=ts, close_ts_utc=ts,
++        open_ticks=1, high_ticks=1, low_ticks=1, close_ticks=1,
++        volume=1, trade_count=1, is_complete=True, is_partial=False,
++    )
++    assert keyword.kind is BarKind.TICK
++
++    trades = [_trade(ts + timedelta(seconds=i), price_ticks=80_000 + i) for i in range(5)]
++    engine = CandleEngine((2,))
++    tick_bars = []
++    for t in trades:
++        tick_bars.extend(engine.process_trade(t).completed)
++    tick_bars.extend(engine.finalize_trading_day())
++    assert tick_bars and all(b.kind is BarKind.TICK for b in tick_bars)
++    assert all(b.bar_id.startswith("2t:") for b in tick_bars)
++
++    frame = pd.DataFrame(
++        {
++            "ts_event": [t.event_ts_utc for t in trades],
++            "price": [t.price_ticks * DEFAULT_TICK_SIZE for t in trades],
++            "size": [t.size for t in trades],
++        }
++    )
++    batch_bars = build_tick_bars_from_frame(frame, (2,))
++    assert batch_bars and all(b.kind is BarKind.TICK for b in batch_bars)
++
++
++# ── dense bar_index across skipped buckets ────────────────────────────────────
++def test_bar_index_dense_across_skipped_buckets() -> None:
++    """Trades in minutes 0, 7 and 30 of the day: three 60s bars with indexes
++    0, 1, 2 (not 0, 7, 30) — the index is over EMITTED bars, not wall buckets."""
++    day_open = datetime(2025, 6, 2, 22, 0, 0, tzinfo=UTC)
++    trades = [
++        _trade(day_open + timedelta(minutes=0, seconds=5)),
++        _trade(day_open + timedelta(minutes=7, seconds=5)),
++        _trade(day_open + timedelta(minutes=30, seconds=5)),
++    ]
++    bars = _all_bars(TimeBarEngine((60,)), trades)
++    assert [b.bar_index for b in bars] == [0, 1, 2]
++    assert [b.bar_id for b in bars] == [
++        "60s:2025-06-03:0",
++        "60s:2025-06-03:1",
++        "60s:2025-06-03:2",
++    ]
++    # First two closed COMPLETE (a later bucket produced a bar), last is EOD.
++    assert [b.is_complete for b in bars] == [True, True, False]
++
++
++# ── construction guards ───────────────────────────────────────────────────────
++def test_non_multiple_of_60_rejected() -> None:
++    with pytest.raises(ValueError):
++        TimeBarEngine((90,))
++    with pytest.raises(ValueError):
++        TimeBarEngine((0,))
++    from strategy_core.candles.time_batch import build_time_bars_from_frame
++
++    with pytest.raises(ValueError):
++        build_time_bars_from_frame(pd.DataFrame({"ts_event": [], "price": [], "size": []}), (30,))

@@ -1,0 +1,345 @@
+diff --git a/docs/PLATFORM_REFACTOR_PROGRESS.md b/docs/PLATFORM_REFACTOR_PROGRESS.md
+index aa7e47a..d1a2739 100644
+--- a/docs/PLATFORM_REFACTOR_PROGRESS.md
++++ b/docs/PLATFORM_REFACTOR_PROGRESS.md
+@@ -1689,7 +1689,8 @@ overwrite the newer active-bundle one) - request sequencing, latest wins. **11 c
+ REPORTED, not fixed:** null/mismatched-bundle outcomes under ?bundle= excluded without a scoped
+ counter (funnel/headline gap); scoped-drop exclusions under session/eligibility filters uncounted;
+ gated_hit_rate shows 0.0 (not null) when eligible_class is unresolvable; ?bundle= 404s for retired
+-bundles whose journal rows persist; session filter domain-unvalidated (typo -> all-zeros 200);
++bundles whose journal rows persist [FIXED as an EXEC P0 rider]; session filter domain-unvalidated
++(typo -> all-zeros 200) [FIXED as an EXEC P0 rider];
+ _is_safe_bundle_id lacks the registry's Windows-drive-prefix check (cross-drive strategy.json read
+ under a tampered row bundle_id); NaN in outcome numerics nulls means / order-dependent median with
+ no anomaly flag; failed refresh leaves the stale report + noJournal panel rendered under new filter
+@@ -1697,3 +1698,126 @@ labels; month cursor stays pinned to an empty month across filter changes; zero-
+ 1px green sliver below the axis; only-malformed-rows journal shows the "rows outside filters"
+ empty-state with the data-quality strip hidden. Post-fix gates: TL backend **488 passed / 1
+ skipped** + ruff clean; frontend **170 passed** + tsc + eslint clean.
++
++---
++
++#### REPORT pushed annotation (2026-07-10)
++
++The REPORT close record above recorded "CLOSED - local commit `8e54ad1`, not pushed" (majors fixed
++in `209f1d0`). The window has since been GREENLIT + PUSHED (REPORT_GREENLIGHT_REPORT.txt): TL
++`origin/platform-refactor` = `209f1d0` with **backend-ci run 29077742228 = success** (push event,
++branch platform-refactor); SC `origin/platform-refactor` = `17ee822` (docs only, this record + the
++verify record) with **ci run 29077759730 = success**. Pins unchanged at `1650327` (no
++consumer-facing SC change that window).
++
++---
++
++#### EXEC — paper execution layer: derived fills, positions, P&L as an observer of the observer (2026-07-10; cross-repo, CLOSED — LOCAL, not pushed)
++
++**Commits:** SC `c81982e` (P0c doc-op: the REPORT pushed annotation above) + `3d4193e` (P1
++accessor); TL `4411347` (P0 riders) + `a31e357` (P2 tracker) + `e7bb6fa` (P3 surface) +
++`009889e` (P4 verify major fix). Evidence base: TL/REPORT_RECON.md (drop semantics),
++TL/VIZ_RECON.md §5 (entry exists at `register()`, previously surfaced only at resolution).
++
++**THE OBSERVER INVARIANT (stated, enforced, verified):** the paper-execution tracker has ZERO
++influence on touches, inference, the resolver, or the prediction journal. It consumes the same
++RuntimeUpdate stream the UI receives — observed once per broadcast at the WebSocketBroadcaster
++choke point, clients connected or not — plus two READ-ONLY providers (the resolver's
++`open_setups()` snapshot via `runtime.open_setup_views()`; the active contract's
++ExecutionPolicy), and writes only its own `executions/<trading_day>.jsonl` beside the prediction
++journal (same never-raises discipline). Nothing in the tracker can mutate serving state; its
++`observe()` swallows everything.
++
++**P1 (SC, additive):** `StreamingHonestResolver.open_setups() -> tuple[OpenSetupView, ...]` — a
++frozen read-only projection (prediction_id, entry_price_ticks, entry_ts_utc, direction,
++tp_price_ticks, sl_price_ticks) of the private open-setup state: the honest fill and the
++barrier prices already implied at registration (LONG tp = entry + tp_points / sl = entry −
++sl_points; SHORT mirrored — exactly the excursion rule). Integer ticks; `round()` absorbs float
++representation only (fills and the production tp/sl offsets sit on the tick grid). Engine call
++paths untouched by construction — accessor only — so parity digests unaffected. +4 tests
++(fill/barriers per direction, registration drops never appear, resolved/flushed/reset disappear,
++returned tuple is a point-in-time snapshot).
++
++**P2 (TL tracker, `services/execution.py`):** pure state machine. OPEN: an ELIGIBLE prediction
++whose setup appears in `open_setups()` (the resolver filled); ineligible predictions never
++tracked in v1; the same-batch register+resolve race reconstructs from the outcome/drop row's own
++honest entry (counted). CLOSE: `tp_hit`/`sl_hit` at the setup's barrier; terminal drops
++(`no_forward`/`no_resolution`) at the tracker's last-seen trade print; registration drops
++(`flatten`/`cutoff`/`no_fill`, entry null) mean the position NEVER existed (invariant counter if
++violated, never raised). **THE TWO-COLUMN BRACKET = the execution-drag measurement:** optimistic
++prices the exact honest anchor/barriers; conservative prices a 1-tick-adverse entry and a
++1-tick-adverse sl exit (tp exit AT the barrier — the print requirement is already resolution
++semantics; drop exits are real prints, unadjusted). The spread between the columns measures how
++much of the observed edge survives minimal slippage: an edge that exists only in the optimistic
++column is not tradeable. Sizing 1 contract at the contract's point_value (default 20). All
++prices tracked in integer ticks for exact column arithmetic. **RESET semantics:** every runtime
++reset (replay start `replay_reset`, live start `live_reset`, activation) clears open positions
++with a `reset` journal row carrying the cleared prediction ids — no phantom carry, NO synthetic
++closes (the activation path first broadcasts the old resolver's flush drops, which the tracker
++CLOSES properly at the last print, then the reset clears only what could never resolve).
++Live positions are live-originated only by construction (the anchor-based warm gate blocks
++warm-REPLAYED touches).
++
++**P3 (TL surface):** `position.opened`/`position.closed` typed WS frames (emitted AFTER the
++prediction frames they derive from) + a snapshot `open_positions` block with live unrealized P&L
++(both columns) against the tracker's last-seen print; price-anchored chart markers at the actual
++FILL prices (lightweight-charts v5 SeriesMarkerPrice, `atPriceMiddle` — visually distinct from
++every bar-anchored touch/observation/prediction/outcome glyph); an Executions panel
++(open-position card: side/entry/both-column unrealized recomputed against the local latest
++print/age on the event clock; closed table: entry/exit/points both columns/reason); the
++Performance page gains a paper-execution summary card when execution files exist —
++`aggregate_executions` is ONE pure function with counted buckets
++(unreadable/decode/malformed/unknown/undated/outside-filters/missing-pnl), close rows filtered
++like the journal and dated by their own exit ts, `None` until the tracker ever writes.
++
++**P0 riders (TL `4411347`):** two REPORT verify minors fixed — the performance session filter now
++validates against the plugin vocabulary (typo → 400, not all-zeros 200); a well-formed ?bundle=
++absent from models_root no longer 404s (bundle_id row filter with no OOS panel — retired
++bundles' journal history stays queryable).
++
++**Adversarial verify (bounded close gate, 2026-07-10):** 6 agents (the window cap) — 3 lens
++finders (tracker state machine vs resolver semantics incl. every drop reason; DTO/WS seam +
++reset ordering; P&L arithmetic both columns) + one refutation pass per lens. **18 findings → 14
++distinct: 1 MAJOR (confirmed by all three refuters) + 13 confirmed minors + 1 REFUTED** (a
++policy-provider fault aborting an update's closes — the shipped providers cannot raise:
++lock-protected committed registry reads + pydantic-validated contract fields). **The MAJOR,
++FIXED in-window (TL `009889e`):** the live warm/lag throttle swallowed every market
++RuntimeUpdate while `_live_streaming` was False (warm catch-up tail AND the mid-session >30s
++stall relapse), and the tracker observes only broadcast updates — a catch-up-tail prediction
++never opened, and a stall-window resolution left a position stuck open forever with no close
++row (executions journal permanently diverging from the prediction journal). Updates carrying
++predictions/outcomes/drops/resets are now ALWAYS forwarded to the choke point (a handful per
++session — no flood risk); market-only updates keep the snapshot throttle; regression test pins
++forwarded-vs-suppressed per delta kind. Two window-introduced doc statements the verify proved
++false were corrected in the same commit (execution.py live-phase docstring; stores.ts closed-
++table reconnect comment). **13 confirmed minors REPORTED, not fixed:** (1) cap eviction (>500
++open backstop) leaves a dangling journal open row and the later resolution is silently ignored
++(same trace gap in the registration-drop-while-open guard); (2) flat 0-point closes counted as
++losses in aggregate_executions' win/loss split; (3) the same-batch fallback stamps entry_ts from
++prediction.event_ts, diverging from the view's decision instant under the log-warned
++offset-mismatch config; (4) a mid-replay activation broadcasts its reset frame ahead of the
++replay's buffered pre-activation deltas (post-reset open+close attribution possible in the 50ms
++flush window; activation-during-replay has no 409 guard); (5) WS backpressure drop-oldest can
++discard a position.closed/model.reset frame for a slow client (phantom open card until
++reconnect; backend journal correct); (6) the closed-executions table survives a reset missed
++while disconnected (comment corrected; behavior reported); (7) the Performance $ card recomputes
++dollars from headline point_value instead of the exact realized.dollars the backend ships
++(diverges on multi-point-value journals); (8) activation flush closes appear in the UI then are
++wiped by the following reset's clearExecutions (journal/Performance page retain them); (9) SC
++OpenSetupView `round()` snaps non-tick-multiple tp/sl barriers off the true excursion trigger
++(latent; production policy is tick-multiple; nothing validates multiplicity); (10) the tracker
++mixes feed-grid bar ticks with contract-grid position ticks in drop exits/unrealized marks
++(latent; garbage P&L only for a contract with tick ≠ 0.25, unreachable today); (11) the frontend
++hardcodes 0.25 when recomputing the unrealized mark (same latent class; DTO carries no
++tick_size); (12) aggregate_executions sums dollars independently of the points guard — a row
++with points but no dollars silently diverges the two with no counter; (13) undated close rows
++are summed uncounted when no day window is set (anomaly accounting is filter-dependent,
++contradicting the docstring's promise).
++
++**Gates (final trees):** TL backend **507 passed / 1 skipped** + ruff clean; frontend **187
++passed** (19 files) + tsc + eslint clean; SC **192 passed** (+4) + ruff clean. End-to-end test
++drives the REAL resolver → accessor → tracker → choke point → journal (honest fill, barriers,
++frame ordering, never-opened flatten). Deliverables at the repo roots: `EXEC_TL_DIFF.txt`
++(209f1d0..tip) and `EXEC_SC_DIFF.txt` (17ee822..tip). **NOT pushed (work-order FULL STOP).**
++**Pins: bump BOTH consumers to the pushed SC tip AT GREENLIGHT — the OpenSetupView accessor is
++consumer-facing (TL requires SC ≥ `3d4193e`).**
+diff --git a/src/strategy_core/__init__.py b/src/strategy_core/__init__.py
+index d7146c3..caa5d7e 100644
+--- a/src/strategy_core/__init__.py
++++ b/src/strategy_core/__init__.py
+@@ -107,6 +107,7 @@ from strategy_core.decisions.sessions import (
+     trading_day_for,
+ )
+ from strategy_core.decisions.streaming import (
++    OpenSetupView,
+     StreamDrop,
+     StreamingHonestResolver,
+     StreamResolution,
+@@ -177,6 +178,7 @@ __all__ = [
+     "StreamingHonestResolver",
+     "StreamResolution",
+     "StreamDrop",
++    "OpenSetupView",
+     # contract
+     "StrategyContract",
+     "load_strategy_contract",
+diff --git a/src/strategy_core/decisions/streaming.py b/src/strategy_core/decisions/streaming.py
+index 3309798..8e4cfb1 100644
+--- a/src/strategy_core/decisions/streaming.py
++++ b/src/strategy_core/decisions/streaming.py
+@@ -63,7 +63,7 @@ from strategy_core.constants import (
+ from strategy_core.decisions.outcomes import OutcomeResult, classify_mae_first
+ from strategy_core.types import Bar, Direction
+ 
+-__all__ = ["StreamDrop", "StreamResolution", "StreamingHonestResolver"]
++__all__ = ["OpenSetupView", "StreamDrop", "StreamResolution", "StreamingHonestResolver"]
+ 
+ #: The bounded entry-print lookback (minutes) — the reference semantics of
+ #: ``validation/decision_diff_harness.py:594-616`` (``ENTRY_LOOKBACK_MIN``) and the
+@@ -118,6 +118,38 @@ class StreamResolution:
+     result: OutcomeResult
+ 
+ 
++@dataclass(frozen=True, slots=True)
++class OpenSetupView:
++    """Read-only projection of one open setup's registration-time economics (EXEC P1).
++
++    The honest fill and the barrier prices the resolver already implied at
++    registration, surfaced for OBSERVER consumers (Trade-Lab's paper-execution
++    tracker): the fill exists at ``register()`` but previously surfaced only at
++    resolution/drop. ``prediction_id`` is the caller's registration ``key``
++    (Trade-Lab registers the prediction id). ``entry_ts_utc`` is the decision
++    instant the fill was anchored at.
++
++    Prices are integer TICKS of the resolver's ``tick_size``: the fill comes off
++    the tick grid (a real print) and the production tp/sl offsets are tick
++    multiples, so ``round()`` only absorbs float representation noise. Barriers
++    follow the excursion rule exactly — LONG tp = entry + tp_points, sl =
++    entry - sl_points; SHORT mirrored. Both SL-side labels (trap and
++    blowthrough) share the one SL barrier; MAE-first arbitration is the
++    resolver's concern, not the view's.
++
++    Each ``open_setups()`` call constructs views fresh from the private state,
++    so an already-returned tuple is a point-in-time snapshot: later
++    ``on_bar``/``flush``/``reset`` calls never retro-change it.
++    """
++
++    prediction_id: object
++    entry_price_ticks: int
++    entry_ts_utc: datetime
++    direction: Direction
++    tp_price_ticks: int
++    sl_price_ticks: int
++
++
+ @dataclass(slots=True)
+ class _OpenSetup:
+     key: object
+@@ -191,6 +223,35 @@ class StreamingHonestResolver:
+     def open_count(self) -> int:
+         return len(self._open)
+ 
++    def open_setups(self) -> tuple[OpenSetupView, ...]:
++        """Snapshot every open setup as a read-only :class:`OpenSetupView`.
++
++        Additive observer accessor (EXEC P1): no mutation, no influence on
++        registration/advancement/resolution. See the view docstring for field
++        semantics; ordering follows registration order (the ``_open`` list).
++        """
++
++        tick = self._tick_size
++        views: list[OpenSetupView] = []
++        for setup in self._open:
++            if setup.direction is Direction.LONG:
++                tp_price = setup.entry_points + self._tp_points
++                sl_price = setup.entry_points - self._sl_points
++            else:  # SHORT
++                tp_price = setup.entry_points - self._tp_points
++                sl_price = setup.entry_points + self._sl_points
++            views.append(
++                OpenSetupView(
++                    prediction_id=setup.key,
++                    entry_price_ticks=round(setup.entry_points / tick),
++                    entry_ts_utc=setup.decision_ts_utc,
++                    direction=setup.direction,
++                    tp_price_ticks=round(tp_price / tick),
++                    sl_price_ticks=round(sl_price / tick),
++                )
++            )
++        return tuple(views)
++
+     def register(
+         self,
+         key: object,
+diff --git a/tests/test_streaming_resolver.py b/tests/test_streaming_resolver.py
+index 2b3fc88..b8778e0 100644
+--- a/tests/test_streaming_resolver.py
++++ b/tests/test_streaming_resolver.py
+@@ -17,12 +17,13 @@ from datetime import UTC, date, datetime, time, timedelta
+ from zoneinfo import ZoneInfo
+ 
+ from strategy_core.decisions.streaming import (
++    OpenSetupView,
+     StreamDrop,
+     StreamingHonestResolver,
+     StreamResolution,
+ )
+ from strategy_core.runtime.state import StrategyRuntime
+-from strategy_core.types import Bar, Trade
++from strategy_core.types import Bar, Direction, Trade
+ 
+ _ET = ZoneInfo("US/Eastern")
+ _DAY = date(2025, 7, 15)  # a Tuesday
+@@ -190,6 +191,76 @@ def test_no_resolution_via_on_bar_excludes_the_cutoff_straddling_bars_range() ->
+     assert not isinstance(drop, StreamResolution)
+ 
+ 
++def test_open_setups_exposes_fill_and_barriers_per_direction() -> None:
++    # EXEC P1: the accessor projects the registration-time fill + implied
++    # barriers in ticks. _resolver policy: tick 0.25, tp 15.0, sl 30.0.
++    resolver = _resolver(trade_price_at=lambda ts: 23000.0)
++    assert resolver.open_setups() == ()
++    resolver.register("p-long", touch_bar_ts_utc=_et(10, 0), trading_day=_DAY, direction="long")
++    resolver.register("p-short", touch_bar_ts_utc=_et(10, 1), trading_day=_DAY, direction="short")
++    views = resolver.open_setups()
++    assert [v.prediction_id for v in views] == ["p-long", "p-short"]
++    long_view, short_view = views
++    assert isinstance(long_view, OpenSetupView)
++    assert long_view.entry_ts_utc == _et(10, 5)
++    assert long_view.direction is Direction.LONG
++    assert long_view.entry_price_ticks == 92000  # 23000.0 / 0.25
++    assert long_view.tp_price_ticks == 92060  # entry + 15.0 pts
++    assert long_view.sl_price_ticks == 91880  # entry - 30.0 pts
++    assert short_view.entry_ts_utc == _et(10, 6)
++    assert short_view.direction is Direction.SHORT
++    assert short_view.entry_price_ticks == 92000
++    assert short_view.tp_price_ticks == 91940  # entry - 15.0 pts
++    assert short_view.sl_price_ticks == 92120  # entry + 30.0 pts
++
++
++def test_open_setups_registration_drop_never_appears() -> None:
++    resolver = _resolver(trade_price_at=lambda ts: None)
++    drop = resolver.register(
++        "k", touch_bar_ts_utc=_et(10, 0), trading_day=_DAY, direction="long"
++    )
++    assert isinstance(drop, StreamDrop) and drop.reason == "no_fill"
++    assert resolver.open_setups() == ()
++
++
++def test_open_setups_resolved_and_flushed_setups_disappear() -> None:
++    resolver = _resolver(trade_price_at=lambda ts: 23000.0)
++    resolver.register("resolves", touch_bar_ts_utc=_et(10, 0), trading_day=_DAY, direction="long")
++    resolver.register("rides", touch_bar_ts_utc=_et(10, 1), trading_day=_DAY, direction="short")
++    assert len(resolver.open_setups()) == 2
++    # TP bar for the long (short MFE 0 / MAE 16 < sl 30 -> still open).
++    emitted = resolver.on_bar(_bar(_et(10, 10), 23016.0, 23000.0))
++    assert len(emitted) == 1 and isinstance(emitted[0], StreamResolution)
++    remaining = resolver.open_setups()
++    assert [v.prediction_id for v in remaining] == ["rides"]
++    # Terminal drop via flush removes the survivor too.
++    flushed = resolver.flush(_et(18, 0))
++    assert len(flushed) == 1 and flushed[0].reason == "no_resolution"
++    assert resolver.open_setups() == ()
++    # reset() clears as well (fresh registration, then reset).
++    resolver.register("cleared", touch_bar_ts_utc=_et(11, 0), trading_day=_DAY, direction="long")
++    assert len(resolver.open_setups()) == 1
++    resolver.reset()
++    assert resolver.open_setups() == ()
++
++
++def test_open_setups_tuple_is_a_point_in_time_snapshot() -> None:
++    resolver = _resolver(trade_price_at=lambda ts: 23000.0)
++    resolver.register("k", touch_bar_ts_utc=_et(10, 0), trading_day=_DAY, direction="long")
++    before = resolver.open_setups()
++    assert len(before) == 1
++    # Advance the engine past resolution: the already-returned tuple must not
++    # retro-change (frozen views constructed fresh per call).
++    emitted = resolver.on_bar(_bar(_et(10, 10), 23016.0, 23000.0))
++    assert len(emitted) == 1
++    assert resolver.open_setups() == ()
++    assert len(before) == 1
++    assert before[0].prediction_id == "k"
++    assert before[0].entry_price_ticks == 92000
++    assert before[0].tp_price_ticks == 92060
++    assert before[0].sl_price_ticks == 91880
++
++
+ def test_trade_ring_lookback_bound_and_retention_eviction() -> None:
+     runtime = StrategyRuntime(timeframes=(147,), decision_timeframe=147)
+     t0 = _et(10, 0)
