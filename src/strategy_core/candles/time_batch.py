@@ -46,6 +46,23 @@ def _seconds_of(t: time) -> int:
     return t.hour * 3600 + t.minute * 60 + t.second
 
 
+def _index_to_ns(values):
+    """Int64 epoch integers for a datetime Series/Index — the ONE place the batch
+    path turns the timestamp column into integers. Lives here (not ``_buckets.py``)
+    because ``_buckets`` must stay pandas-free for the streaming engine."""
+    import pandas as pd
+
+    return pd.DatetimeIndex(values).asi8
+
+
+def _timestamp_to_ns(ts) -> int:
+    """Epoch integer for a single timestamp — the ONE place the per-day anchor
+    becomes an integer."""
+    import pandas as pd
+
+    return int(pd.Timestamp(ts).value)
+
+
 def build_time_bars_from_frame(
     frame: "pd.DataFrame",
     timeframes_seconds: tuple[int, ...],
@@ -118,10 +135,10 @@ def build_time_bars_from_frame(
     # Integer-nanosecond floor-divide so an edge-exact trade buckets identically to
     # the streaming engine's integer-microsecond arithmetic.
     day_start_ns = {
-        td: pd.Timestamp(trading_day_start_utc(td.date(), scheme)).value
+        td: _timestamp_to_ns(trading_day_start_utc(td.date(), scheme))
         for td in work["trading_day"].unique()
     }
-    ts_ns = pd.DatetimeIndex(work["ts_event"]).asi8
+    ts_ns = _index_to_ns(work["ts_event"])
     start_ns = work["trading_day"].map(day_start_ns).to_numpy(dtype="int64")
     work["bucket60"] = (ts_ns - start_ns) // (BASE_INTERVAL_SECONDS * _NS_PER_SECOND)
 
