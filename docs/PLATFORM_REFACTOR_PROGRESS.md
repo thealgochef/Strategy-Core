@@ -2614,3 +2614,34 @@ is docstrings. Rationale recorded: leaving the pin at `1eca72f` would have both
 consumers cold-installing a `time_batch.py` carrying the bug on runners that resolve
 pandas 3 — dormant while neither imports it, live the moment QL research uses the
 builders.
+
+---
+
+## HOUSEKEEPING — root-artifact archive + dead-tooling removal (2026-07-28)
+
+Executed on branch `chore/cleanup-2026-07` (PR into `platform-refactor`; review-gated,
+NOT merged by the executor — owner reviews).
+
+- **Archived** the per-window root artifacts (20 `*_SC_DIFF.txt`, the greenlight/ops
+  `*_REPORT.txt` set, `ARCH_STATE_RECON.md`, `STATE_RESYNC.md`, `b2_context.md`,
+  `scratch_w3a_reader_proof.py`, `W3A_READER_PROOF.log`) to `docs/archive/windows/`
+  — committed, filenames unchanged. Entries above that place a file "at the SC root"
+  now resolve to `docs/archive/windows/<same filename>`. Index: `docs/archive/README.md`.
+- **Recovered** `WARMFIX_SC_DIFF.txt` from the Trade-Lab repo root (produced there,
+  gitignored, during WARM-FIX) into the same archive — the previously dangling :1631
+  evidence citation now resolves.
+- **Deleted** unreferenced raw output: the four `W3B_0212` debug logs/outs (~76 MB)
+  plus their two uncited scratch scripts, three `_ingest_sc_suite*.out` pytest
+  captures, regenerable `route_seam_report.json`, and the stray `algo-dev.md`.
+- **Removed** the dead `.wf/` agent-workflow scripts (zero inbound references;
+  hardcoded paths to D-P-02-deleted harnesses and a nonexistent data dir).
+- **Gitignored** root window-artifact patterns — the SC half of TL `b27e2c0`
+  (W3a P0 housekeeping), which was never done here.
+- **Docs**: README gained a Key docs index over `docs/` (PROGRESS/PLAN/DECISIONS/
+  BACKLOG/archive) and dropped the stale "135 tests / py3.14" claims;
+  `validation/README.md` stale count line now defers to CI. `MIGRATION.md` /
+  `V3_COMPATIBILITY_MATRIX.md` bodies untouched (frozen 2026-06-10, cross-repo-linked;
+  refresh-or-archive is a follow-up).
+- **Not touched**: `docs/PLATFORM_REFACTOR_PLAN.md` (frozen), `validation/` code
+  (CI-collected via testpaths), `TRADE_LAB_CT_SESSION_SCHEME` (sole closed-window
+  parity coverage; any change belongs to PARKED §9.9).

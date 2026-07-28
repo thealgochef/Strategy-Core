@@ -13,7 +13,7 @@ This directory is an audit trail, not the current source of truth. Most stale v1
   `strategy_core.PLATFORM_VERSION`: `strategy_core_platform_v1` (the engine axis renamed at E1)
   Current v3 sessions: ET `asia` 19:00→02:45, `london` 03:00→08:00, `ny` 09:00→17:00; 18:00 ET trading day boundary.
   Current v3 labels: realistic decision time entry at touch+5m, flatten at 16:40 ET, forward cutoff at 17:00 ET.
-  Current test count: 106 Strategy Core tests collected and passing as of 2026 06 04.
+  Current test count: see CI — `python -m pytest -q` at the repo root collects `tests/` + `validation/`.
 
 ## Retained report categories
 
