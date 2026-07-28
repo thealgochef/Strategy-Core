@@ -21,6 +21,7 @@ from enum import StrEnum
 __all__ = [
     "Side",
     "Direction",
+    "BarKind",
     "CloseReason",
     "Trade",
     "Quote",
@@ -46,6 +47,19 @@ class Direction(StrEnum):
 
     LONG = "LONG"
     SHORT = "SHORT"
+
+
+class BarKind(StrEnum):
+    """How a bar closes. ``StrEnum`` so ``BarKind.TICK == "tick"`` (PLAN §2.1(3)).
+
+    Canonical home (Phase F): defined here so :class:`Bar` can carry it without a
+    ``strategies``->``types`` import cycle; ``strategies.protocols`` re-exports it,
+    so every existing ``from strategy_core.strategies.protocols import BarKind``
+    keeps resolving to this same class.
+    """
+
+    TICK = "tick"  # close on trade_count == size       (the original engine)
+    TIME = "time"  # close on wall-clock interval edge  (Phase F time bars)
 
 
 class CloseReason(StrEnum):
@@ -110,6 +124,12 @@ class Bar:
     is_complete: bool
     is_partial: bool
     close_reason: CloseReason | None = None
+    #: Appended LAST and defaulted so every pre-Phase-F construction site (positional
+    #: or keyword) stays valid and every existing tick bar is unchanged. For a TIME
+    #: bar, ``timeframe_ticks`` carries the interval in SECONDS (the ``BarSpec.size``
+    #: convention) — 0 is unavailable as a marker because it is an existing
+    #: "unspecified" sentinel in the decision layer.
+    kind: BarKind = BarKind.TICK
 
     def high_points(self, tick_size: float) -> float:
         return self.high_ticks * tick_size

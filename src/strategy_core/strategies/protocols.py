@@ -37,10 +37,9 @@ from __future__ import annotations
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from datetime import date, datetime, time
-from enum import StrEnum
 from typing import Any, Protocol, runtime_checkable
 
-from strategy_core.types import Bar, Level, Quote, Touch, Trade, Zone
+from strategy_core.types import Bar, BarKind, Level, Quote, Touch, Trade, Zone
 
 __all__ = [
     "BarKind",
@@ -58,11 +57,10 @@ __all__ = [
 
 
 # ── Declared data needs (tick AND time) ──────────────────────────────────────
-class BarKind(StrEnum):
-    """How a bar closes. ``StrEnum`` so ``BarKind.TICK == "tick"`` (PLAN §2.1(3))."""
-
-    TICK = "tick"  # close on trade_count == size      (CURRENT engine)
-    TIME = "time"  # close on wall-clock interval edge  (NEW close trigger, Phase F)
+# Phase F: ``BarKind`` moved to ``strategy_core.types`` (its canonical home, so
+# ``Bar.kind`` can carry it without a strategies->types import cycle) and is
+# re-exported here unchanged — same class object, so every existing
+# ``from strategy_core.strategies.protocols import BarKind`` still resolves.
 
 
 @dataclass(frozen=True, slots=True)
