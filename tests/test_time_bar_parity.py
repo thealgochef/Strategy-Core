@@ -22,6 +22,7 @@ from dataclasses import astuple
 from datetime import datetime, timedelta, timezone
 
 import pandas as pd
+import pytest
 
 from strategy_core.candles.time_batch import build_time_bars_from_frame
 from strategy_core.candles.time_streaming import DEFAULT_TIME_TIMEFRAMES, TimeBarEngine
@@ -192,6 +193,25 @@ def test_parity_dst_fall_back_25h_day() -> None:
     assert {b.trading_day.isoformat() for b in bars} == {"2025-11-02"}
     h4 = [b for b in bars if b.timeframe_ticks == 14400]
     assert len(h4) == 7  # 25 elapsed hours -> 4H buckets 0..6 all populated
+
+
+@pytest.mark.parametrize("timeframes", [(300, 3600), (180, 1800, 14400)])
+def test_parity_without_60s_base(timeframes: tuple[int, ...]) -> None:
+    """Timeframe sets EXCLUDING the 60s base (``TimeBarEngine._emit_base == False``):
+    the 60s accumulator still runs as the derivation base but emits nothing, and the
+    two builders must agree bar-for-bar — the deferred TIMEBAR review finding (i).
+    No 60s bar may appear in either output."""
+    trades = _main_stream()
+    frame = _trades_to_frame(trades, tick_size=DEFAULT_TICK_SIZE)
+    streaming = _streaming_bars(trades, timeframes, RESEARCH_SESSION_SCHEME)
+    batch = build_time_bars_from_frame(
+        frame, timeframes, scheme=RESEARCH_SESSION_SCHEME, tick_size=DEFAULT_TICK_SIZE
+    )
+    _assert_bars_equal(streaming, batch)
+    assert streaming and batch
+    assert not [b for b in streaming if b.timeframe_ticks == 60]
+    assert not [b for b in batch if b.timeframe_ticks == 60]
+    assert {b.timeframe_ticks for b in streaming} == set(timeframes)
 
 
 def test_empty_frame_returns_no_bars() -> None:
