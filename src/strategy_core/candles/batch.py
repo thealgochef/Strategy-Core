@@ -8,8 +8,10 @@ trading-day calendar / closed window come from a
 through :class:`strategy_core.candles.streaming.CandleEngine`; the parity test
 (``tests/test_candle_parity.py``) locks the two paths together.
 
-This is the ONLY engine module permitted to import pandas (see package rules): the
-batch path is the research/warm-up fast path, run off the event loop. Emits
+Pandas-import rule (see package rules): the BATCH builders — this module and
+``candles/time_batch.py`` — import pandas; the streaming engines
+(``candles/streaming.py``, ``candles/time_streaming.py``) and ``candles/_buckets.py``
+do not. The batch path is the research/warm-up fast path, run off the event loop. Emits
 :class:`strategy_core.types.Bar` (not Trade-Lab's ``Candle``) with
 :class:`strategy_core.types.CloseReason`.
 """

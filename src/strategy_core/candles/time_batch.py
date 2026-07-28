@@ -18,8 +18,9 @@ mirroring ``build_tick_bars_from_frame``'s signature shape and input contract
   incomplete (no later bucket produced a bar); every other bar is ``COMPLETE``.
 
 The parity test (``tests/test_time_bar_parity.py``) locks this against the
-streaming engine. Like ``candles/batch.py``, this module may import pandas (the
-research / warm-up fast path, run off the event loop).
+streaming engine. Pandas-import rule: the BATCH builders (``candles/batch.py`` and
+this module) import pandas; the streaming engines and ``candles/_buckets.py`` do
+not. The batch path is the research / warm-up fast path, run off the event loop.
 
 UNIT NOTE — batch buckets in integer NANOSECONDS while the streaming engine buckets
 in integer MICROSECONDS, and the two are provably equivalent: for positive integers
