@@ -66,6 +66,77 @@ def test_asia_and_london_ranges_use_strategy_core_sessions_not_chicago_closed_wi
     assert runtime.snapshot().trading_day is not None
 
 
+def test_default_construction_surface_is_unchanged_by_parameterization() -> None:
+    """9.9-lite regression: with default args the emitted level tuple is
+    byte-identical to the historical asia/london-only surface (protects the
+    touch-serving path from the IFVG-window opt-ins)."""
+    state = StrategyLevelState()
+    state.process_trade(_et_trade(2025, 7, 14, 19, 0, 68400))  # asia
+    state.process_trade(_et_trade(2025, 7, 15, 4, 0, 68050))  # london
+    state.process_trade(_et_trade(2025, 7, 15, 10, 0, 68000))  # ny — NOT tracked by default
+    names = [level.name for level in state.levels()]
+    assert names == ["asia_high", "asia_low", "london_high", "london_low"]
+    state.process_trade(_et_trade(2025, 7, 15, 19, 30, 68200))
+    names_day2 = {level.name for level in state.levels()}
+    assert "ny_high" not in names_day2 and not any(n.startswith("prev_") for n in names_day2)
+
+
+def test_ny_ranges_opt_in_with_session_close_availability() -> None:
+    state = StrategyLevelState(session_range_names=("asia", "london", "ny"))
+    state.process_trade(_et_trade(2025, 7, 15, 10, 0, 68000))
+    state.process_trade(_et_trade(2025, 7, 15, 15, 30, 68350))
+    levels = {level.name: level for level in state.levels()}
+    assert levels["ny_high"].price == 68350 * 0.25
+    assert levels["ny_low"].price == 68000 * 0.25
+    # Available from the NY close (17:00 ET on the trading day), per the
+    # existing session-close rule.
+    expected = datetime(2025, 7, 15, 17, 0, tzinfo=_ET).astimezone(UTC)
+    assert levels["ny_high"].available_from == expected
+
+
+def test_prev_ny_levels_bank_at_roll_and_open_with_day_start_availability() -> None:
+    state = StrategyLevelState(
+        session_range_names=("asia", "london", "ny"),
+        emit_prior_session_levels=("ny",),
+    )
+    state.process_trade(_et_trade(2025, 7, 15, 10, 0, 68000))
+    state.process_trade(_et_trade(2025, 7, 15, 15, 30, 68350))
+    assert not any(level.name.startswith("prev_ny") for level in state.levels())
+    # Roll to trading day 7/16: prev_ny_* emit from the banked 7/15 NY range,
+    # available from the trading-day start (the PDH/PDL instant).
+    state.process_trade(_et_trade(2025, 7, 15, 19, 30, 68200))
+    levels = {level.name: level for level in state.levels()}
+    assert levels["prev_ny_high"].price == 68350 * 0.25
+    assert levels["prev_ny_low"].price == 68000 * 0.25
+    assert levels["prev_ny_high"].side is Side.HIGH
+    expected = datetime(2025, 7, 15, 18, 0, tzinfo=_ET).astimezone(UTC)
+    assert levels["prev_ny_high"].available_from == expected
+
+
+def test_load_prior_session_range_seed_is_authoritative() -> None:
+    state = StrategyLevelState(
+        session_range_names=("asia", "london", "ny"),
+        emit_prior_session_levels=("ny",),
+    )
+    state.process_trade(_et_trade(2025, 7, 15, 10, 0, 68000))
+    state.load_prior_session_range(
+        datetime(2025, 7, 15, tzinfo=UTC).date(), "ny", high_ticks=70000, low_ticks=60000
+    )
+    state.process_trade(_et_trade(2025, 7, 15, 19, 30, 68200))
+    levels = {level.name: level for level in state.levels()}
+    assert levels["prev_ny_high"].price == 70000 * 0.25
+    assert levels["prev_ny_low"].price == 60000 * 0.25
+
+
+def test_parameterization_validation_fails_loud() -> None:
+    import pytest
+
+    with pytest.raises(ValueError):
+        StrategyLevelState(session_range_names=("asia", "tokyo"))
+    with pytest.raises(ValueError):
+        StrategyLevelState(emit_prior_session_levels=("ny",))  # ny not tracked
+
+
 def test_friday_bank_serves_monday_pdh_pdl_across_the_weekend_gap() -> None:
     """W2 P1f rider: the emission lookup resolves the MOST RECENT banked day with
     key < the current trading day, so a Friday bank serves Monday across the

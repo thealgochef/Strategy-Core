@@ -36,10 +36,16 @@ from dataclasses import dataclass
 from datetime import date
 from pathlib import Path
 
+from strategy_core.constants import RESEARCH_SESSION_SCHEME
 from strategy_core.data.databento_parquet import DatabentoParquetSource
-from strategy_core.types import Trade
+from strategy_core.decisions.sessions import classify_session
+from strategy_core.types import SessionScheme, Trade
 
-__all__ = ["PriorDayExtremes", "prior_full_day_extremes"]
+__all__ = [
+    "PriorDayExtremes",
+    "prior_full_day_extremes",
+    "prior_day_session_extremes",
+]
 
 
 @dataclass(frozen=True, slots=True)
@@ -110,3 +116,74 @@ def prior_full_day_extremes(
         if high is not None and low is not None:
             return PriorDayExtremes(source_day=candidate, high_ticks=high, low_ticks=low)
     return None
+
+
+def prior_day_session_extremes(
+    symbol_dir: Path | str,
+    trading_day: date,
+    *,
+    sessions: tuple[str, ...] = ("ny",),
+    scheme: SessionScheme = RESEARCH_SESSION_SCHEME,
+    requested_symbol: str | None = None,
+    max_walk_days: int = 10,
+) -> dict[str, PriorDayExtremes]:
+    """Per-SESSION extremes of the most recent prior store day (IFVG seed twin
+    of :func:`prior_full_day_extremes`, for ``load_prior_session_range``).
+
+    Same walk semantics: dated directories strictly before ``trading_day``,
+    descending, at most ``max_walk_days`` candidates; the first candidate whose
+    window contains at least one trade wins the walk (one drain accumulates all
+    requested sessions via ``classify_session`` under ``scheme``). A session
+    with no trades on the winning day is simply absent from the result — the
+    caller's nothing-to-seed case. Returns ``{}`` on an exhausted walk.
+    """
+    if max_walk_days <= 0:
+        return {}
+    root = Path(symbol_dir)
+    if not root.is_dir():
+        return {}
+
+    candidates: list[date] = []
+    for entry in root.iterdir():
+        if not entry.is_dir():
+            continue
+        try:
+            day = date.fromisoformat(entry.name)
+        except ValueError:
+            continue
+        if day.isoformat() != entry.name:
+            continue
+        if day < trading_day:
+            candidates.append(day)
+
+    for candidate in sorted(candidates, reverse=True)[:max_walk_days]:
+        try:
+            source = DatabentoParquetSource.for_trading_day(
+                root, candidate, requested_symbol=requested_symbol
+            )
+        except FileNotFoundError:
+            continue
+        any_trade = False
+        highs: dict[str, int] = {}
+        lows: dict[str, int] = {}
+        for event in source.events():
+            if not isinstance(event, Trade):
+                continue
+            any_trade = True
+            info = classify_session(event.event_ts_utc, scheme)
+            name = info.session
+            if name not in sessions:
+                continue
+            price = event.price_ticks
+            if name not in highs or price > highs[name]:
+                highs[name] = price
+            if name not in lows or price < lows[name]:
+                lows[name] = price
+        if any_trade:
+            return {
+                name: PriorDayExtremes(
+                    source_day=candidate, high_ticks=highs[name], low_ticks=lows[name]
+                )
+                for name in highs
+            }
+    return {}

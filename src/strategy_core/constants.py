@@ -295,6 +295,49 @@ LIVE_SCHEMAS: tuple[str, ...] = ("trades", "mbp-1")
 REPLAY_SCHEMAS: tuple[str, ...] = ("trades", "mbp-1", "mbp-10")
 DEPTH_USAGE = "top_of_book_only"
 
+# ── IFVG (ifvg_smc) capture-profile defaults — WIDE bounds, not doc values ───
+#: Canonical TIME timeframe label -> seconds map (ruling 9.11 set). Single-sourced
+#: here for the ifvg section/plugin; candles/time_streaming.py keeps the tuple.
+TIME_TF_SECONDS: dict[str, int] = {
+    "1m": 60,
+    "3m": 180,
+    "5m": 300,
+    "10m": 600,
+    "15m": 900,
+    "30m": 1800,
+    "1H": 3600,
+    "4H": 14400,
+}
+#: Every IFVG_* bound below is a CAPTURE bound (WIDE-capture ruling, IFVG window):
+#: it exists to keep the one-setup FSM finite, NEVER to encode trade quality. The
+#: ifvg-strat.md doc default it widens is noted per line; the doc value is an
+#: emitted measurement/filter downstream, not a gate.
+IFVG_HTF_TIMEFRAMES = ("1H", "4H")
+IFVG_PARENT_TIMEFRAMES = ("3m", "5m", "10m", "15m", "30m")
+IFVG_MIN_GAP_TICKS_CAPTURE = 1  # doc §6.2: 4 ticks -> size_ticks emitted per structure
+IFVG_PARENT_REACTION_WINDOW_1M_BARS_MAX = 480  # doc §6.2: 40 PARENT bars
+IFVG_PARENT_HTF_DISTANCE_TICKS_MAX = 400  # doc §6.2: 80 ticks
+IFVG_OPPOSING_PARENT_DISTANCE_TICKS_MAX = 400  # doc §6.2: 80 ticks
+IFVG_LOCK_TO_ARMED_1M_BARS_MAX = 480  # doc §14.3: no timeout -> bounded capture
+IFVG_ARMED_TO_INVERSION_1M_BARS_MAX = 480  # doc §14.3: no timeout -> bounded capture
+IFVG_POST_INVERSION_EXPIRY_1M_BARS_MAX = 240  # doc §6.2: 80 1m bars
+IFVG_HTF_REGISTRY_MAX_AGE_DAYS = 15  # census: 4H first-touch p90 ~2.8 days
+IFVG_LTF_REGISTRY_MAX_LIVE = 512  # census: ~317 1m gaps/day, 98%+ fill same day
+IFVG_SWING_STRENGTH_BARS = 3
+IFVG_SWING_POOL_MAX = 64
+IFVG_SL_BUFFER_TICKS = 1  # doc §6.3
+IFVG_TP_R_MULTIPLE = 1.0  # doc §6.3 fixed_1R — the label-family baseline
+IFVG_ENTRY_FAMILIES = ("fresh_fvg_continuation", "ifvg_retest")
+IFVG_SELECTED_ENTRY_FAMILY = "fresh_fvg_continuation"  # doc default family
+IFVG_LABEL_FAMILY = "mae_first_r1_eod"
+#: ifvg-strat.md §6.4 session windows (ET) — a FEATURE STAMP on records, never an
+#: engine scheme (the engine classifies with RESEARCH_SESSION_SCHEME).
+IFVG_DOC_SESSIONS = {
+    "asia": ("16:00", "01:45"),
+    "london": ("02:00", "07:00"),
+    "ny": ("08:00", "14:00"),
+}
+
 __all__ = [
     "DEFAULT_TICK_SIZE",
     "BAR_PRICE_SOURCE",
@@ -347,4 +390,25 @@ __all__ = [
     "LIVE_SCHEMAS",
     "REPLAY_SCHEMAS",
     "DEPTH_USAGE",
+    # ifvg_smc capture profile
+    "TIME_TF_SECONDS",
+    "IFVG_HTF_TIMEFRAMES",
+    "IFVG_PARENT_TIMEFRAMES",
+    "IFVG_MIN_GAP_TICKS_CAPTURE",
+    "IFVG_PARENT_REACTION_WINDOW_1M_BARS_MAX",
+    "IFVG_PARENT_HTF_DISTANCE_TICKS_MAX",
+    "IFVG_OPPOSING_PARENT_DISTANCE_TICKS_MAX",
+    "IFVG_LOCK_TO_ARMED_1M_BARS_MAX",
+    "IFVG_ARMED_TO_INVERSION_1M_BARS_MAX",
+    "IFVG_POST_INVERSION_EXPIRY_1M_BARS_MAX",
+    "IFVG_HTF_REGISTRY_MAX_AGE_DAYS",
+    "IFVG_LTF_REGISTRY_MAX_LIVE",
+    "IFVG_SWING_STRENGTH_BARS",
+    "IFVG_SWING_POOL_MAX",
+    "IFVG_SL_BUFFER_TICKS",
+    "IFVG_TP_R_MULTIPLE",
+    "IFVG_ENTRY_FAMILIES",
+    "IFVG_SELECTED_ENTRY_FAMILY",
+    "IFVG_LABEL_FAMILY",
+    "IFVG_DOC_SESSIONS",
 ]

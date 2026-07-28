@@ -2645,3 +2645,43 @@ NOT merged by the executor — owner reviews).
 - **Not touched**: `docs/PLATFORM_REFACTOR_PLAN.md` (frozen), `validation/` code
   (CI-collected via testpaths), `TRADE_LAB_CT_SESSION_SCHEME` (sole closed-window
   parity coverage; any change belongs to PARKED §9.9).
+
+## IFVG WINDOW — SC lane: structures + ifvg_smc strategy package (2026-07-28)
+
+Owner-directed window: build the IFVG/SMC strategy (ifvg-strat.md, TL docs/) as
+SC-canonical machinery with **ML-learned discretion** (rulings 9.12/9.13 + the
+9.9 amendment in DECISIONS.md). QL drives it offline; TL serving is recorded
+debt (F1 delivery, activation gates, r_relative contract producer untouched).
+
+- **NEW `structures/`**: `fvg.py` (census-canonical detection, predicates as
+  measurements, `FvgRegistry` fill tracking + snapshots), `swings.py`
+  (confirmed fractal pivots, confirmation-lag availability), `sweeps.py`
+  (liquidity-pool raid evaluation, strict trade-through, arm-time availability
+  filtering). Parity: `test_fvg_parity.py` continuous ≡ seeded incl. cross-day
+  triplets.
+- **NEW `strategies/ifvg_smc/`**: `section.py` (WIDE capture profile, pydantic,
+  `ifvg_profile_hash`), `records.py` (typed emissions; dropped candidates are
+  the same table via selected/drop_reason; per-joint causality timestamps),
+  `reducer.py` (one-setup FSM S0→S5, engine-idiom deterministic class with
+  snapshot seam; hard invariants: strict-after usability, 1m body-close
+  inversion, no entry on the inversion candle, MAE-first walk), `labels.py`
+  (r-relative pairs through the SHARED kernel `resolve_outcome`, per-call
+  points), `state.py` (`IfvgDaySeed` + `seed_hash` — the QL cache trust stamp),
+  `replay.py` (`DayOrchestrator` + `run_day`; canonical per-1m-close order in
+  the module docstring), `plugin.py` (`@register` shell; honest stubs per
+  Q-04-S; research taps drain_emissions/day_snapshot/load_day_seed;
+  `RRelativeBarrier` = the mode's first producer, declaration-only).
+- **`runtime/levels.py`**: opt-in `session_range_names` / prev-session pools
+  (NY H/L + `prev_ny_*`); default construction byte-identical
+  (regression-locked). `data/prior_day.py` gains `prior_day_session_extremes`.
+- **Parity spine**: `test_ifvg_replay_parity.py` — (a) chained `run_day`
+  (seed = prior `end_seed`) ≡ one continuous orchestrator, terminal
+  `seed_hash` identical (the per-day cache chain theorem); (b) plugin fold ≡
+  `run_day` emission-for-emission.
+- **Suite**: 269 passed (41 new across 8 new test files), zero regressions.
+- **Known carried risks**: batch↔streaming sub-µs bar-timestamp divergence
+  (TIMEBAR-FIX open finding) inherits into `Fvg.confirmed_ts` for any future
+  live/batch cross-check — research is batch-only and self-consistent; the
+  reducer is an engine-idiom deterministic CLASS (not the design doc's literal
+  pure function) — determinism enforced by the parity locks, snapshot seam
+  fail-closes on profile-hash mismatch.

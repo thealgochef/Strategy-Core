@@ -194,3 +194,39 @@ def test_non_strict_iso_dir_names_are_not_candidates(tmp_path: Path) -> None:
     assert extremes == PriorDayExtremes(
         source_day=date(2026, 3, 9), high_ticks=68001, low_ticks=68001
     )
+
+
+def test_session_extremes_walk_accumulates_per_session(tmp_path: Path) -> None:
+    """One drain accumulates every requested session; sessions without trades on
+    the winning day are absent (nothing-to-seed), not errors."""
+    from strategy_core.data.prior_day import prior_day_session_extremes
+
+    root = tmp_path / "NQ"
+    _write_trades(
+        root / "2026-03-09" / "trades.parquet",
+        [
+            # 01:00 UTC = 21:00 EDT 03-08 -> asia window of trading day 03-09.
+            _trade_row(datetime(2026, 3, 9, 1, 0, tzinfo=UTC), 17000.0, seq=1),
+            # 14:00/14:30 UTC = 10:00/10:30 EDT -> ny session.
+            _trade_row(datetime(2026, 3, 9, 14, 0, tzinfo=UTC), 17010.0, seq=2),
+            _trade_row(datetime(2026, 3, 9, 14, 30, tzinfo=UTC), 16990.0, seq=3),
+        ],
+    )
+    result = prior_day_session_extremes(
+        root, date(2026, 3, 10), sessions=("ny", "asia"), requested_symbol="NQ"
+    )
+    assert set(result) == {"ny", "asia"}
+    assert result["ny"] == PriorDayExtremes(
+        source_day=date(2026, 3, 9), high_ticks=68040, low_ticks=67960
+    )
+    assert result["asia"] == PriorDayExtremes(
+        source_day=date(2026, 3, 9), high_ticks=68000, low_ticks=68000
+    )
+    # A session with no trades that day: the walk still WINS on this day (it has
+    # trades), and the result simply lacks the session.
+    assert (
+        prior_day_session_extremes(
+            root, date(2026, 3, 10), sessions=("london",), requested_symbol="NQ"
+        )
+        == {}
+    )

@@ -44,6 +44,38 @@ proven on a FRESH model, then soaked ≥7 trading days before any number is trus
   9.4 recorded here (original text untouched): 9.4 is PARTIALLY DISCHARGED — time-bar
   CONSTRUCTION has landed; plugin delivery and multi-timeframe routing remain Phase F1.
 
+- 9.12 RATIFIED (2026-07-28, IFVG window) — FVG construction convention (census-canonical,
+  promoted verbatim from the archived census): three-bar geometry with STRICT inequalities
+  (A.high < C.low bullish / A.low > C.high bearish, B irrelevant); a gap EXISTS only at its
+  own timeframe's close (`confirmed_ts` = availability instant); triplets SPAN trading days
+  (detector never resets at the roll; cross-day continuity = the snapshot tail seam); fills
+  are physical price events at 1m granularity, wicks count, participation STRICTLY AFTER
+  confirmation; filled gaps are dead context. Why: one ratified geometry so research capture,
+  replay, and future live serving share a single detector. Enforced: `structures/fvg.py`,
+  parity lock `tests/test_fvg_parity.py` (continuous ≡ seeded, cross-day triplets exercised).
+- 9.13 RATIFIED (2026-07-28, IFVG window) — WIDE-capture / ML-learns-the-discretion: the
+  `ifvg_smc` FSM enforces only HARD invariants (own-TF-close existence, 1m body-close
+  inversion, no entry on the inversion candle, availability guards, risk >= 1 tick) plus
+  WIDE capture bounds (IFVG_* constants, 3-5x doc defaults, existence-only floors); every
+  soft threshold from ifvg-strat.md §6 (gap sizes, distances, windows, timeouts, locality,
+  sweep quality) is an EMITTED MEASUREMENT, never a gate; every slot-rejected candidate is
+  emitted `selected=False` + drop_reason; causality and entry family are per-row flags
+  (explicit pooling, never silent). Why: owner ruling — hardcoded discretion destroyed data
+  before (dedup hid 89.6% of RTH sweeps; census sizes 3-6.6x the ICT tick priors); the
+  downstream gate model learns the thresholds and the doc defaults become a baseline filter.
+  Enforced: `strategies/ifvg_smc/` (section/records/reducer), canonical per-1m-close order
+  in `replay.py` module contract (fills -> invalidations -> expiries -> transitions ->
+  intake), parity locks `tests/test_ifvg_replay_parity.py` (chained run_day ≡ continuous;
+  plugin fold ≡ run_day).
+- 9.9 AMENDMENT (2026-07-28, IFVG window) — implemented MINIMALLY, opt-in only:
+  `StrategyLevelState` gains `session_range_names` (default `("asia","london")` — default
+  construction byte-identical, regression-locked) and `emit_prior_session_levels` (banked
+  at the roll, `prev_<session>_high/low` available from the trading-day start), plus
+  `load_prior_session_range` / `data/prior_day.py::prior_day_session_extremes` seeds.
+  ifvg constructs with `("asia","london","ny")` + `("ny",)`. Intraday running day H/L is
+  NOT emitted (self-touch look-ahead class); confirmed swings serve "recent extremes".
+  The 9.9 full parameterized-session-set ruling stays PARKED; touch serving untouched.
+
 ## Convergence rulings (ratified 2026-06-10..13; ratification record: PROGRESS POST-E3)
 - D-P-01 RATIFIED — Tracer-dye: zero rehab of pre-convergence models; acceptance on a
   FRESH model through the converged pipeline. Why: old bundles trained on definitions
