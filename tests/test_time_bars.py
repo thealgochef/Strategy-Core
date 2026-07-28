@@ -192,6 +192,48 @@ def test_bar_index_dense_across_skipped_buckets() -> None:
     assert [b.is_complete for b in bars] == [True, True, False]
 
 
+# ── ns-extraction unit guard (version-independent) ────────────────────────────
+@pytest.mark.parametrize("unit", ["us", "ms", "s"])
+def test_ns_extraction_does_not_inherit_dtype_unit(unit: str) -> None:
+    """The batch path's datetime->integer helpers must return NANOSECONDS no matter
+    what resolution the datetime dtype carries.
+
+    This is the version-independent form of the pandas-3 cold-runner red (SC ci run
+    30331205481 on tip 8ec6906): pandas 3 preserves a source datetime unit through
+    DataFrame construction, and ``.asi8`` / ``.value`` return integers in the
+    dtype's OWN unit — so a nanosecond assumption collapses every bucket index. A
+    prior reproduction through the PUBLIC input passed on pandas 2 because the
+    module's internal ``to_numpy()`` -> DataFrame round-trip renormalizes to ns
+    there; this guard therefore targets the extraction helpers DIRECTLY with a
+    ``DatetimeIndex.as_unit(...)``-forced non-ns index, which survives to the
+    helper on either pandas major.
+
+    Whole-second timestamps so every parameterized unit represents them exactly;
+    a 60-second separation must yield exactly 60_000_000_000.
+    """
+    from strategy_core.candles.time_batch import _index_to_ns, _timestamp_to_ns
+
+    base = datetime(2025, 6, 2, 22, 0, 0, tzinfo=UTC)
+    later = base + timedelta(seconds=60)
+
+    idx = pd.DatetimeIndex([base, later]).as_unit(unit)
+    assert str(idx.dtype) == f"datetime64[{unit}, UTC]"  # the forced non-ns dtype
+    out = _index_to_ns(idx)
+    assert str(out.dtype) == "int64"
+    assert int(out[1]) - int(out[0]) == 60_000_000_000, (
+        f"_index_to_ns returned unit-{unit} integers, not nanoseconds: "
+        f"delta={int(out[1]) - int(out[0])}"
+    )
+
+    t0 = pd.Timestamp(base).as_unit(unit)
+    t1 = pd.Timestamp(later).as_unit(unit)
+    assert t0.unit == unit
+    delta = _timestamp_to_ns(t1) - _timestamp_to_ns(t0)
+    assert delta == 60_000_000_000, (
+        f"_timestamp_to_ns returned unit-{unit} integers, not nanoseconds: delta={delta}"
+    )
+
+
 # ── construction guards ───────────────────────────────────────────────────────
 def test_non_multiple_of_60_rejected() -> None:
     with pytest.raises(ValueError):
