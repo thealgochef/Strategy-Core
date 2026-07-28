@@ -197,3 +197,26 @@ def test_parity_dst_fall_back_25h_day() -> None:
 def test_empty_frame_returns_no_bars() -> None:
     empty = pd.DataFrame({"ts_event": [], "price": [], "size": []})
     assert build_time_bars_from_frame(empty, TIMEFRAMES) == []
+
+
+def test_build_wall_clock_within_ceiling() -> None:
+    """Regression guard on build cost: streaming + batch across all eight timeframes
+    over the 550-trade main stream must finish inside 1.0s wall-clock.
+
+    Observed on the development machine (Windows, Python 3.13): ~0.014s streaming +
+    ~0.04-0.07s batch, ~0.055-0.085s total across warm runs. The 1.0s ceiling is
+    ~12x the worst observed figure — chosen to catch an algorithmic regression (an
+    accidental per-timeframe pass over the trade stream, a quadratic emit), not to
+    flap on machine noise.
+    """
+    import time
+
+    trades = _main_stream()
+    frame = _trades_to_frame(trades, tick_size=DEFAULT_TICK_SIZE)
+    start = time.perf_counter()
+    _streaming_bars(trades, TIMEFRAMES, RESEARCH_SESSION_SCHEME)
+    build_time_bars_from_frame(
+        frame, TIMEFRAMES, scheme=RESEARCH_SESSION_SCHEME, tick_size=DEFAULT_TICK_SIZE
+    )
+    elapsed = time.perf_counter() - start
+    assert elapsed < 1.0, f"time-bar build took {elapsed:.3f}s (ceiling 1.0s)"
