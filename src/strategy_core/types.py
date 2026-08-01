@@ -130,6 +130,17 @@ class Bar:
     #: convention) — 0 is unavailable as a marker because it is an existing
     #: "unspecified" sentinel in the decision layer.
     kind: BarKind = BarKind.TICK
+    #: Scheduled TIME-bucket boundaries. These are distinct from
+    #: ``open_ts_utc``/``close_ts_utc``, which remain the first/last print
+    #: timestamps for compatibility. Tick bars and legacy producers may leave
+    #: them ``None``.
+    logical_open_ts_utc: datetime | None = None
+    logical_close_ts_utc: datetime | None = None
+
+    @property
+    def availability_ts_utc(self) -> datetime:
+        """Instant at which the closed bar may become strategy evidence."""
+        return self.logical_close_ts_utc or self.close_ts_utc
 
     def high_points(self, tick_size: float) -> float:
         return self.high_ticks * tick_size

@@ -48,6 +48,7 @@ __all__ = [
     "SetupState",
     "Barrier",
     "DecisionEvent",
+    "ContextEvent",
     "StrategyStep",
     "FeatureSpec",
     "LabelPolicySpec",
@@ -165,6 +166,15 @@ class DecisionEvent(Protocol):
     barrier: Barrier
 
 
+class ContextEvent(Protocol):
+    """Typed deterministic evidence channel, isolated from flat model features."""
+
+    context_capture_id: object
+
+    def to_dict(self) -> Mapping[str, Any]:
+        ...
+
+
 @dataclass(frozen=True, slots=True)
 class StrategyStep:
     """What one bar-close step returns — sparse, modelled on ``RuntimeUpdate`` (PLAN §2.2).
@@ -185,6 +195,9 @@ class StrategyStep:
     #: empty so the step stays default-constructible.
     touches: tuple[Touch, ...] = ()
     zones: tuple[Zone, ...] = ()
+    #: Additive deterministic evidence.  It is deliberately distinct from ``features``
+    #: so no context value can enter an inference vector by accidental flattening.
+    context_events: tuple[ContextEvent, ...] = ()
 
 
 # ── Declarations consumed by the platform + consumers ─────────────────────────

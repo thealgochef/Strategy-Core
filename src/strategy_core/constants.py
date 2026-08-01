@@ -337,6 +337,22 @@ IFVG_DOC_SESSIONS = {
     "london": ("02:00", "07:00"),
     "ny": ("08:00", "14:00"),
 }
+IFVG_DOC_SESSION_SCHEME = SessionScheme(
+    timezone="America/New_York",
+    trading_day_boundary=time(18, 0),
+    sessions={
+        "asia": SessionWindow(time(16, 0), time(1, 45), crosses_midnight=True),
+        "london": SessionWindow(time(2, 0), time(7, 0)),
+        "ny": SessionWindow(time(8, 0), time(14, 0)),
+    },
+    closed_window=(time(17, 0), time(18, 0)),
+)
+IFVG_DOC_MIN_GAP_TICKS = 4
+IFVG_DOC_PARENT_REACTION_BARS = 40
+IFVG_DOC_PARENT_HTF_DISTANCE_TICKS_MAX = 80
+IFVG_DOC_OPPOSING_PARENT_DISTANCE_TICKS_MAX = 80
+IFVG_DOC_POST_INVERSION_EXPIRY_1M_BARS_MAX = 80
+IFVG_DOC_HTF_SELECTION_MAX_PER_TIMEFRAME = 1
 
 __all__ = [
     "DEFAULT_TICK_SIZE",
@@ -411,4 +427,11 @@ __all__ = [
     "IFVG_SELECTED_ENTRY_FAMILY",
     "IFVG_LABEL_FAMILY",
     "IFVG_DOC_SESSIONS",
+    "IFVG_DOC_SESSION_SCHEME",
+    "IFVG_DOC_MIN_GAP_TICKS",
+    "IFVG_DOC_PARENT_REACTION_BARS",
+    "IFVG_DOC_PARENT_HTF_DISTANCE_TICKS_MAX",
+    "IFVG_DOC_OPPOSING_PARENT_DISTANCE_TICKS_MAX",
+    "IFVG_DOC_POST_INVERSION_EXPIRY_1M_BARS_MAX",
+    "IFVG_DOC_HTF_SELECTION_MAX_PER_TIMEFRAME",
 ]

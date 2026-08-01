@@ -21,15 +21,27 @@ import json
 from dataclasses import dataclass, fields, is_dataclass
 from datetime import date, datetime
 from enum import Enum
+from typing import TYPE_CHECKING
 
 from strategy_core.structures.fvg import FvgRegistrySnapshot
 from strategy_core.structures.swings import SwingSnapshot
 
 from .reducer import IfvgReducerSnapshot
 
-__all__ = ["IFVG_SEED_SCHEMA_VERSION", "IfvgDaySeed", "seed_hash"]
+if TYPE_CHECKING:
+    from .context_features import IfvgContextObserverSeed
 
-IFVG_SEED_SCHEMA_VERSION = 1
+__all__ = [
+    "IFVG_CONTEXT_SEED_CONTAINER_VERSION",
+    "IFVG_SEED_SCHEMA_VERSION",
+    "IfvgDaySeed",
+    "IfvgDaySeedV3",
+    "context_seed_hash",
+    "seed_hash",
+]
+
+IFVG_SEED_SCHEMA_VERSION = 2
+IFVG_CONTEXT_SEED_CONTAINER_VERSION = 3
 
 
 @dataclass(frozen=True, slots=True)
@@ -42,6 +54,15 @@ class IfvgDaySeed:
     registries: tuple[FvgRegistrySnapshot, ...]  # one per configured timeframe
     swings: SwingSnapshot
     reducer: IfvgReducerSnapshot | None
+
+
+@dataclass(frozen=True, slots=True)
+class IfvgDaySeedV3:
+    """Additive generation-3 wrapper; ``core`` remains the byte-stable v2 seed."""
+
+    container_version: int
+    core: IfvgDaySeed
+    context: IfvgContextObserverSeed
 
 
 def _canon(obj: object) -> object:
@@ -64,3 +85,11 @@ def _canon(obj: object) -> object:
 def seed_hash(seed: IfvgDaySeed) -> str:
     payload = json.dumps(_canon(seed), sort_keys=True, separators=(",", ":"))
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+
+def context_seed_hash(seed: IfvgDaySeedV3) -> str:
+    if seed.container_version != IFVG_CONTEXT_SEED_CONTAINER_VERSION:
+        raise ValueError("unsupported IFVG context seed container version")
+    from strategy_core.structures.context import canonical_sha256
+
+    return canonical_sha256(seed)

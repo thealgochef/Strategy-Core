@@ -56,7 +56,8 @@ from __future__ import annotations
 from datetime import time
 from typing import TYPE_CHECKING
 
-from strategy_core.candles._buckets import trading_day_start_utc
+from strategy_core.candles._buckets import logical_bucket_bounds, trading_day_start_utc
+from strategy_core.candles.exchange_calendar import ExchangeMinuteSchedule, MinuteSlotStatus
 from strategy_core.candles._ids import make_bar_id
 from strategy_core.candles.time_streaming import BASE_INTERVAL_SECONDS
 from strategy_core.constants import DEFAULT_TICK_SIZE, RESEARCH_SESSION_SCHEME
@@ -116,6 +117,7 @@ def build_time_bars_from_frame(
     timeframes_seconds: tuple[int, ...],
     *,
     scheme: SessionScheme = RESEARCH_SESSION_SCHEME,
+    schedule: ExchangeMinuteSchedule | None = None,
     tick_size: float = DEFAULT_TICK_SIZE,
 ) -> list[Bar]:
     """Vectorized equivalent of feeding ``frame``'s trades through ``TimeBarEngine``.
@@ -162,6 +164,17 @@ def build_time_bars_from_frame(
         }
     )
     work["ts_event"] = pd.to_datetime(work["ts_event"], utc=True)
+
+    if schedule is not None:
+        minute_closes = work["ts_event"].dt.floor("min") + pd.Timedelta(minutes=1)
+        unique_closes = minute_closes.drop_duplicates().tolist()
+        eligibility = {
+            close: schedule.slot(close.to_pydatetime()).status is MinuteSlotStatus.ELIGIBLE
+            for close in unique_closes
+        }
+        work = work[minute_closes.map(eligibility)].copy()
+        if work.empty:
+            return []
 
     local = work["ts_event"].dt.tz_convert(scheme.timezone)
     sod = local.dt.hour * 3600 + local.dt.minute * 60 + local.dt.second
@@ -231,6 +244,7 @@ def build_time_bars_from_frame(
         is_last = day_group.cumcount(ascending=False).to_numpy() == 0
 
         td_dates = agg["trading_day"].dt.date.to_numpy()
+        hbucket_arr = agg["hbucket"].to_numpy().tolist()
         bar_index_arr = agg["bar_index"].to_numpy().tolist()
         open_ticks_arr = agg["open_ticks"].to_numpy().tolist()
         high_ticks_arr = agg["high_ticks"].to_numpy().tolist()
@@ -260,9 +274,12 @@ def build_time_bars_from_frame(
                 is_partial=bool(last),
                 close_reason=CloseReason.END_OF_DAY if last else CloseReason.COMPLETE,
                 kind=BarKind.TIME,
+                logical_open_ts_utc=logical_bucket_bounds(td, hb, interval, scheme)[0],
+                logical_close_ts_utc=logical_bucket_bounds(td, hb, interval, scheme)[1],
             )
-            for td, bi, ots, cts, ot, ht, lt, ct, vol, tc, last in zip(
+            for td, hb, bi, ots, cts, ot, ht, lt, ct, vol, tc, last in zip(
                 td_dates,
+                hbucket_arr,
                 bar_index_arr,
                 open_dt,
                 close_dt,

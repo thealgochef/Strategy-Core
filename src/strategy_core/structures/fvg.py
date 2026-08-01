@@ -62,7 +62,7 @@ __all__ = [
 
 #: Bumped whenever :class:`FvgStateSnapshot` / :class:`FvgRegistrySnapshot`
 #: change shape; consumers fail closed on mismatch (seed-trust discipline).
-FVG_SNAPSHOT_SCHEMA_VERSION = 1
+FVG_SNAPSHOT_SCHEMA_VERSION = 2
 
 
 class GapDirection(StrEnum):
@@ -146,8 +146,8 @@ def _gap_from_triplet(
         size_ticks=size,
         a_bar_id=a.bar_id,
         c_bar_id=c.bar_id,
-        a_open_ts_utc=a.open_ts_utc,
-        confirmed_ts_utc=c.close_ts_utc,
+        a_open_ts_utc=a.logical_open_ts_utc or a.open_ts_utc,
+        confirmed_ts_utc=c.availability_ts_utc,
         trading_day=c.trading_day,
     )
 
@@ -397,7 +397,8 @@ class FvgRegistry:
         survivors: list[FvgState] = []
         for state in self._live:
             gap = state.fvg
-            if bar.close_ts_utc <= gap.confirmed_ts_utc:
+            availability = bar.availability_ts_utc
+            if availability <= gap.confirmed_ts_utc:
                 survivors.append(state)
                 continue
             if (
@@ -405,14 +406,14 @@ class FvgRegistry:
                 and (bar.trading_day - gap.trading_day).days > self.max_age_days
             ):
                 events.append(
-                    FvgFillEvent(fvg_id=gap.fvg_id, kind="evicted_age", ts_utc=bar.close_ts_utc)
+                    FvgFillEvent(fvg_id=gap.fvg_id, kind="evicted_age", ts_utc=availability)
                 )
                 continue
             if wick_overlaps(bar, gap.gap_low_ticks, gap.gap_high_ticks):
                 if state.first_touch_ts_utc is None:
-                    state.first_touch_ts_utc = bar.close_ts_utc
+                    state.first_touch_ts_utc = availability
                     events.append(
-                        FvgFillEvent(fvg_id=gap.fvg_id, kind="first_touch", ts_utc=bar.close_ts_utc)
+                        FvgFillEvent(fvg_id=gap.fvg_id, kind="first_touch", ts_utc=availability)
                     )
                 extreme = bar.low_ticks if gap.direction is GapDirection.BULLISH else bar.high_ticks
                 if state.reached_ticks is None:
@@ -427,9 +428,9 @@ class FvgRegistry:
                     else state.reached_ticks >= gap.gap_high_ticks
                 )
                 if traversed:
-                    state.filled_ts_utc = bar.close_ts_utc
+                    state.filled_ts_utc = availability
                     events.append(
-                        FvgFillEvent(fvg_id=gap.fvg_id, kind="filled", ts_utc=bar.close_ts_utc)
+                        FvgFillEvent(fvg_id=gap.fvg_id, kind="filled", ts_utc=availability)
                     )
                     continue  # dead context — leaves the live set
             survivors.append(state)

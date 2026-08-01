@@ -229,3 +229,51 @@ def test_era_boundary_without_matching_prior_file_still_degrades(tmp_path: Path)
     codes = [w.code for w in source.pending_warnings]
     assert DataQualityCode.MISSING_PRIOR_DAY_FILE in codes
     assert [t.price_ticks / 4 for t in _trades(list(source.events()))] == [17010.0]
+# The IFVG repair allowlist must be checked before even constructing a prior
+# physical-date path.
+def test_day_mode_allowlist_skips_disallowed_prior_path(monkeypatch, tmp_path) -> None:
+    trading_day = date(2026, 1, 13)
+    calls: list[date] = []
+
+    def resolve(_root, source_day):
+        calls.append(source_day)
+        return tmp_path / source_day.isoformat() / "trades.parquet", "trades"
+
+    monkeypatch.setattr(
+        DatabentoParquetSource,
+        "_resolve_day_file",
+        staticmethod(resolve),
+    )
+    source = DatabentoParquetSource.for_trading_day(
+        tmp_path,
+        trading_day,
+        requested_symbol="NQ",
+        allowed_source_dates=frozenset({trading_day}),
+    )
+    assert calls == [trading_day]
+    assert len(source.paths) == 1
+    assert source.pending_warnings[0].metadata["prior_day_allowed"] is False
+
+
+def test_day_mode_rejects_requested_date_before_path_resolution(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    calls: list[date] = []
+
+    def resolve(_root, source_day):
+        calls.append(source_day)
+        return None
+
+    monkeypatch.setattr(
+        DatabentoParquetSource,
+        "_resolve_day_file",
+        staticmethod(resolve),
+    )
+    with pytest.raises(PermissionError, match="not allowlisted"):
+        DatabentoParquetSource.for_trading_day(
+            tmp_path,
+            date(2026, 6, 12),
+            allowed_source_dates=frozenset({date(2026, 1, 13)}),
+        )
+    assert calls == []

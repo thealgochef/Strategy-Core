@@ -28,6 +28,7 @@ from datetime import datetime
 
 from strategy_core.constants import POINT_VALUE
 from strategy_core.decisions.sessions import classify_session
+from strategy_core.strategies.protocols import BarSpec
 from strategy_core.types import Bar, Quote, SessionScheme
 
 __all__ = ["RuntimePlatformContext", "point_value_for_symbol"]
@@ -46,12 +47,6 @@ def point_value_for_symbol(symbol: str | None) -> float:
     return POINT_VALUE.get(match.group(0), 0.0) if match else 0.0
 
 
-def _label_to_timeframe(label: str) -> int | None:
-    """Parse the leading integer from a BarSpec label (e.g. ``"147t"`` -> 147)."""
-    match = re.match(r"\d+", label)
-    return int(match.group(0)) if match else None
-
-
 class RuntimePlatformContext:
     """Live PlatformContext backed by the runtime's candles / closed-bar ring / scheme."""
 
@@ -60,33 +55,48 @@ class RuntimePlatformContext:
         *,
         tick_size: float,
         point_value: float,
-        get_candles: Callable[[], object],
+        bar_specs: Sequence[BarSpec],
+        get_current_bars: Callable[[], Sequence[Bar]],
         get_closed_bars: Callable[[], Sequence[Bar]],
         get_scheme: Callable[[], SessionScheme],
         get_trade_price: Callable[[datetime], float | None] | None = None,
     ) -> None:
         self.tick_size = tick_size
         self.point_value = point_value
-        self._get_candles = get_candles
+        by_label: dict[str, BarSpec] = {}
+        for spec in bar_specs:
+            if not spec.label:
+                raise ValueError("BarSpec label must be non-empty")
+            if spec.label in by_label:
+                raise ValueError(f"duplicate BarSpec label: {spec.label!r}")
+            by_label[spec.label] = spec
+        self._bar_specs = by_label
+        self._get_current_bars = get_current_bars
         self._get_closed_bars = get_closed_bars
         self._get_scheme = get_scheme
         self._get_trade_price = get_trade_price
 
     def closed_bars(self, label: str) -> Sequence[Bar]:
-        tf = _label_to_timeframe(label)
+        spec = self._spec(label)
         bars = self._get_closed_bars()
-        if tf is None:
-            return tuple(bars)
-        return tuple(bar for bar in bars if bar.timeframe_ticks == tf)
+        return tuple(
+            bar
+            for bar in bars
+            if bar.kind is spec.kind and bar.timeframe_ticks == spec.size
+        )
 
     def current_bar(self, label: str) -> Bar | None:
-        tf = _label_to_timeframe(label)
-        # snapshot_update(()) is a pure read of the in-progress bars (one per timeframe).
-        current = self._get_candles().snapshot_update(()).current
-        for bar in current:
-            if tf is None or bar.timeframe_ticks == tf:
+        spec = self._spec(label)
+        for bar in self._get_current_bars():
+            if bar.kind is spec.kind and bar.timeframe_ticks == spec.size:
                 return bar
         return None
+
+    def _spec(self, label: str) -> BarSpec:
+        try:
+            return self._bar_specs[label]
+        except KeyError as exc:
+            raise KeyError(f"unknown BarSpec label: {label!r}") from exc
 
     def trade_price_at(self, ts_utc: datetime) -> float | None:
         # D1a: backed by the runtime's trade ring (StrategyRuntime.trade_price_at — the

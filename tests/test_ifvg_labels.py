@@ -13,16 +13,6 @@ import pytest
 
 from strategy_core.candles._ids import make_bar_id
 from strategy_core.strategies.ifvg_smc.labels import resolve_ifvg_outcome
-from strategy_core.strategies.ifvg_smc.reducer import (
-    IfvgReducer,
-    IfvgReducerConfig,
-    IfvgReducerSnapshot,
-    IfvgSetupSnapshot,
-    IfvgStepInput,
-    REDUCER_SNAPSHOT_SCHEMA_VERSION,
-)
-from strategy_core.strategies.ifvg_smc.section import default_ifvg_smc_section, ifvg_profile_hash
-from strategy_core.structures.fvg import Fvg, GapDirection
 from strategy_core.types import Bar, BarKind, CloseReason, Direction
 
 _DAY = date(2026, 1, 6)
@@ -80,7 +70,8 @@ def test_win_loss_timeout_and_r_multiples() -> None:
         forward_bars_1m=[_bar(1, 10001, 10010, 9991, 10005)],
         tick_size=_TICK,
     )
-    assert timeout.label == "eod_timeout" and timeout.bars_to_resolution == -1
+    assert timeout.label == "censored" and timeout.bars_to_resolution == -1
+    assert timeout.bars_after_entry_to_resolution is None
 
     # r=2: +21 ticks is short of the +40 target but the stop never hits.
     r2 = resolve_ifvg_outcome(
@@ -91,12 +82,11 @@ def test_win_loss_timeout_and_r_multiples() -> None:
         tick_size=_TICK,
         r_multiple=2.0,
     )
-    assert r2.label == "eod_timeout"
+    assert r2.label == "censored"
 
 
-def test_both_breach_bar_is_the_loss_on_both_paths() -> None:
-    """One bar spans stop AND target: the kernel resolves it as the loss
-    (MAE-first) and the reducer's in-trade walk must agree."""
+def test_both_breach_bar_is_the_loss_in_shared_kernel() -> None:
+    """One bar spans stop AND target: the shared kernel resolves it as a loss."""
     both = _bar(1, 10000, 10025, 9979, 10010)  # entry 10000, stop 9980, tp 10020
 
     kernel = resolve_ifvg_outcome(
@@ -108,76 +98,6 @@ def test_both_breach_bar_is_the_loss_on_both_paths() -> None:
     )
     assert kernel.label == "loss"
 
-    section = default_ifvg_smc_section()
-    cfg = IfvgReducerConfig.from_section(
-        section, tick_size=_TICK, strategy_id="ifvg_smc", strategy_version="1"
-    )
-    dummy_gap = Fvg(
-        fvg_id="3600s:bullish:x",
-        timeframe_seconds=3600,
-        direction=GapDirection.BULLISH,
-        gap_low_ticks=9990,
-        gap_high_ticks=10005,
-        size_ticks=15,
-        a_bar_id="a",
-        c_bar_id="c",
-        a_open_ts_utc=_T0 - timedelta(hours=3),
-        confirmed_ts_utc=_T0 - timedelta(hours=2),
-        trading_day=_DAY,
-    )
-    in_trade = IfvgReducerSnapshot(
-        schema_version=REDUCER_SNAPSHOT_SCHEMA_VERSION,
-        profile_hash=ifvg_profile_hash(section),
-        ordinal=10,
-        seq_day=_DAY,
-        seq=1,
-        setup=IfvgSetupSnapshot(
-            setup_id="ifvg:2026-01-06:0001",
-            phase="S5",
-            direction=Direction.LONG,
-            htf=dummy_gap,
-            tap_ts_utc=_T0,
-            tap_ordinal=1,
-            parent=None,
-            parent_selected_ordinal=None,
-            lock_ts_utc=None,
-            lock_ordinal=None,
-            swing_min_low=9981,
-            swing_max_high=10010,
-            sweep=None,
-            opposing=None,
-            armed_ts_utc=None,
-            armed_ordinal=None,
-            inversion_ts_utc=_T0 + timedelta(minutes=5),
-            inversion_ordinal=6,
-            sweep_result=None,
-            entry_family="fresh_fvg_continuation",
-            entry_ticks=10000,
-            stop_ticks=9980,
-            tp_ticks=10020,
-            entry_ts_utc=_T0 + timedelta(minutes=9),
-            entry_ordinal=10,
-            mfe_ticks=0,
-            mae_ticks=0,
-        ),
-    )
-    reducer = IfvgReducer.from_snapshot(in_trade, cfg)
-    emissions = reducer.step(
-        IfvgStepInput(
-            bar_1m=both,
-            tf_bars_closed={},
-            new_fvgs={},
-            fill_events=(),
-            htf_live=(),
-            levels=(),
-            recent_swing_highs=(),
-            recent_swing_lows=(),
-            session_engine="ny",
-            session_doc="ny",
-        )
-    )
-    res = [e.record for e in emissions if e.kind == "resolution"]
-    assert len(res) == 1 and res[0].resolution == "resolved_sl"
 
 
 def test_risk_floor_fails_loud() -> None:

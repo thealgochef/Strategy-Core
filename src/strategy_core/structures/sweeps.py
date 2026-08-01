@@ -19,7 +19,56 @@ from datetime import datetime
 
 from strategy_core.types import Bar, Direction, Side
 
-__all__ = ["LevelPool", "SweepResult", "SweepTracker", "SweepTrackerSnapshot"]
+__all__ = [
+    "LevelPool",
+    "SweepResult",
+    "SweepTracker",
+    "SweepTrackerSnapshot",
+    "strict_pool_reclaim_distance",
+    "strict_pool_sweep_depth",
+]
+
+
+def strict_pool_sweep_depth(
+    pool_type: str,
+    *,
+    lower_bound_ticks: int,
+    upper_bound_ticks: int,
+    bar: Bar,
+) -> int | None:
+    """Canonical strict bound penetration for EQH/EQL and legacy-compatible raids."""
+
+    normalized = pool_type.lower()
+    if normalized == "eqh":
+        return (
+            bar.high_ticks - upper_bound_ticks
+            if bar.high_ticks > upper_bound_ticks
+            else None
+        )
+    if normalized == "eql":
+        return (
+            lower_bound_ticks - bar.low_ticks
+            if bar.low_ticks < lower_bound_ticks
+            else None
+        )
+    raise ValueError(f"unknown equal-level pool type: {pool_type!r}")
+
+
+def strict_pool_reclaim_distance(
+    pool_type: str,
+    *,
+    lower_bound_ticks: int,
+    upper_bound_ticks: int,
+    close_ticks: int,
+) -> int | None:
+    """Strict completed-close reclaim; ``None`` means reclaim has not occurred."""
+
+    normalized = pool_type.lower()
+    if normalized == "eqh":
+        return upper_bound_ticks - close_ticks if close_ticks < upper_bound_ticks else None
+    if normalized == "eql":
+        return close_ticks - lower_bound_ticks if close_ticks > lower_bound_ticks else None
+    raise ValueError(f"unknown equal-level pool type: {pool_type!r}")
 
 
 @dataclass(frozen=True, slots=True)

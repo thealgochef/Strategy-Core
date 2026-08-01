@@ -97,6 +97,8 @@ validation/          retained validation notes and legacy real-data harnesses
 
 ## Key docs
 
+- [`docs/IFVG_CONTEXT_FEATURES.md`](docs/IFVG_CONTEXT_FEATURES.md) — deterministic,
+  measurement-only IFVG context ownership, routing, identity, and release boundary.
 - [`docs/PLATFORM_REFACTOR_PROGRESS.md`](docs/PLATFORM_REFACTOR_PROGRESS.md) — the **living execution ledger** for the platform refactor; highest-traffic doc in the repo.
 - [`docs/PLATFORM_REFACTOR_PLAN.md`](docs/PLATFORM_REFACTOR_PLAN.md) — the authoritative refactor spec (edit-frozen by policy).
 - [`docs/DECISIONS.md`](docs/DECISIONS.md) — append-only ruling registry (D-P-xx / 9.x).

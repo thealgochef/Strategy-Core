@@ -253,6 +253,7 @@ class DatabentoParquetSource:
         requested_symbol: str | None = None,
         front_month_only: bool = True,
         batch_size: int = 65_536,
+        allowed_source_dates: frozenset[date] | None = None,
     ) -> DatabentoParquetSource:
         """Canonical trading-day stream: [prev-day 18:00 ET, trading-day 18:00 ET).
 
@@ -268,6 +269,14 @@ class DatabentoParquetSource:
         event stream.
         """
 
+        if (
+            allowed_source_dates is not None
+            and trading_day not in allowed_source_dates
+        ):
+            raise PermissionError(
+                "trading-day source date is not allowlisted: "
+                f"{trading_day.isoformat()}"
+            )
         root = Path(symbol_dir)
         symbol = requested_symbol or root.name
         day_resolved = cls._resolve_day_file(root, trading_day)
@@ -281,7 +290,12 @@ class DatabentoParquetSource:
         start = datetime.combine(prev_day, TRADING_DAY_BOUNDARY, tzinfo=tz).astimezone(UTC)
         end = datetime.combine(trading_day, TRADING_DAY_BOUNDARY, tzinfo=tz).astimezone(UTC)
         split = datetime(trading_day.year, trading_day.month, trading_day.day, tzinfo=UTC)
-        prev_resolved = cls._resolve_day_file(root, prev_day)
+        prev_allowed = (
+            allowed_source_dates is None or prev_day in allowed_source_dates
+        )
+        prev_resolved = (
+            cls._resolve_day_file(root, prev_day) if prev_allowed else None
+        )
         warnings: list[DataQualityWarning] = []
         if prev_resolved is not None and prev_resolved[1] != day_schema:
             # INGEST close-verify fix: at a schema-era boundary (e.g. the prior
@@ -322,6 +336,7 @@ class DatabentoParquetSource:
                         str(day_path),
                         trading_day=trading_day.isoformat(),
                         prior_day=prev_day.isoformat(),
+                        prior_day_allowed=prev_allowed,
                     )
                 )
             return cls(

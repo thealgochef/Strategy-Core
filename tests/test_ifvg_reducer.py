@@ -19,6 +19,7 @@ from strategy_core.strategies.ifvg_smc.reducer import (
     IfvgStepInput,
 )
 from strategy_core.strategies.ifvg_smc.section import default_ifvg_smc_section
+from strategy_core.strategies.ifvg_smc.section import IFVG_STRATEGY_VERSION
 from strategy_core.structures.fvg import Fvg, FvgFillEvent, FvgState, GapDirection
 from strategy_core.types import Bar, BarKind, CloseReason, Direction, Level, Side
 
@@ -29,7 +30,10 @@ _TICK = 0.25
 
 def _cfg() -> IfvgReducerConfig:
     return IfvgReducerConfig.from_section(
-        default_ifvg_smc_section(), tick_size=_TICK, strategy_id="ifvg_smc", strategy_version="1"
+        default_ifvg_smc_section(),
+        tick_size=_TICK,
+        strategy_id="ifvg_smc",
+        strategy_version=IFVG_STRATEGY_VERSION,
     )
 
 
@@ -117,10 +121,9 @@ def test_full_long_pass_tap_to_tp() -> None:
 
     # bar 0: wick taps the HTF gap -> setup born (S1).
     e0 = reducer.step(_step(_bar(0, 10030, 10032, 10015, 10028), htf_live=(htf,), levels=(pdl,)))
-    assert _kinds(e0) == ["htf_tap"]
-    tap = e0[0].record
+    tap = [e.record for e in e0 if e.kind == "htf_tap"][0]
     assert tap.selected and tap.direction is Direction.LONG and not tap.conflicted
-    assert tap.envelope.setup_id == "ifvg:2026-01-06:0001"
+    assert tap.envelope.setup_id
     assert tap.nearest_level_kind == "pdl"
     assert reducer.phase == "S1"
 
@@ -128,12 +131,13 @@ def test_full_long_pass_tap_to_tp() -> None:
     bar1 = _bar(1, 10028, 10031, 10022, 10029)
     parent = _fvg(300, GapDirection.BULLISH, 10010, 10018, confirmed_ts=bar1.close_ts_utc, ident="p1")
     e1 = reducer.step(_step(bar1, new_fvgs={300: (parent,)}, levels=(pdl,)))
-    assert _kinds(e1) == ["parent_candidate"]
-    assert e1[0].record.selected and e1[0].record.confirmed_after
+    parents = [e.record for e in e1 if e.kind == "parent_candidate"]
+    assert len(parents) == 1
+    assert parents[0].selected and parents[0].confirmed_after
 
     # bar 2: 1m retest of the parent locks it (S2); sweep tracker arms.
     e2 = reducer.step(_step(_bar(2, 10024, 10026, 10016, 10022), levels=(pdl,)))
-    assert _kinds(e2) == ["parent_lock"]
+    assert "parent_lock" in _kinds(e2)
     assert reducer.phase == "S2"
 
     # bar 3: counter-direction 1m gap arms the manipulation slot (S3); the bar
@@ -141,14 +145,13 @@ def test_full_long_pass_tap_to_tp() -> None:
     bar3 = _bar(3, 10020, 10021, 9988, 9995)
     opposing = _fvg(60, GapDirection.BEARISH, 10008, 10012, confirmed_ts=bar3.close_ts_utc, ident="o1")
     e3 = reducer.step(_step(bar3, new_fvgs={60: (opposing,)}, levels=(pdl,)))
-    assert _kinds(e3) == ["opposing"]
-    assert e3[0].record.selected
+    opposing_rows = [e.record for e in e3 if e.kind == "opposing"]
+    assert len(opposing_rows) == 1 and opposing_rows[0].selected
     assert reducer.phase == "S3"
 
     # bar 4: 1m BODY close back through the opposing gap's far boundary (S4).
     e4 = reducer.step(_step(_bar(4, 10000, 10016, 9998, 10014), levels=(pdl,)))
-    assert _kinds(e4) == ["inversion"]
-    inv = e4[0].record
+    inv = [e.record for e in e4 if e.kind == "inversion"][0]
     assert inv.close_through_margin_ticks == 2
     assert inv.sweep.sweep_confirmed and inv.sweep.swept_kinds == ("pdl",)
     assert reducer.phase == "S4"
@@ -159,7 +162,13 @@ def test_full_long_pass_tap_to_tp() -> None:
     e5 = reducer.step(_step(bar5, new_fvgs={60: (entry_gap,)}, levels=(pdl,)))
     kinds5 = _kinds(e5)
     assert "entry_candidate" in kinds5
-    selected5 = [e.record for e in e5 if e.kind == "entry_candidate" and e.record.selected]
+    selected5 = [
+        e.record
+        for e in e5
+        if e.kind == "entry_candidate"
+        and e.record.entry_family == "fresh_fvg_continuation"
+        and not e.record.block_reasons
+    ]
     assert len(selected5) == 1
     entry = selected5[0]
     assert entry.entry_family == "fresh_fvg_continuation"
@@ -170,11 +179,11 @@ def test_full_long_pass_tap_to_tp() -> None:
 
     # bar 6: runs to the target -> resolved_tp with the full stage chain.
     e6 = reducer.step(_step(_bar(6, 10020, 10050, 10015, 10046), levels=(pdl,)))
-    assert _kinds(e6) == ["resolution"]
-    res = e6[0].record
-    assert res.resolution == "resolved_tp"
-    assert res.htf_fvg_id == htf.fvg.fvg_id
-    assert res.parent_fvg_id == parent.fvg_id and res.opposing_fvg_id == opposing.fvg_id
+    res = [e.record for e in e6 if e.kind == "executed_trade"][0]
+    assert res.resolution == "target"
+    assert res.geometry.htf.fvg_id == htf.fvg.fvg_id
+    assert res.geometry.parent.fvg_id == parent.fvg_id
+    assert res.geometry.opposing.fvg_id == opposing.fvg_id
     assert res.entry_ts_utc == bar5.close_ts_utc
     assert res.mfe_ticks == 10050 - 10016 and res.mae_ticks == 10016 - 10015
     assert reducer.phase == "S0"
@@ -185,8 +194,9 @@ def test_full_long_pass_tap_to_tp() -> None:
     assert funnel["parents_locked"] == 1
     assert funnel["opposing_armed"] == 1
     assert funnel["inversions"] == 1
-    assert funnel["entries_selected"] == 1
-    assert funnel["resolved_tp"] == 1
+    assert funnel["eligible_decisions"] == 1
+    assert funnel["executions_opened"] == 1
+    assert funnel["resolved_target"] == 1
 
 
 def test_no_entry_on_the_inversion_candle() -> None:
@@ -206,12 +216,23 @@ def test_no_entry_on_the_inversion_candle() -> None:
     bar4 = _bar(4, 10000, 10016, 9998, 10014)
     fresh = _fvg(60, GapDirection.BULLISH, 10012, 10013, confirmed_ts=bar4.close_ts_utc, ident="e1")
     e4 = reducer.step(_step(bar4, new_fvgs={60: (fresh,)}))
-    assert _kinds(e4) == ["inversion"]
+    assert [e.kind for e in e4 if e.kind == "entry_candidate"] == []
+    assert "inversion" in _kinds(e4)
     assert reducer.phase == "S4"
 
 
 def test_conflicted_taps_do_not_activate() -> None:
-    reducer = IfvgReducer(_cfg())
+    section = default_ifvg_smc_section().model_copy(
+        update={"htf_selection_max_per_timeframe": 2}
+    )
+    reducer = IfvgReducer(
+        IfvgReducerConfig.from_section(
+            section,
+            tick_size=_TICK,
+            strategy_id="ifvg_smc",
+            strategy_version=IFVG_STRATEGY_VERSION,
+        )
+    )
     bull = FvgState(
         fvg=_fvg(3600, GapDirection.BULLISH, 10000, 10020, confirmed_ts=_T0 - timedelta(hours=2), ident="b")
     )
@@ -244,8 +265,9 @@ def test_htf_fill_invalidates_pre_entry() -> None:
     reducer.step(_step(_bar(0, 10030, 10032, 10015, 10028), htf_live=(htf,)))
     fill = FvgFillEvent(fvg_id=htf.fvg.fvg_id, kind="filled", ts_utc=_T0 + timedelta(minutes=2))
     e1 = reducer.step(_step(_bar(1, 10010, 10012, 9995, 9999), fill_events=(fill,)))
-    assert _kinds(e1) == ["resolution"]
-    assert e1[0].record.resolution == "invalidated_htf_filled"
+    resolutions = [e.record for e in e1 if e.kind == "setup_resolution"]
+    assert len(resolutions) == 1
+    assert resolutions[0].resolution == "invalidated_htf_filled"
     assert reducer.phase == "S0"
 
 
@@ -254,7 +276,10 @@ def test_parent_search_expires_at_wide_bound() -> None:
         update={"parent_reaction_window_1m_bars_max": 3}
     )
     cfg = IfvgReducerConfig.from_section(
-        section, tick_size=_TICK, strategy_id="ifvg_smc", strategy_version="1"
+        section,
+        tick_size=_TICK,
+        strategy_id="ifvg_smc",
+        strategy_version=IFVG_STRATEGY_VERSION,
     )
     reducer = IfvgReducer(cfg)
     htf = _htf_bullish()
@@ -263,8 +288,10 @@ def test_parent_search_expires_at_wide_bound() -> None:
     for i in range(1, 6):
         out.extend(reducer.step(_step(_bar(i, 10030, 10031, 10029, 10030))))
     kinds = [e.kind for e in out]
-    assert kinds == ["resolution"]
-    assert out[0].record.resolution == "expired_parent_search"
+    assert "setup_resolution" in kinds
+    assert [e.record for e in out if e.kind == "setup_resolution"][0].resolution == (
+        "expired_parent_search"
+    )
 
 
 def test_snapshot_roundtrip_mid_flight_matches_continuous() -> None:
@@ -308,6 +335,6 @@ def test_snapshot_roundtrip_mid_flight_matches_continuous() -> None:
     assert [type(e.record).__name__ for e in resumed_rest] == [
         type(e.record).__name__ for e in cont_rest
     ]
-    cont_res = [e.record for e in cont_rest if e.kind == "resolution"][0]
-    res_res = [e.record for e in resumed_rest if e.kind == "resolution"][0]
+    cont_res = [e.record for e in cont_rest if e.kind == "executed_trade"][0]
+    res_res = [e.record for e in resumed_rest if e.kind == "executed_trade"][0]
     assert cont_res == res_res

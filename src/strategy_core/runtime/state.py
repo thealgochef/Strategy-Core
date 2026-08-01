@@ -10,6 +10,7 @@ from types import MappingProxyType
 from typing import TYPE_CHECKING, Any
 
 from strategy_core.candles.streaming import CandleEngine
+from strategy_core.candles.time_streaming import TimeBarEngine
 from strategy_core.constants import DEFAULT_TICK_SIZE, RESEARCH_SESSION_SCHEME
 from strategy_core.data.events import DataQualityWarning, safe_text
 from strategy_core.decisions.sessions import classify_session
@@ -24,7 +25,7 @@ if TYPE_CHECKING:
     # runtime is constructed — at which point the touch_reversal plugin is auto-attached
     # (B3: the plugin is the sole path; the `plugin` param is optional only to allow a
     # caller to inject a specific plugin, else the default is attached).
-    from strategy_core.strategies.protocols import StrategyPlugin
+    from strategy_core.strategies.protocols import ContextEvent, StrategyPlugin
 
 __all__ = ["FeedStatus", "RuntimeSnapshot", "RuntimeUpdate", "StrategyRuntime"]
 
@@ -130,12 +131,13 @@ class RuntimeUpdate:
     zones: tuple[Zone, ...] = ()
     touches: tuple[Touch, ...] = ()
     last_quote: Quote | None = None
+    context_events: tuple[ContextEvent, ...] = ()
 
     def has_deltas(self) -> bool:
-        return any((self.feed_status is not None, self.warnings, self.current_bars, self.closed_bars, self.levels, self.zones, self.touches, self.last_quote is not None))
+        return any((self.feed_status is not None, self.warnings, self.current_bars, self.closed_bars, self.levels, self.zones, self.touches, self.last_quote is not None, self.context_events))
 
     def to_dict(self) -> dict[str, Any]:
-        return {
+        payload = {
             "feed_status": None if self.feed_status is None else self.feed_status.to_dict(),
             "warnings": [_warning(item) for item in self.warnings],
             "current_bars": [_bar(item) for item in self.current_bars],
@@ -145,6 +147,9 @@ class RuntimeUpdate:
             "touches": [_touch(item) for item in self.touches],
             "last_quote": _quote(self.last_quote),
         }
+        if self.context_events:
+            payload["context_events"] = [item.to_dict() for item in self.context_events]
+        return payload
 
 
 @dataclass(frozen=True, slots=True)
@@ -219,6 +224,28 @@ class StrategyRuntime:
                 strategy_section = _defaults["strategy_section"]
         self._plugin = plugin
         self.candles = CandleEngine(timeframes, scheme=scheme)
+        self._bar_specs = tuple(self._plugin.required_bars())
+        labels: set[str] = set()
+        for spec in self._bar_specs:
+            if not spec.label:
+                raise ValueError("BarSpec label must be non-empty")
+            if spec.label in labels:
+                raise ValueError(f"duplicate BarSpec label: {spec.label!r}")
+            labels.add(spec.label)
+        decision_label = self._plugin.decision_bar_label()
+        if decision_label not in labels:
+            raise ValueError(
+                f"decision bar label {decision_label!r} is not declared by required_bars()"
+            )
+        time_sizes = tuple(
+            sorted({spec.size for spec in self._bar_specs if spec.kind.value == "time"})
+        )
+        self.time_candles = (
+            TimeBarEngine(time_sizes, scheme=scheme) if time_sizes else None
+        )
+        self._required_time_keys = {
+            (spec.kind, spec.size) for spec in self._bar_specs if spec.kind.value == "time"
+        }
         self.decision_timeframe = decision_timeframe or min(timeframes)
         self._recent_closed_bar_limit = recent_closed_bar_limit
         self._warning_limit = warning_limit
@@ -240,7 +267,8 @@ class StrategyRuntime:
         self._ctx = RuntimePlatformContext(
             tick_size=tick_size,
             point_value=point_value_for_symbol(requested_symbol),
-            get_candles=lambda: self.candles,
+            bar_specs=self._bar_specs,
+            get_current_bars=self._current_bars,
             get_closed_bars=lambda: self._recent_closed_bars,
             get_scheme=lambda: self.scheme,
             get_trade_price=self.trade_price_at,
@@ -254,6 +282,11 @@ class StrategyRuntime:
         if requested_symbol is not None:
             self.requested_symbol = requested_symbol
         self.candles = CandleEngine(self.candles.timeframes, scheme=self.scheme)
+        if self.time_candles is not None:
+            self.time_candles = TimeBarEngine(
+                self.time_candles.timeframes,
+                scheme=self.scheme,
+            )
         # S-B3a: the plugin owns the level state AND the first-touch dedup; its reset
         # clears both (the runtime keeps no level/dedup state of its own).
         self._plugin.reset()
@@ -292,12 +325,11 @@ class StrategyRuntime:
         raise TypeError(f"unsupported runtime event type: {type(event).__name__}")
 
     def snapshot(self) -> RuntimeSnapshot:
-        candle_update = self.candles.snapshot_update(())
         session, trading_day = self._session_state()
         # S-B3a: levels and zones are read back from the plugin — the sole owner of the
         # level fold and the first-touch dedup that pre-marks the display zones.
         return RuntimeSnapshot(
-            current_bars=candle_update.current,
+            current_bars=self._current_bars(),
             recent_closed_bars=tuple(self._recent_closed_bars),
             levels=self._plugin.current_levels(),
             zones=self._plugin.snapshot_zones(trading_day),
@@ -340,9 +372,31 @@ class StrategyRuntime:
             ring_floor = trade.event_ts_utc - self._trade_ring_retention
             while self._trade_ring and self._trade_ring[0][0] < ring_floor:
                 self._trade_ring.popleft()
+        # TIME bars are materialized and dispatched before the current trade reaches
+        # plugin.on_event().  The later trade merely proves prior buckets complete; it
+        # must not contaminate their state.  The existing tick fold/on_event/callback
+        # order below remains unchanged.
+        time_update = (
+            self.time_candles.process_trade(trade)
+            if self.time_candles is not None
+            else None
+        )
+        time_completed = () if time_update is None else time_update.completed
+        context_events: list[ContextEvent] = []
+        if time_completed:
+            self._recent_closed_bars.extend(time_completed)
+            for bar in time_completed:
+                if (
+                    bar.is_complete
+                    and (bar.kind, bar.timeframe_ticks) in self._required_time_keys
+                ):
+                    step = self._plugin.on_bar_closed(bar, self._ctx)
+                    context_events.extend(step.context_events)
+
         candle_update = self.candles.process_trade(trade)
         if candle_update.completed:
             self._recent_closed_bars.extend(candle_update.completed)
+        if time_completed or candle_update.completed:
             if len(self._recent_closed_bars) > self._recent_closed_bar_limit:
                 del self._recent_closed_bars[: len(self._recent_closed_bars) - self._recent_closed_bar_limit]
         # S-B3a: the plugin owns the SOLE level fold (R1; the runtime's redundant
@@ -357,18 +411,26 @@ class StrategyRuntime:
             # back VERBATIM — no re-derivation, re-keying, or filtering here.
             step = self._plugin.on_bar_closed(bar, self._ctx)
             touches.extend(step.touches)
+            context_events.extend(step.context_events)
         if touches:
             self._touches.extend(touches)
         session, trading_day = self._session_state()
         self._feed_status = FeedStatus(state="replaying", mode="runtime", requested_symbol=self.requested_symbol, last_event_ts_utc=trade.event_ts_utc, last_message="trade processed")
         return RuntimeUpdate(
             feed_status=self._feed_status,
-            current_bars=candle_update.current,
-            closed_bars=candle_update.completed,
+            current_bars=self._current_bars(),
+            closed_bars=tuple(time_completed) + candle_update.completed,
             levels=levels,
             zones=self._plugin.snapshot_zones(trading_day),
             touches=tuple(touches),
+            context_events=tuple(context_events),
         )
+
+    def _current_bars(self) -> tuple[Bar, ...]:
+        tick_current = self.candles.snapshot_update(()).current
+        if self.time_candles is None:
+            return tick_current
+        return tick_current + self.time_candles.snapshot_update(()).current
 
     def _session_state(self) -> tuple[str | None, date | None]:
         if self._last_event_ts_utc is None:

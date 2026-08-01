@@ -87,6 +87,46 @@ def test_trade_exactly_on_bucket_edge_opens_the_later_bar() -> None:
     assert [b.bar_id for b in batch] == ["60s:2025-06-03:0", "60s:2025-06-03:1"]
 
 
+def test_later_eligible_bucket_closes_prior_bar_before_consuming_later_trade() -> None:
+    """R1/sentinel: the materializing trade cannot alter the older bucket."""
+
+    day_open = datetime(2025, 6, 2, 22, 0, 0, tzinfo=UTC)
+    engine = TimeBarEngine((60,))
+    assert not engine.process_trade(_trade(day_open + timedelta(seconds=5), 100)).completed
+    update = engine.process_trade(_trade(day_open + timedelta(minutes=7), 900))
+    assert len(update.completed) == 1
+    closed = update.completed[0]
+    assert closed.is_complete
+    assert (closed.open_ticks, closed.high_ticks, closed.low_ticks, closed.close_ticks) == (
+        100,
+        100,
+        100,
+        100,
+    )
+    assert update.current[0].open_ticks == 900
+
+
+def test_shared_logical_close_dispatches_longest_timeframe_first() -> None:
+    """R2: shared TIME closes are deterministic and leave 1m last."""
+
+    timeframes = (60, 180, 300, 600, 900, 1800, 3600, 14400)
+    day_open = datetime(2025, 6, 2, 22, 0, 0, tzinfo=UTC)
+    engine = TimeBarEngine(timeframes)
+    engine.process_trade(_trade(day_open + timedelta(hours=3, minutes=59), 100))
+    update = engine.process_trade(_trade(day_open + timedelta(hours=4), 200))
+    assert [bar.timeframe_ticks for bar in update.completed] == [
+        14400,
+        3600,
+        1800,
+        900,
+        600,
+        300,
+        180,
+        60,
+    ]
+    assert all(bar.close_ticks == 100 for bar in update.completed)
+
+
 # ── DST day lengths ───────────────────────────────────────────────────────────
 def test_dst_spring_forward_day_has_23_hours_of_buckets() -> None:
     """Trading day 2025-03-09 (spring forward) spans 23 real hours: a trade one

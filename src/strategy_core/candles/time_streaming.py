@@ -37,9 +37,10 @@ bar rather than its true bucket, exactly as it would join the wrong tick bar.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import date, datetime
+from datetime import UTC, date, datetime, timedelta
 
-from strategy_core.candles._buckets import trading_day_start_utc
+from strategy_core.candles._buckets import logical_bucket_bounds, trading_day_start_utc
+from strategy_core.candles.exchange_calendar import ExchangeMinuteSchedule, MinuteSlotStatus
 from strategy_core.candles._ids import make_bar_id
 from strategy_core.candles.streaming import CandleUpdate
 from strategy_core.constants import RESEARCH_SESSION_SCHEME
@@ -75,6 +76,8 @@ class _MutableTimeBar:
     close_ticks: int
     volume: int
     trade_count: int
+    logical_open_ts_utc: datetime
+    logical_close_ts_utc: datetime
 
     def freeze(self, *, complete: bool, reason: CloseReason | None) -> Bar:
         """Materialize an immutable TIME :class:`Bar`; ``is_partial == not complete``."""
@@ -95,6 +98,8 @@ class _MutableTimeBar:
             is_partial=not complete,
             close_reason=reason,
             kind=BarKind.TIME,
+            logical_open_ts_utc=self.logical_open_ts_utc,
+            logical_close_ts_utc=self.logical_close_ts_utc,
         )
 
 
@@ -112,6 +117,7 @@ class TimeBarEngine:
         timeframes_seconds: tuple[int, ...] = DEFAULT_TIME_TIMEFRAMES,
         *,
         scheme: SessionScheme = RESEARCH_SESSION_SCHEME,
+        schedule: ExchangeMinuteSchedule | None = None,
     ) -> None:
         if not timeframes_seconds:
             raise ValueError("time timeframes must be non-empty")
@@ -123,6 +129,7 @@ class TimeBarEngine:
                 )
         self.timeframes = tuple(sorted(set(timeframes_seconds)))
         self._scheme = scheme
+        self._schedule = schedule
         # The 60s accumulator always runs (it is the derivation base); its bars are
         # only EMITTED when 60 was actually requested.
         self._emit_base = BASE_INTERVAL_SECONDS in self.timeframes
@@ -136,6 +143,11 @@ class TimeBarEngine:
     # ── public API (CandleEngine mirror) ──────────────────────────────────────
     def process_trade(self, trade: Trade) -> CandleUpdate:
         """Fold one trade into the 60s accumulator; cascade closed 60s bars upward."""
+        if self._schedule is not None:
+            event_utc = trade.event_ts_utc.astimezone(UTC)
+            minute_close = event_utc.replace(second=0, microsecond=0) + timedelta(minutes=1)
+            if self._schedule.slot(minute_close).status is not MinuteSlotStatus.ELIGIBLE:
+                return self.snapshot_update(())
         trading_day = trading_day_for(trade.event_ts_utc, self._scheme)
         if trading_day is None:  # closed window -> skipped, like the tick engine
             return self.snapshot_update(())
@@ -154,10 +166,17 @@ class TimeBarEngine:
         bucket = elapsed_us // (BASE_INTERVAL_SECONDS * _US_PER_SECOND)
         minute = self._minute
         if minute is not None and bucket > minute.bucket:
-            # A later bucket produced a bar -> the open 60s bar closes COMPLETE.
-            completed.extend(self._close_minute(complete=True))
+            # A later eligible bucket produced a bar.  Fold the old minute into every
+            # higher accumulator and materialize any higher bucket that is now known
+            # complete *during this call*.  Passing the opening bucket is essential:
+            # without it a 3m/5m/... bar remains hidden until the newly-opened minute
+            # itself closes, which lets a same-close 1m reducer step run first.
+            completed.extend(self._close_minute(complete=True, next_minute_bucket=bucket))
             minute = None
         if minute is None:
+            logical_open, logical_close = logical_bucket_bounds(
+                trading_day, bucket, BASE_INTERVAL_SECONDS, self._scheme
+            )
             self._minute = _MutableTimeBar(
                 interval_seconds=BASE_INTERVAL_SECONDS,
                 trading_day=trading_day,
@@ -172,6 +191,8 @@ class TimeBarEngine:
                 close_ticks=trade.price_ticks,
                 volume=trade.size,
                 trade_count=1,
+                logical_open_ts_utc=logical_open,
+                logical_close_ts_utc=logical_close,
             )
         else:
             minute.close_ts_utc = trade.event_ts_utc
@@ -182,6 +203,16 @@ class TimeBarEngine:
                 minute.low_ticks = trade.price_ticks
             minute.volume += trade.size
             minute.trade_count += 1
+        # Availability is the scheduled logical close, not the later trade that made
+        # completion observable.  At a shared close the largest timeframe is delivered
+        # first and 1m is therefore last.  ``bar_id`` is the deterministic final tie.
+        completed.sort(
+            key=lambda bar: (
+                bar.availability_ts_utc,
+                -bar.timeframe_ticks,
+                bar.bar_id,
+            )
+        )
         return self.snapshot_update(tuple(completed))
 
     def snapshot_update(self, completed: tuple[Bar, ...]) -> CandleUpdate:
@@ -204,7 +235,12 @@ class TimeBarEngine:
         return tuple(self._roll_day())
 
     # ── internals ─────────────────────────────────────────────────────────────
-    def _close_minute(self, *, complete: bool) -> list[Bar]:
+    def _close_minute(
+        self,
+        *,
+        complete: bool,
+        next_minute_bucket: int | None = None,
+    ) -> list[Bar]:
         """Freeze the open 60s bar and cascade it into the higher timeframes.
 
         The cascade can itself close a higher bar COMPLETE (the 60s bar landed in a
@@ -227,6 +263,9 @@ class TimeBarEngine:
                 open_bar = None
             if open_bar is None:
                 idx = self._allocate_bar_index(tf, minute.trading_day)
+                logical_open, logical_close = logical_bucket_bounds(
+                    minute.trading_day, hbucket, tf, self._scheme
+                )
                 self._current[tf] = _MutableTimeBar(
                     interval_seconds=tf,
                     trading_day=minute.trading_day,
@@ -241,6 +280,8 @@ class TimeBarEngine:
                     close_ticks=minute.close_ticks,
                     volume=minute.volume,
                     trade_count=minute.trade_count,
+                    logical_open_ts_utc=logical_open,
+                    logical_close_ts_utc=logical_close,
                 )
             else:
                 open_bar.close_ts_utc = minute.close_ts_utc
@@ -251,6 +292,15 @@ class TimeBarEngine:
                     open_bar.low_ticks = minute.low_ticks
                 open_bar.volume += minute.volume
                 open_bar.trade_count += minute.trade_count
+            # The first trade in a later eligible higher-TF bucket proves that the
+            # just-folded accumulator is complete.  Close it now; do not wait for the
+            # new minute to close and cascade on the following trade.
+            open_bar = self._current.get(tf)
+            if complete and next_minute_bucket is not None and open_bar is not None:
+                next_hbucket = next_minute_bucket * BASE_INTERVAL_SECONDS // tf
+                if next_hbucket > open_bar.bucket:
+                    out.append(open_bar.freeze(complete=True, reason=CloseReason.COMPLETE))
+                    del self._current[tf]
         return out
 
     def _roll_day(self) -> list[Bar]:

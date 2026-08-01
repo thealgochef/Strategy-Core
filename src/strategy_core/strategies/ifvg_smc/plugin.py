@@ -45,14 +45,16 @@ from strategy_core.strategies.registry import register
 from strategy_core.types import Bar, BarKind, Level, Quote, Trade, Zone
 
 from .records import IfvgEmission
-from .replay import DayOrchestrator
+from .replay import DayOrchestrator, _runtime_scheme
+from .context_config import ContextFeatureConfig
+from .context_features import IfvgContextObserverSeed
 from .section import (
     IFVG_STRATEGY_ID,
     IFVG_STRATEGY_VERSION,
     IfvgSmcSection,
     default_ifvg_smc_section,
 )
-from .state import IfvgDaySeed
+from .state import IFVG_CONTEXT_SEED_CONTAINER_VERSION, IfvgDaySeed, IfvgDaySeedV3
 
 __all__ = ["IfvgSmcPlugin", "RRelativeBarrier"]
 
@@ -90,19 +92,33 @@ class IfvgSmcPlugin:
     strategy_version = IFVG_STRATEGY_VERSION
     SectionModel = IfvgSmcSection
 
-    def __init__(self) -> None:
+    def __init__(
+        self,
+        *,
+        context_config: ContextFeatureConfig | None = None,
+        context_seed: IfvgContextObserverSeed | None = None,
+        context_symbol: str = "NQ",
+        strategy_core_commit: str = "0" * 40,
+        strategy_core_source_tree_hash: str = "0" * 64,
+    ) -> None:
         self._section: IfvgSmcSection | None = None
         self._orch: DayOrchestrator | None = None
         self._levels: StrategyLevelState | None = None
         self._emissions: list[IfvgEmission] = []
         self._static_levels: tuple[Level, ...] = ()
         self._tick: float = 0.25
+        self._context_config = context_config
+        self._initial_context_seed = context_seed
+        self._context_symbol = context_symbol
+        self._strategy_core_commit = strategy_core_commit
+        self._strategy_core_source_tree_hash = strategy_core_source_tree_hash
 
     # ── lifecycle ────────────────────────────────────────────────────────────
     def configure(self, section: IfvgSmcSection, ctx: PlatformContext) -> None:
         self._section = section
         self._tick = ctx.tick_size
         self._levels = StrategyLevelState(
+            scheme=_runtime_scheme(section.session_scheme),
             tick_size=ctx.tick_size,
             session_range_names=("asia", "london", "ny"),
             emit_prior_session_levels=("ny",),
@@ -113,7 +129,13 @@ class IfvgSmcPlugin:
             seed=None,
             tick_size=ctx.tick_size,
             levels_for=lambda _ts: self._levels.levels() if self._levels else (),
+            context_config=self._context_config,
+            context_seed=self._initial_context_seed,
+            context_symbol=self._context_symbol,
+            strategy_core_commit=self._strategy_core_commit,
+            strategy_core_source_tree_hash=self._strategy_core_source_tree_hash,
         )
+        self._initial_context_seed = None
         self._emissions = []
 
     def reset(self) -> None:
@@ -126,6 +148,10 @@ class IfvgSmcPlugin:
             seed=None,
             tick_size=self._tick,
             levels_for=lambda _ts: self._levels.levels() if self._levels else (),
+            context_config=self._context_config,
+            context_symbol=self._context_symbol,
+            strategy_core_commit=self._strategy_core_commit,
+            strategy_core_source_tree_hash=self._strategy_core_source_tree_hash,
         )
         self._emissions = []
 
@@ -170,10 +196,31 @@ class IfvgSmcPlugin:
         )
 
     def emitted_event_types(self) -> tuple[EventTypeSpec, ...]:
-        return (
-            EventTypeSpec("ifvg.setup", ("setup_id", "phase", "direction")),
-            EventTypeSpec("ifvg.entry", ("setup_id", "entry_family", "entry", "stop", "tp")),
-            EventTypeSpec("ifvg.resolution", ("setup_id", "resolution")),
+        events = (
+            EventTypeSpec(
+                "ifvg.setup_lifecycle",
+                ("setup_id", "lifecycle_event_id", "transition", "reason"),
+            ),
+            EventTypeSpec(
+                "ifvg.entry_candidate",
+                ("setup_id", "candidate_id", "entry_family", "block_reasons"),
+            ),
+            EventTypeSpec(
+                "ifvg.eligible_decision",
+                ("setup_id", "candidate_id", "decision_id"),
+            ),
+            EventTypeSpec(
+                "ifvg.executed_trade",
+                ("setup_id", "decision_id", "trade_id", "status"),
+            ),
+        )
+        if self._context_config is None:
+            return events
+        return events + (
+            EventTypeSpec(
+                "strategy.context_feature",
+                ("capture", "state", "structure_deltas", "displacement_windows", "sweep_links"),
+            ),
         )
 
     # ── consumption ──────────────────────────────────────────────────────────
@@ -188,6 +235,15 @@ class IfvgSmcPlugin:
             return StrategyStep()
         if bar.timeframe_ticks == 60:
             self._emissions.extend(self._orch.on_decision_bar(bar))
+            context_events = self._orch.drain_context_events()
+            # These append-only rows are an offline normalization surface.  The
+            # live plugin transports transition events only, so discard its
+            # auxiliary copies every step instead of retaining an unbounded log.
+            self._orch.drain_context_confirmed_swings()
+            self._orch.drain_context_pool_lifecycle()
+            self._orch.drain_context_sweep_links()
+            self._orch.drain_context_performance_trace()
+            return StrategyStep(context_events=context_events)
         elif bar.timeframe_ticks in TIME_TF_SECONDS.values():
             self._orch.on_higher_tf_bar(bar)
         return StrategyStep()
@@ -210,17 +266,40 @@ class IfvgSmcPlugin:
             raise RuntimeError("plugin not configured")
         return self._orch.end_seed(source_day)
 
-    def load_day_seed(self, seed: IfvgDaySeed) -> None:
+    def load_day_seed(self, seed: IfvgDaySeed | IfvgDaySeedV3) -> None:
         if self._section is None:
             raise RuntimeError("plugin not configured")
+        core_seed = seed.core if isinstance(seed, IfvgDaySeedV3) else seed
+        context_seed = seed.context if isinstance(seed, IfvgDaySeedV3) else None
+        if context_seed is not None and self._context_config is None:
+            raise ValueError("context seed supplied while the observer is disabled")
         self._orch = DayOrchestrator(
             section=self._section,
-            seed=seed,
+            seed=core_seed,
             tick_size=self._tick,
             levels_for=lambda _ts: self._levels.levels() if self._levels else (),
+            context_config=self._context_config,
+            context_seed=context_seed,
+            context_symbol=self._context_symbol,
+            strategy_core_commit=self._strategy_core_commit,
+            strategy_core_source_tree_hash=self._strategy_core_source_tree_hash,
+        )
+
+    def context_day_snapshot(self, source_day: date) -> IfvgDaySeedV3:
+        if self._orch is None or self._context_config is None:
+            raise RuntimeError("context observer is disabled")
+        return IfvgDaySeedV3(
+            container_version=IFVG_CONTEXT_SEED_CONTAINER_VERSION,
+            core=self._orch.end_seed(source_day),
+            context=self._orch.end_context_seed(),
         )
 
     def finalize_trading_day(self, trading_day: date) -> tuple[IfvgEmission, ...]:
         if self._orch is None:
             return ()
         return self._orch.finalize_day(trading_day)
+
+    def finalize_dataset(self, trading_day: date) -> tuple[IfvgEmission, ...]:
+        if self._orch is None:
+            return ()
+        return self._orch.finalize_dataset(trading_day)
