@@ -99,6 +99,16 @@ def _warning(warning: DataQualityWarning) -> dict[str, Any]:
     return warning.to_dict()
 
 
+def _context_events(event: ContextEvent) -> tuple[Mapping[str, Any], ...]:
+    fragment_serializer = getattr(event, "to_transport_dicts", None)
+    if callable(fragment_serializer):
+        return tuple(fragment_serializer())
+    transport_serializer = getattr(event, "to_transport_dict", None)
+    if callable(transport_serializer):
+        return (transport_serializer(),)
+    return (event.to_dict(),)
+
+
 @dataclass(frozen=True, slots=True)
 class FeedStatus:
     state: str
@@ -148,7 +158,11 @@ class RuntimeUpdate:
             "last_quote": _quote(self.last_quote),
         }
         if self.context_events:
-            payload["context_events"] = [item.to_dict() for item in self.context_events]
+            payload["context_events"] = [
+                transport
+                for item in self.context_events
+                for transport in _context_events(item)
+            ]
         return payload
 
 

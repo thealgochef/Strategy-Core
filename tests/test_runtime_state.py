@@ -1,6 +1,6 @@
 from datetime import UTC, datetime
 
-from strategy_core.runtime.state import StrategyRuntime
+from strategy_core.runtime.state import RuntimeUpdate, StrategyRuntime
 from strategy_core.types import Quote, Trade
 
 
@@ -38,3 +38,31 @@ def test_trades_advance_bars_and_session_state_uses_strategy_core_et_scheme() ->
     snapshot = runtime.snapshot()
     assert snapshot.session == "ny"
     assert snapshot.trading_day.isoformat() == "2026-01-06"
+
+
+def test_runtime_update_prefers_bounded_context_transport_payload() -> None:
+    class ContextEvent:
+        context_capture_id = "capture"
+
+        def to_dict(self):
+            return {"encoding": "audit"}
+
+        def to_transport_dict(self):
+            return {"encoding": "bounded"}
+
+    payload = RuntimeUpdate(context_events=(ContextEvent(),)).to_dict()
+    assert payload["context_events"] == [{"encoding": "bounded"}]
+
+
+def test_runtime_update_flattens_context_transport_fragments() -> None:
+    class ContextEvent:
+        context_capture_id = "capture"
+
+        def to_dict(self):
+            return {"encoding": "audit"}
+
+        def to_transport_dicts(self):
+            return ({"fragment": 0}, {"fragment": 1})
+
+    payload = RuntimeUpdate(context_events=(ContextEvent(),)).to_dict()
+    assert payload["context_events"] == [{"fragment": 0}, {"fragment": 1}]

@@ -1136,12 +1136,23 @@ class EqualLevelPoolTracker:
     def atr_at(self, timeframe_seconds: int) -> float | None:
         return self._scales(timeframe_seconds)[0]
 
-    def snapshot(self) -> EqualLevelPoolTrackerSnapshot:
+    def snapshot(
+        self,
+        *,
+        compact_inert: bool = False,
+    ) -> EqualLevelPoolTrackerSnapshot:
         unreclaimed_link_ids = tuple(
             sorted(
                 self._unreclaimed_link_ids.intersection(self._links),
                 key=str,
             )
+        )
+        retained_pool_ids = tuple(
+            key
+            for key in sorted(self._pools, key=str)
+            if not compact_inert
+            or self._pools[key].active
+            or self._pools[key].sweep_link_id in unreclaimed_link_ids
         )
         return EqualLevelPoolTrackerSnapshot(
             schema_version=EQUAL_LEVEL_SNAPSHOT_SCHEMA_VERSION,
@@ -1155,7 +1166,7 @@ class EqualLevelPoolTracker:
             source_bars=tuple((tf, tuple(bars)) for tf, bars in sorted(self._bars.items())),
             pools=tuple(
                 _pool_state_snapshot(self._pools[key])
-                for key in sorted(self._pools, key=str)
+                for key in retained_pool_ids
             ),
             unmatched=tuple(
                 (tf, side, tuple(_equal_swing_seed(item) for item in items))

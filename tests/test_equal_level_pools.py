@@ -271,6 +271,34 @@ def test_54_snapshot_resume_matches_continuous_pool_state() -> None:
     assert [item.to_dict() for item in continuous.active_pool_records(as_of_ts=as_of, as_of_cursor="x")] == [item.to_dict() for item in restored.active_pool_records(as_of_ts=as_of, as_of_cursor="x")]
 
 
+def test_compact_snapshot_drops_only_inert_pool_bodies_and_resumes_exactly() -> None:
+    continuous = _pool_tracker(max_active_per_timeframe=1)
+    first = _create_pool(continuous, Side.HIGH, 100, 100, start_i=1)
+    second = _create_pool(continuous, Side.HIGH, 110, 110, start_i=3)
+    continuous.drain_lifecycle()
+
+    full = continuous.snapshot()
+    compact = continuous.snapshot(compact_inert=True)
+    assert {pool.pool_id for pool in full.pools} == {first, second}
+    assert [pool.pool_id for pool in compact.pools] == [second]
+    assert compact.tombstones == full.tombstones
+
+    resumed = EqualLevelPoolTracker.from_snapshot(compact, identity=IDENTITY)
+    for tracker in (continuous, resumed):
+        _create_pool(tracker, Side.HIGH, 120, 120, start_i=5)
+    assert [item.to_dict() for item in continuous.drain_lifecycle()] == [
+        item.to_dict() for item in resumed.drain_lifecycle()
+    ]
+    as_of = BASE + timedelta(minutes=7)
+    assert [
+        item.to_dict()
+        for item in continuous.active_pool_records(as_of_ts=as_of, as_of_cursor="x")
+    ] == [
+        item.to_dict()
+        for item in resumed.active_pool_records(as_of_ts=as_of, as_of_cursor="x")
+    ]
+
+
 @pytest.mark.parametrize(
     ("direction", "side", "pool_type", "probe"),
     (

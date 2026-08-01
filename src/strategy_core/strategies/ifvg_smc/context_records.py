@@ -44,6 +44,122 @@ _EVENT_PROVENANCE_KEYS = _COMMON_PROVENANCE_KEYS | {
     "missing_reason",
 }
 
+_MAX_TRANSITION_BYTES = 26_214
+
+
+def _serialized_bytes(payload: Mapping[str, Any]) -> bytes:
+    return json.dumps(
+        payload,
+        sort_keys=True,
+        separators=(",", ":"),
+        ensure_ascii=False,
+    ).encode("utf-8")
+
+
+def _without_optional_nulls(payload: Mapping[str, Any]) -> dict[str, Any]:
+    return {key: value for key, value in payload.items() if value is not None}
+
+
+def _compact_oversized_transport(payload: Mapping[str, Any]) -> dict[str, Any]:
+    """Losslessly elide optional null record fields from an oversized event."""
+
+    compact = dict(payload)
+    for key in ("capture", "state", "mtf_snapshot"):
+        value = compact.get(key)
+        if isinstance(value, Mapping):
+            compact[key] = _without_optional_nulls(value)
+    for key in (
+        "structure_states",
+        "structure_deltas",
+        "displacement_windows",
+        "sweep_links",
+    ):
+        values = compact.get(key)
+        if isinstance(values, list):
+            compact[key] = [
+                _without_optional_nulls(item)
+                if isinstance(item, Mapping)
+                else item
+                for item in values
+            ]
+    lifecycle = compact.get("pool_lifecycle_events")
+    if isinstance(lifecycle, list):
+        compact_lifecycle: list[Any] = []
+        for item in lifecycle:
+            if not isinstance(item, Mapping):
+                compact_lifecycle.append(item)
+                continue
+            compact_item = _without_optional_nulls(item)
+            pool = compact_item.get("pool")
+            if isinstance(pool, Mapping):
+                compact_item["pool"] = _without_optional_nulls(pool)
+            compact_lifecycle.append(compact_item)
+        compact["pool_lifecycle_events"] = compact_lifecycle
+    return compact
+
+
+_EVIDENCE_LIST_KEYS = (
+    "structure_states",
+    "structure_deltas",
+    "displacement_windows",
+    "pool_lifecycle_events",
+    "sweep_links",
+)
+
+
+def _fragment_oversized_transport(
+    payload: Mapping[str, Any],
+) -> tuple[dict[str, Any], ...]:
+    capture = payload.get("capture")
+    if not isinstance(capture, Mapping):
+        raise TypeError("context transport capture payload is invalid")
+    capture_id = capture.get("context_capture_id")
+    placeholder = {
+        "context_capture_id": capture_id,
+        "index": 999,
+        "count": 999,
+    }
+    primary = dict(payload)
+    for key in _EVIDENCE_LIST_KEYS:
+        primary[key] = []
+    primary["transport_fragment"] = placeholder
+    fragments = [primary]
+
+    for key in _EVIDENCE_LIST_KEYS:
+        values = payload.get(key)
+        if not isinstance(values, list):
+            continue
+        for item in values:
+            candidate = dict(fragments[-1])
+            candidate[key] = [*candidate.get(key, []), item]
+            if len(_serialized_bytes(candidate)) <= _MAX_TRANSITION_BYTES:
+                fragments[-1] = candidate
+                continue
+            continuation: dict[str, Any] = {
+                "provenance": payload.get("provenance", {}),
+                "capture": {"context_capture_id": capture_id},
+                "transport_fragment": placeholder,
+                **{list_key: [] for list_key in _EVIDENCE_LIST_KEYS},
+            }
+            continuation[key] = [item]
+            if len(_serialized_bytes(continuation)) > _MAX_TRANSITION_BYTES:
+                raise ValueError("single context evidence record exceeds transport limit")
+            fragments.append(continuation)
+
+    count = len(fragments)
+    finalized: list[dict[str, Any]] = []
+    for index, fragment in enumerate(fragments):
+        item = dict(fragment)
+        item["transport_fragment"] = {
+            "context_capture_id": capture_id,
+            "index": index,
+            "count": count,
+        }
+        if len(_serialized_bytes(item)) > _MAX_TRANSITION_BYTES:
+            raise ValueError("fragmented context transport exceeds size limit")
+        finalized.append(item)
+    return tuple(finalized)
+
 
 def _compact_record(
     record: ContextRecord,
@@ -185,11 +301,26 @@ class IfvgContextEvent:
         }
 
     def serialized_size(self) -> int:
-        return len(
-            json.dumps(
-                self.to_dict(),
-                sort_keys=True,
-                separators=(",", ":"),
-                ensure_ascii=False,
-            ).encode("utf-8")
+        return max(
+            len(_serialized_bytes(payload))
+            for payload in self.to_transport_dicts()
         )
+
+    def to_transport_dict(self) -> dict[str, Any]:
+        """Return one transport payload, rejecting a fragmented event."""
+
+        payloads = self.to_transport_dicts()
+        if len(payloads) != 1:
+            raise ValueError("oversized context event requires transport fragments")
+        return payloads[0]
+
+    def to_transport_dicts(self) -> tuple[dict[str, Any], ...]:
+        """Return byte-identical normal events and bounded oversized fragments."""
+
+        payload = self.to_dict()
+        if len(_serialized_bytes(payload)) <= _MAX_TRANSITION_BYTES:
+            return (payload,)
+        compact = _compact_oversized_transport(payload)
+        if len(_serialized_bytes(compact)) <= _MAX_TRANSITION_BYTES:
+            return (compact,)
+        return _fragment_oversized_transport(compact)

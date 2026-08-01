@@ -73,6 +73,8 @@ __all__ = [
 ]
 
 CONTEXT_OBSERVER_SEED_SCHEMA_VERSION = 2
+_INITIAL_MAX_RETAINED_INERT_POOLS = 256
+_COMPACTED_MAX_RETAINED_INERT_POOLS = 128
 
 
 @dataclass(frozen=True, slots=True)
@@ -909,6 +911,24 @@ class IfvgContextObserver:
         return out
 
     def snapshot(self) -> IfvgContextObserverSeed:
+        equal_levels = self._equal.snapshot()
+        pool_ids = {pool.pool_id for pool in equal_levels.pools}
+        previously_compacted = any(
+            pool_id not in pool_ids
+            for _timeframe, tombstones in equal_levels.tombstones
+            for pool_id in tombstones
+        )
+        inert_pool_limit = (
+            _COMPACTED_MAX_RETAINED_INERT_POOLS
+            if previously_compacted
+            else _INITIAL_MAX_RETAINED_INERT_POOLS
+        )
+        discardable_pool_count = sum(
+            not pool.active and not (pool.swept and not pool.reclaimed)
+            for pool in equal_levels.pools
+        )
+        if discardable_pool_count > inert_pool_limit:
+            equal_levels = self._equal.snapshot(compact_inert=True)
         return IfvgContextObserverSeed(
             schema_version=CONTEXT_OBSERVER_SEED_SCHEMA_VERSION,
             identity=self.identity,
@@ -917,7 +937,7 @@ class IfvgContextObserver:
             structures=tuple(
                 self._trackers[seconds].snapshot() for seconds in sorted(self._trackers)
             ),
-            equal_levels=self._equal.snapshot(),
+            equal_levels=equal_levels,
             active_accumulators=tuple(
                 (key, self._accumulators[key].snapshot())
                 for key in sorted(self._accumulators)

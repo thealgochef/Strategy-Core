@@ -347,6 +347,58 @@ def test_65_replay_seed_and_transport_are_deterministic_and_bounded() -> None:
     ) <= 26_214
 
 
+def test_oversized_transport_elides_nulls_then_fragments_losslessly() -> None:
+    event = next(
+        event
+        for result in _context_replay()
+        for event in result.context_events
+        if event.structure_states
+    )
+    nullable_state = next(
+        state
+        for state in event.structure_states
+        if any(value is None for value in state.to_dict().values())
+    )
+    states = list(event.structure_states)
+    while True:
+        oversized = replace(event, structure_states=tuple(states))
+        full_payload = oversized.to_dict()
+        full_size = len(
+            json.dumps(
+                full_payload,
+                sort_keys=True,
+                separators=(",", ":"),
+                ensure_ascii=False,
+            ).encode("utf-8")
+        )
+        transports = oversized.to_transport_dicts()
+        if len(transports) > 1:
+            break
+        states.append(nullable_state)
+
+    assert oversized.to_dict() == full_payload
+    assert oversized.serialized_size() <= 26_214 < full_size
+    assert len(transports) > 1
+    assert all(
+        transport["transport_fragment"]["context_capture_id"]
+        == full_payload["capture"]["context_capture_id"]
+        for transport in transports
+    )
+    assert [transport["transport_fragment"]["index"] for transport in transports] == [
+        *range(len(transports))
+    ]
+    transported_states = [
+        state
+        for transport in transports
+        for state in transport["structure_states"]
+    ]
+    assert len(transported_states) == len(full_payload["structure_states"])
+    compact_state = transported_states[-1]
+    for key, value in full_payload["structure_states"][-1].items():
+        if value is not None:
+            assert compact_state[key] == value
+
+
 def test_67_synthetic_context_replay_stays_within_absolute_smoke_budget() -> None:
     started = time.perf_counter()
     results = _context_replay()
