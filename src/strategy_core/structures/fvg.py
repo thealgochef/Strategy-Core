@@ -430,7 +430,7 @@ class FvgRegistry:
         touches it). Emits first_touch / filled / evicted_age events in live-set
         order; filled and age-evicted gaps leave the live set.
         """
-        pending: list[tuple[str, FvgState, int | None, int]] = []
+        pending: list[tuple[str, FvgState, int | None]] = []
         survivors: list[FvgState] = []
         for state in self._live:
             gap = state.fvg
@@ -442,14 +442,11 @@ class FvgRegistry:
                 self.max_age_days is not None
                 and (bar.trading_day - gap.trading_day).days > self.max_age_days
             ):
-                pending.append(
-                    ("evicted_age", state, state.reached_ticks, state.penetration_so_far_ticks())
-                )
+                pending.append(("evicted_age", state, state.reached_ticks))
                 continue
             if wick_overlaps(bar, gap.gap_low_ticks, gap.gap_high_ticks):
                 first = state.first_touch_ts_utc is None
                 prior_reached = state.reached_ticks
-                prior_penetration = state.penetration_so_far_ticks()
                 if first:
                     state.first_touch_ts_utc = availability
                 extreme = bar.low_ticks if gap.direction is GapDirection.BULLISH else bar.high_ticks
@@ -460,7 +457,7 @@ class FvgRegistry:
                 else:
                     state.reached_ticks = max(state.reached_ticks, extreme)
                 if first:
-                    pending.append(("first_touch", state, prior_reached, prior_penetration))
+                    pending.append(("first_touch", state, prior_reached))
                 traversed = (
                     state.reached_ticks <= gap.gap_low_ticks
                     if gap.direction is GapDirection.BULLISH
@@ -468,14 +465,23 @@ class FvgRegistry:
                 )
                 if traversed:
                     state.filled_ts_utc = availability
-                    pending.append(("filled", state, prior_reached, prior_penetration))
+                    pending.append(("filled", state, prior_reached))
                     continue  # dead context — leaves the live set
             survivors.append(state)
         self._live = survivors
         live_after = len(survivors)
         events: list[FvgFillEvent] = []
-        for kind, state, prior_reached, prior_penetration in pending:
+        for kind, state, prior_reached in pending:
             gap = state.fvg
+            if prior_reached is None:
+                prior_penetration = 0
+            else:
+                depth = (
+                    gap.gap_high_ticks - prior_reached
+                    if gap.direction is GapDirection.BULLISH
+                    else prior_reached - gap.gap_low_ticks
+                )
+                prior_penetration = max(0, min(depth, gap.size_ticks))
             far_side = Side.LOW if gap.direction is GapDirection.BULLISH else Side.HIGH
             events.append(
                 FvgFillEvent(
