@@ -795,3 +795,53 @@ def test_wick_through_does_not_invert_and_old_opposing_inverts_before_replacemen
     assert inversion.opposing_fvg_id == old.fvg_id
     assert not [e for e in emissions if e.kind == "opposing"]
     assert reducer.phase == "S4"
+
+
+def test_seed_shape_freeze() -> None:
+    """Golden field-name tuples for EVERY dataclass reachable from the day
+    seed graph. ``entering_seed_hash`` hashes this exact shape; any addition,
+    removal, or reorder moves every seed hash and breaks accepted-artifact
+    parity — this test makes that a deliberate, reviewed act."""
+    from dataclasses import fields
+
+    from strategy_core.strategies.ifvg_smc.records import (
+        BarEvidence,
+        GeometryEvidence,
+    )
+    from strategy_core.strategies.ifvg_smc.reducer import (
+        IfvgReducerSnapshot,
+        IfvgSetupSnapshot,
+    )
+    from strategy_core.strategies.ifvg_smc.state import IfvgDaySeed
+    from strategy_core.structures.fvg import (
+        Fvg,
+        FvgRegistrySnapshot,
+        FvgStateSnapshot,
+    )
+    from strategy_core.structures.sweeps import (
+        LevelPool,
+        SweepResult,
+        SweepTrackerSnapshot,
+    )
+    from strategy_core.structures.swings import SwingPoint, SwingSnapshot
+    from strategy_core.types import Bar
+
+    frozen_shapes = {
+        IfvgDaySeed: ("schema_version", "profile_hash", "source_day", "registries", "swings", "reducer"),
+        FvgRegistrySnapshot: ("schema_version", "timeframe_seconds", "min_gap_ticks", "max_live", "max_age_days", "live", "detector_tail"),
+        FvgStateSnapshot: ("fvg", "first_touch_ts_utc", "reached_ticks", "filled_ts_utc"),
+        Fvg: ("fvg_id", "timeframe_seconds", "direction", "gap_low_ticks", "gap_high_ticks", "size_ticks", "a_bar_id", "c_bar_id", "a_open_ts_utc", "confirmed_ts_utc", "trading_day"),
+        SwingSnapshot: ("schema_version", "strength", "max_kept", "swings", "tail"),
+        SwingPoint: ("side", "price_ticks", "pivot_ts_utc", "confirmed_ts_utc", "pivot_bar_id"),
+        IfvgReducerSnapshot: ("schema_version", "profile_hash", "ordinal", "seq_day", "seq", "setup", "executions_by_day"),
+        IfvgSetupSnapshot: ("setup_id", "phase", "direction", "htf", "tap_ts_utc", "tap_ordinal", "parent", "parent_selected_ordinal", "lock_ts_utc", "lock_ordinal", "swing_min_low", "swing_max_high", "sweep", "opposing", "armed_ts_utc", "armed_ordinal", "inversion_ts_utc", "inversion_ordinal", "sweep_result", "entry_family", "entry_ticks", "stop_ticks", "tp_ticks", "entry_ts_utc", "entry_ordinal", "mfe_ticks", "mae_ticks", "tap_bar", "parent_clocks", "lock_bar", "inversion_bar", "retest_latched", "retest_touch_seen", "candidate_id", "decision_id", "trade_id", "entry_bar", "geometry", "entry_session"),
+        SweepTrackerSnapshot: ("direction", "pools", "armed_ts", "leg_extreme_ticks", "first_sweep_ts_utc"),
+        SweepResult: ("sweep_confirmed", "swept_kinds", "max_penetration_ticks", "nearest_unswept_distance_ticks", "sweep_ts_utc", "leg_extreme_ticks"),
+        LevelPool: ("kind", "price_ticks", "side", "available_from"),
+        GeometryEvidence: ("htf", "parent", "opposing", "entry_fvg", "tap_bar", "lock_bar", "inversion_bar", "entry_bar", "manipulation_swing_ticks", "sl_buffer_ticks", "entry_ticks", "stop_ticks", "target_ticks", "feature_as_of_cursor"),
+        BarEvidence: ("bar_id", "timeframe_seconds", "trading_day", "logical_open_ts_utc", "logical_close_ts_utc", "first_print_ts_utc", "last_print_ts_utc", "open_ticks", "high_ticks", "low_ticks", "close_ticks", "cursor"),
+        Bar: ("timeframe_ticks", "trading_day", "bar_index", "bar_id", "open_ts_utc", "close_ts_utc", "open_ticks", "high_ticks", "low_ticks", "close_ticks", "volume", "trade_count", "is_complete", "is_partial", "close_reason", "kind", "logical_open_ts_utc", "logical_close_ts_utc"),
+    }
+    for cls, expected in frozen_shapes.items():
+        actual = tuple(f.name for f in fields(cls))
+        assert actual == expected, f"{cls.__name__} seed shape drifted: {actual}"

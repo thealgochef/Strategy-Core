@@ -130,6 +130,10 @@ class IfvgDayResult:
     emissions: tuple[IfvgEmission, ...]
     end_seed: IfvgDaySeed
     funnel: DayFunnelRecord
+    #: FSM audit channel (opt-in; empty when ``audit_capture_mode="disabled"``).
+    #: Never hashed anywhere; tape playback regenerates it identically because
+    #: the core reducer runs live under playback.
+    audit_emissions: tuple[IfvgEmission, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -326,10 +330,14 @@ class DayOrchestrator:
         context_symbol: str = "NQ",
         strategy_core_commit: str = "0" * 40,
         strategy_core_source_tree_hash: str = "0" * 64,
+        audit_capture_mode: str = "disabled",
     ) -> None:
         self._section = section
         self._tick = tick_size
         self._levels_for = levels_for
+        self._audit_capture_mode = audit_capture_mode
+        self._audit_enabled = audit_capture_mode != "disabled"
+        self._audit_emissions: list[IfvgEmission] = []
         self._profile_hash = ifvg_profile_hash(section)
         self._cfg = IfvgReducerConfig.from_section(
             section,
@@ -366,15 +374,17 @@ class DayOrchestrator:
                     )
             self._swings = SwingTracker.from_snapshot(seed.swings)
             self._reducer = (
-                IfvgReducer.from_snapshot(seed.reducer, self._cfg)
+                IfvgReducer.from_snapshot(
+                    seed.reducer, self._cfg, audit_capture_mode=audit_capture_mode
+                )
                 if seed.reducer is not None
-                else IfvgReducer(self._cfg)
+                else IfvgReducer(self._cfg, audit_capture_mode=audit_capture_mode)
             )
         else:
             self._swings = SwingTracker(
                 strength=section.swing_strength_bars, max_kept=section.swing_pool_max
             )
-            self._reducer = IfvgReducer(self._cfg)
+            self._reducer = IfvgReducer(self._cfg, audit_capture_mode=audit_capture_mode)
         for tf in self._tfs:
             if tf not in self._detectors:
                 self._detectors[tf] = FvgDetector(
@@ -507,6 +517,9 @@ class DayOrchestrator:
         fill_events: list[FvgFillEvent] = []
         for tf in self._tfs:
             fill_events.extend(self._registries[tf].on_execution_bar(bar_1m))
+        if self._audit_enabled:
+            # Observed BEFORE the step so linkage reflects the entering state.
+            self._reducer.audit_observe_fill_events(tuple(fill_events), bar_1m)
         # 4. swings confirm on this bar.
         self._swings.on_bar_closed(bar_1m)
         if self._context is not None and bar_1m.is_complete:
@@ -550,9 +563,20 @@ class DayOrchestrator:
         )
         emissions = self._reducer.step(step)
         # 6. intake — register the new gaps (usable from the next bar).
+        intake_events: list[FvgFillEvent] = []
         for tf, gaps in new_fvgs.items():
             for gap in gaps:
-                self._registries[tf].add(gap)
+                evictions = self._registries[tf].add(gap)
+                if self._audit_enabled and evictions:
+                    intake_events.extend(evictions)
+        if self._audit_enabled:
+            # Per-step drain: the reducer's audit buffer never spans a step
+            # boundary, so any interruption or seed/resume point sees it empty.
+            if intake_events:
+                self._reducer.audit_observe_intake_events(
+                    tuple(intake_events), bar_1m
+                )
+            self._audit_emissions.extend(self._reducer.drain_audit())
         if self._context is not None and bar_1m.is_complete:
             context_started_ns = perf_counter_ns()
             self._context_events.extend(self._context.capture(emissions))
@@ -587,10 +611,21 @@ class DayOrchestrator:
     def finalize_dataset(self, trading_day: date) -> tuple[IfvgEmission, ...]:
         if self._last_1m_close is None:
             return ()
-        return self._reducer.finalize_dataset(
+        out = self._reducer.finalize_dataset(
             last_ts_utc=self._last_1m_close,
             trading_day=trading_day,
         )
+        if self._audit_enabled:
+            self._audit_emissions.extend(self._reducer.drain_audit())
+        return out
+
+    def drain_audit_emissions(self) -> tuple[IfvgEmission, ...]:
+        """All audit emissions accumulated since the last drain (already
+        per-step drained from the reducer, so this is complete at any
+        boundary). Empty when the channel is disabled."""
+        emissions = tuple(self._audit_emissions)
+        self._audit_emissions.clear()
+        return emissions
 
     def day_funnel(self, trading_day: date, ts_utc: datetime) -> DayFunnelRecord:
         return DayFunnelRecord(
@@ -713,6 +748,7 @@ def run_day(
     strategy_core_commit: str = "0" * 40,
     strategy_core_source_tree_hash: str = "0" * 64,
     context_replay_tape: ContextReplayTape | None = None,
+    audit_capture_mode: str = "disabled",
 ) -> IfvgDayResult | IfvgContextDayResult:
     """One trading day through the orchestrator — pure over its inputs.
 
@@ -754,6 +790,7 @@ def run_day(
         context_symbol=context_symbol,
         strategy_core_commit=strategy_core_commit,
         strategy_core_source_tree_hash=strategy_core_source_tree_hash,
+        audit_capture_mode=audit_capture_mode,
     )
     orch.reset_funnel()
     for tf, bars in bars_by_tf.items():
@@ -805,6 +842,7 @@ def run_day(
         emissions=tuple(emissions),
         end_seed=orch.end_seed(trading_day),
         funnel=funnel,
+        audit_emissions=orch.drain_audit_emissions(),
     )
     if context_config is None:
         return core

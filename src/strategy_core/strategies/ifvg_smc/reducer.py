@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 import math
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import date, datetime
 from typing import Mapping
 
@@ -30,10 +30,21 @@ from strategy_core.structures.swings import SwingPoint
 from strategy_core.types import Bar, Direction, Level, Side
 
 from .records import (
+    AUDIT_SUBSTEP_CANDIDATE_INTAKE,
+    AUDIT_SUBSTEP_CONTEXT_FILL,
+    AUDIT_SUBSTEP_FSM_TRANSITION,
+    AUDIT_SUBSTEP_PARENTLESS,
+    AUDIT_SUBSTEP_PRETRADE_INVALIDATION,
+    AUDIT_SUBSTEP_RESOLUTION,
+    IFVG_AUDIT_RECORD_SCHEMA_VERSION,
     IFVG_RECORD_SCHEMA_VERSION,
+    AuditStamp,
     EligibleDecisionRecord,
     EntryCandidateRecord,
+    EntryCausalityRecord,
     ExecutedTradeRecord,
+    FvgFillEventRecord,
+    FvgInvalidationEventRecord,
     GeometryDossierRecord,
     GeometryEvidence,
     HtfTapRecord,
@@ -42,12 +53,16 @@ from .records import (
     OpposingGapRecord,
     ParentCandidateRecord,
     ParentLockRecord,
+    ParentSlotDeathRecord,
+    ParentWindowEventRecord,
+    ParentlessStepRecord,
     QuarantineRecord,
     RecordEnvelope,
     SetupLifecycleEventRecord,
     SetupResolutionRecord,
     bar_cursor,
     bar_evidence,
+    make_audit_event_id,
     make_candidate_id,
     make_decision_id,
     make_lifecycle_event_id,
@@ -338,8 +353,23 @@ class IfvgReducerSnapshot:
     executions_by_day: tuple[tuple[date, int], ...] = ()
 
 
+#: Valid values for the opt-in audit channel. NEVER a section/profile field —
+#: the profile hash is untouched and ``disabled`` short-circuits all audit work.
+AUDIT_CAPTURE_MODES = ("disabled", "fsm_audit_v1")
+
+
 class IfvgReducer:
-    def __init__(self, config: IfvgReducerConfig) -> None:
+    def __init__(
+        self,
+        config: IfvgReducerConfig,
+        *,
+        audit_capture_mode: str = "disabled",
+    ) -> None:
+        if audit_capture_mode not in AUDIT_CAPTURE_MODES:
+            raise ValueError(
+                f"audit_capture_mode must be one of {AUDIT_CAPTURE_MODES} "
+                f"(got {audit_capture_mode!r})"
+            )
         self._cfg = config
         self._ordinal = 0
         self._setup: _Setup | None = None
@@ -347,6 +377,26 @@ class IfvgReducer:
         self._seq = 0
         self._funnel: dict[str, int] = {}
         self._executions_by_day: dict[date, int] = {}
+        # ── audit channel state: NEVER snapshotted (seed identity is frozen).
+        # Day-local counters reset on the first bar of a new trading day, so
+        # chained (fresh reducer per day) and continuous drives stamp
+        # identically. Buffers are drained after EVERY step — they never span
+        # any externally observable boundary.
+        self.audit_capture_mode = audit_capture_mode
+        self._audit_enabled = audit_capture_mode == "fsm_audit_v1"
+        self._audit_day: date | None = None
+        self._audit_bar_id: str | None = None
+        self._audit_seq_day = 0
+        self._core_emitted_day = 0
+        self._audit_step_base = 0
+        self._last_step_core_len = 0
+        self._audit_substep = AUDIT_SUBSTEP_FSM_TRANSITION
+        self._audit_substep_counts: dict[str, int] = {}
+        self._audit_step_records: list[IfvgEmission] = []
+        self._audit_pending_fills_pre: list[tuple] = []
+        self._audit_pending_fills_post: list[tuple] = []
+        self._step_bar: Bar | None = None
+        self._step_filled_events: dict[str, FvgFillEvent] = {}
 
     @property
     def phase(self) -> str:
@@ -366,17 +416,430 @@ class IfvgReducer:
     def reset_funnel(self) -> None:
         self._funnel = {}
 
+    # ------------------------------------------------------------------
+    # FSM audit channel (opt-in; "disabled" short-circuits everything)
+
+    def _audit_on_bar(self, bar: Bar) -> None:
+        """Per-bar audit bookkeeping — idempotent per bar; resets the day-local
+        counters on the first bar of a new trading day so chained and
+        continuous drives stamp identically."""
+        if self._audit_bar_id == bar.bar_id:
+            return
+        if (
+            self._audit_step_records
+            or self._audit_pending_fills_pre
+            or self._audit_pending_fills_post
+        ):
+            raise RuntimeError("IFVG audit buffer was not drained before the next step")
+        if self._audit_day != bar.trading_day:
+            self._audit_day = bar.trading_day
+            self._audit_seq_day = 0
+            self._core_emitted_day = 0
+        self._audit_bar_id = bar.bar_id
+        self._audit_step_base = self._core_emitted_day
+        self._audit_substep_counts = {}
+
+    def _audit_stamp(
+        self,
+        *,
+        substep: str,
+        out_len: int,
+        bar_id: str,
+        cursor: str,
+        step_ordinal: int,
+        base: int | None = None,
+    ) -> AuditStamp:
+        ordinal = self._audit_substep_counts.get(substep, 0)
+        self._audit_substep_counts[substep] = ordinal + 1
+        core_base = self._audit_step_base if base is None else base
+        return AuditStamp(
+            audit_schema_version=IFVG_AUDIT_RECORD_SCHEMA_VERSION,
+            source_step_ordinal=step_ordinal,
+            source_bar_id=bar_id,
+            source_bar_cursor=cursor,
+            reducer_substep=substep,
+            reducer_substep_ordinal=ordinal,
+            core_trace_ordinal_before=core_base + out_len - 1,
+            core_trace_ordinal_after=core_base + out_len,
+            audit_seq=-1,  # assigned once, in final order, at drain
+        )
+
+    def _audit_emit(self, kind: str, record: object) -> None:
+        self._audit_step_records.append(IfvgEmission(kind=kind, record=record))
+
+    def _audit_fill_linkage(self, fvg_id: str) -> tuple[str | None, str, bool, str]:
+        s = self._setup
+        if s is None:
+            return None, "registry_only", False, "S0"
+        role = "registry_only"
+        if s.htf.fvg_id == fvg_id:
+            role = "htf"
+        elif s.parent is not None and s.parent.fvg_id == fvg_id:
+            role = "parent"
+        elif s.opposing is not None and s.opposing.fvg_id == fvg_id:
+            role = "opposing"
+        elif (
+            s.geometry is not None
+            and s.geometry.entry_fvg is not None
+            and s.geometry.entry_fvg.fvg_id == fvg_id
+        ):
+            role = "entry"
+        if role == "registry_only":
+            return None, role, False, s.phase
+        return s.setup_id, role, True, s.phase
+
+    def _audit_window_snapshot(
+        self, s: _Setup
+    ) -> tuple[
+        tuple[tuple[int, int], ...],
+        tuple[tuple[int, int], ...],
+        tuple[int, ...],
+    ]:
+        window = self._cfg.parent_reaction_window_parent_bars
+        clocks = tuple(sorted(s.parent_clocks.items()))
+        remaining = tuple((tf, max(0, window - clock)) for tf, clock in clocks)
+        open_tfs = tuple(tf for tf, clock in clocks if clock <= window)
+        return clocks, remaining, open_tfs
+
+    def audit_observe_fill_events(
+        self, events: tuple[FvgFillEvent, ...], bar: Bar
+    ) -> None:
+        """Registry maintenance outcomes for this 1m bar, observed BEFORE the
+        step so linkage reflects the entering setup state; records are
+        finalized (phase_after, death links) at drain."""
+        if not self._audit_enabled or not events:
+            return
+        self._audit_on_bar(bar)
+        cursor = bar_cursor(bar)
+        for event in events:
+            stamp = self._audit_stamp(
+                substep=AUDIT_SUBSTEP_CONTEXT_FILL,
+                out_len=0,
+                bar_id=bar.bar_id,
+                cursor=cursor,
+                step_ordinal=self._ordinal + 1,
+            )
+            setup_id, role, selected, phase = self._audit_fill_linkage(event.fvg_id)
+            self._audit_pending_fills_pre.append(
+                (stamp, event, bar, setup_id, role, selected, phase)
+            )
+
+    def audit_observe_intake_events(
+        self, events: tuple[FvgFillEvent, ...], bar: Bar
+    ) -> None:
+        """Cap-eviction outcomes from the post-step registry intake."""
+        if not self._audit_enabled or not events:
+            return
+        cursor = bar_cursor(bar)
+        for event in events:
+            stamp = self._audit_stamp(
+                substep=AUDIT_SUBSTEP_CONTEXT_FILL,
+                out_len=self._last_step_core_len,
+                bar_id=bar.bar_id,
+                cursor=cursor,
+                step_ordinal=self._ordinal,
+            )
+            setup_id, role, selected, phase = self._audit_fill_linkage(event.fvg_id)
+            self._audit_pending_fills_post.append(
+                (stamp, event, bar, setup_id, role, selected, phase)
+            )
+
+    def _audit_fill_record(
+        self, spec: tuple, phase_after: str, deaths: list
+    ) -> IfvgEmission:
+        stamp, event, bar, setup_id, role, selected, phase_before = spec
+        if event.fvg is None:
+            raise ValueError("audit fill event lacks gap evidence")
+        death_id = None
+        lifecycle_id = None
+        for death in deaths:
+            if death.died_fvg_id == event.fvg_id:
+                death_id = death.event_id
+                lifecycle_id = death.lifecycle_event_id
+                break
+        prior_pen = event.prior_penetration_ticks
+        new_pen = event.new_penetration_ticks
+        record = FvgFillEventRecord(
+            envelope=self._env(bar, setup_id or ""),
+            stamp=stamp,
+            event_kind=event.kind,
+            fvg=event.fvg,
+            bar=bar_evidence(bar),
+            prior_reached_ticks=event.prior_reached_ticks,
+            new_reached_ticks=event.new_reached_ticks,
+            prior_penetration_ticks=prior_pen if prior_pen is not None else 0,
+            new_penetration_ticks=new_pen if new_pen is not None else 0,
+            far_boundary_ticks=event.fvg.far_boundary_ticks,
+            fill_depth_ticks=new_pen if new_pen is not None else 0,
+            remaining_fraction_after=(
+                event.remaining_fraction_after
+                if event.remaining_fraction_after is not None
+                else 1.0
+            ),
+            wick_crossed_far_boundary=event.wick_crossed_far_boundary,
+            body_closed_through_far_boundary=event.body_closed_through_far_boundary,
+            age_seconds=event.age_seconds if event.age_seconds is not None else 0,
+            age_trading_days=(
+                event.age_trading_days if event.age_trading_days is not None else 0
+            ),
+            registry_live_count_after=(
+                event.registry_live_count_after
+                if event.registry_live_count_after is not None
+                else 0
+            ),
+            setup_id=setup_id,
+            fvg_role=role,
+            selected_for_setup=selected,
+            setup_phase_before=phase_before,
+            setup_phase_after=phase_after,
+            linked_slot_death_event_id=death_id,
+            linked_setup_resolution_event_id=lifecycle_id,
+        )
+        return IfvgEmission(kind="fvg_fill_event", record=record)
+
+    def drain_audit(self) -> tuple[IfvgEmission, ...]:
+        """This step's audit emissions in canonical order; clears the buffer.
+
+        Called after EVERY step (and after ``finalize_dataset``), so the
+        buffer never spans an externally observable boundary."""
+        if not self._audit_enabled:
+            return ()
+        if not (
+            self._audit_step_records
+            or self._audit_pending_fills_pre
+            or self._audit_pending_fills_post
+        ):
+            return ()
+        phase_after = self.phase
+        deaths = [
+            emission.record
+            for emission in self._audit_step_records
+            if emission.kind == "parent_slot_death"
+        ]
+        ordered: list[IfvgEmission] = []
+        for spec in self._audit_pending_fills_pre:
+            ordered.append(self._audit_fill_record(spec, phase_after, deaths))
+        ordered.extend(self._audit_step_records)
+        for spec in self._audit_pending_fills_post:
+            ordered.append(self._audit_fill_record(spec, phase_after, deaths))
+        self._audit_step_records = []
+        self._audit_pending_fills_pre = []
+        self._audit_pending_fills_post = []
+        stamped: list[IfvgEmission] = []
+        for emission in ordered:
+            seq = self._audit_seq_day
+            self._audit_seq_day += 1
+            record = emission.record
+            stamped.append(
+                IfvgEmission(
+                    kind=emission.kind,
+                    record=replace(
+                        record, stamp=replace(record.stamp, audit_seq=seq)
+                    ),
+                )
+            )
+        return tuple(stamped)
+
+    def _audit_slot_death(
+        self,
+        s: _Setup,
+        *,
+        reason: str,
+        bar: Bar | None,
+        cursor: str,
+        ts_utc: datetime,
+        trading_day: date,
+        terminated: bool,
+        lifecycle_transition: str,
+        lifecycle_reason: str | None = None,
+        died_fvg_id: str | None = None,
+        structural: bool = False,
+        out_len: int,
+    ) -> None:
+        clocks, remaining, open_tfs = self._audit_window_snapshot(s)
+        fill = (
+            self._step_filled_events.get(died_fvg_id)
+            if died_fvg_id is not None and not structural
+            else None
+        )
+        self._audit_emit(
+            "parent_slot_death",
+            ParentSlotDeathRecord(
+                envelope=self._env_at(
+                    ts_utc,
+                    trading_day,
+                    s.setup_id,
+                    entry_session=s.entry_session or "none",
+                ),
+                stamp=self._audit_stamp(
+                    substep=self._audit_substep,
+                    out_len=out_len,
+                    bar_id=bar.bar_id if bar is not None else "",
+                    cursor=cursor,
+                    step_ordinal=self._ordinal,
+                    base=None if bar is not None else self._core_emitted_day,
+                ),
+                event_id=make_audit_event_id(
+                    "parent_slot_death", s.setup_id, reason, cursor
+                ),
+                setup_id=s.setup_id,
+                phase=s.phase,
+                death_reason=reason,
+                death_ts_utc=ts_utc,
+                parent_fvg_id=s.parent.fvg_id if s.parent is not None else None,
+                died_fvg_id=died_fvg_id,
+                setup_terminated=terminated,
+                lifecycle_event_id=make_lifecycle_event_id(
+                    s.setup_id,
+                    lifecycle_transition,
+                    lifecycle_reason if lifecycle_reason is not None else reason,
+                    cursor,
+                ),
+                bar=bar_evidence(bar) if bar is not None else None,
+                event_cursor=cursor,
+                physical_fill=fill is not None,
+                structural_close=structural,
+                far_boundary_ticks=(
+                    fill.fvg.far_boundary_ticks
+                    if fill is not None and fill.fvg is not None
+                    else None
+                ),
+                prior_reached_ticks=(
+                    fill.prior_reached_ticks if fill is not None else None
+                ),
+                new_reached_ticks=(
+                    fill.new_reached_ticks if fill is not None else None
+                ),
+                fill_depth_ticks=(
+                    fill.new_penetration_ticks if fill is not None else None
+                ),
+                wick_crossed_far_boundary=(
+                    fill.wick_crossed_far_boundary if fill is not None else None
+                ),
+                body_closed_through_far_boundary=(
+                    fill.body_closed_through_far_boundary
+                    if fill is not None
+                    else None
+                ),
+                parent_clocks=clocks,
+                remaining_window_bars_by_tf=remaining,
+                open_window_timeframes=open_tfs,
+                parentless_interval_started=(
+                    not terminated and s.phase == "S1" and bool(open_tfs)
+                ),
+            ),
+        )
+
+    def _audit_invalidation(
+        self,
+        s: _Setup,
+        *,
+        kind: str,
+        source_bar: Bar,
+        boundary_ticks: int,
+        margin: int | None,
+        bar: Bar,
+        out_len: int,
+    ) -> None:
+        assert s.parent is not None
+        self._audit_emit(
+            "fvg_invalidation_event",
+            FvgInvalidationEventRecord(
+                envelope=self._env(bar, s.setup_id),
+                stamp=self._audit_stamp(
+                    substep=AUDIT_SUBSTEP_PRETRADE_INVALIDATION,
+                    out_len=out_len,
+                    bar_id=bar.bar_id,
+                    cursor=bar_cursor(bar),
+                    step_ordinal=self._ordinal,
+                ),
+                event_id=make_audit_event_id(
+                    "fvg_invalidation",
+                    s.setup_id,
+                    kind,
+                    s.parent.fvg_id,
+                    bar_cursor(bar),
+                ),
+                invalidation_kind=kind,
+                setup_id=s.setup_id,
+                parent_fvg_id=s.parent.fvg_id,
+                phase=s.phase,
+                source_timeframe_seconds=source_bar.timeframe_ticks,
+                source_bar=bar_evidence(source_bar),
+                boundary_ticks=boundary_ticks,
+                close_through_margin_ticks=margin,
+                strict_comparison_result=True,
+            ),
+        )
+
+    def _audit_parent_window_event(
+        self,
+        s: _Setup,
+        *,
+        event_kind: str,
+        parent_fvg_id: str | None,
+        prior_parent_fvg_id: str | None,
+        bar: Bar,
+        out_len: int,
+    ) -> None:
+        clocks, _remaining, open_tfs = self._audit_window_snapshot(s)
+        cursor = bar_cursor(bar)
+        self._audit_emit(
+            "parent_window_event",
+            ParentWindowEventRecord(
+                envelope=self._env(bar, s.setup_id),
+                stamp=self._audit_stamp(
+                    substep=self._audit_substep,
+                    out_len=out_len,
+                    bar_id=bar.bar_id,
+                    cursor=cursor,
+                    step_ordinal=self._ordinal,
+                ),
+                event_id=make_audit_event_id(
+                    "parent_window",
+                    s.setup_id,
+                    event_kind,
+                    parent_fvg_id or prior_parent_fvg_id or "none",
+                    cursor,
+                ),
+                event_kind=event_kind,
+                setup_id=s.setup_id,
+                parent_fvg_id=parent_fvg_id,
+                prior_parent_fvg_id=prior_parent_fvg_id,
+                parent_clocks=clocks,
+                open_window_timeframes=open_tfs,
+                event_cursor=cursor,
+            ),
+        )
+
     def step(self, inp: IfvgStepInput) -> tuple[IfvgEmission, ...]:
+        out = self._step_inner(inp)
+        if self._audit_enabled:
+            self._core_emitted_day += len(out)
+            self._last_step_core_len = len(out)
+        return out
+
+    def _step_inner(self, inp: IfvgStepInput) -> tuple[IfvgEmission, ...]:
+        if self._audit_enabled:
+            self._audit_on_bar(inp.bar_1m)
+            self._step_bar = inp.bar_1m
+            self._step_filled_events = {
+                event.fvg_id: event
+                for event in inp.fill_events
+                if event.kind == "filled"
+            }
         self._ordinal += 1
         out: list[IfvgEmission] = []
         self._tick_parent_clocks(inp)
 
+        self._audit_substep = AUDIT_SUBSTEP_PRETRADE_INVALIDATION
         if self._apply_invalidations(inp, out):
             return tuple(out)
         if self._apply_expiries(inp.bar_1m, out):
             return tuple(out)
 
         started_in_trade = self._setup is not None and self._setup.phase == "S5"
+        self._audit_substep = AUDIT_SUBSTEP_FSM_TRANSITION
         if self._setup is None:
             self._scan_taps(inp, out)
         else:
@@ -386,8 +849,10 @@ class IfvgReducer:
                 return tuple(out)
 
         if self._setup is not None:
+            self._audit_substep = AUDIT_SUBSTEP_CANDIDATE_INTAKE
             self._apply_intake(inp, out)
-            self._instrument_parentless_window()
+            self._audit_substep = AUDIT_SUBSTEP_PARENTLESS
+            self._instrument_parentless_window(out)
         if started_in_trade:
             assert self.active_setup_count <= 1 and self.active_trade_count <= 1
         return tuple(out)
@@ -489,6 +954,26 @@ class IfvgReducer:
                 trading_day=trading_day,
                 out=out,
             )
+        if self._audit_enabled:
+            self._audit_substep = AUDIT_SUBSTEP_RESOLUTION
+            self._audit_substep_counts = {}
+            in_trade = s.phase == "S5"
+            self._audit_slot_death(
+                s,
+                reason=(
+                    "dataset_exhaustion" if in_trade else "dataset_exhaustion_pre_entry"
+                ),
+                bar=None,
+                cursor=cursor,
+                ts_utc=last_ts_utc,
+                trading_day=trading_day,
+                terminated=True,
+                lifecycle_transition=(
+                    "trade_unresolved" if in_trade else "setup_ended"
+                ),
+                out_len=len(out),
+            )
+            self._core_emitted_day += len(out)
         self._setup = None
         return tuple(out)
 
@@ -553,6 +1038,8 @@ class IfvgReducer:
         cls,
         snap: IfvgReducerSnapshot,
         config: IfvgReducerConfig,
+        *,
+        audit_capture_mode: str = "disabled",
     ) -> "IfvgReducer":
         if snap.schema_version != REDUCER_SNAPSHOT_SCHEMA_VERSION:
             raise ValueError(
@@ -561,7 +1048,7 @@ class IfvgReducer:
             )
         if snap.profile_hash != config.profile_hash:
             raise ValueError("reducer snapshot profile_hash does not match active profile")
-        reducer = cls(config)
+        reducer = cls(config, audit_capture_mode=audit_capture_mode)
         reducer._ordinal = snap.ordinal
         reducer._seq_day = snap.seq_day
         reducer._seq = snap.seq
@@ -773,7 +1260,13 @@ class IfvgReducer:
         bar = inp.bar_1m
         filled = {event.fvg_id for event in inp.fill_events if event.kind == "filled"}
         if s.htf.fvg_id in filled:
-            self._terminate_pretrade(s, "invalidated_htf_filled", bar, out)
+            self._terminate_pretrade(
+                s,
+                "invalidated_htf_filled",
+                bar,
+                out,
+                died_fvg_id=s.htf.fvg_id,
+            )
             return True
         if (
             self._cfg.parent_full_fill_invalidation
@@ -781,6 +1274,7 @@ class IfvgReducer:
             and s.parent.fvg_id in filled
         ):
             if s.phase == "S1":
+                dead_parent_id = s.parent.fvg_id
                 self._count("candidate_died_filled")
                 self._lifecycle(
                     s,
@@ -791,10 +1285,57 @@ class IfvgReducer:
                     bar=bar,
                     out=out,
                 )
+                if self._audit_enabled:
+                    self._audit_invalidation(
+                        s,
+                        kind="physical_full_fill",
+                        source_bar=bar,
+                        boundary_ticks=s.parent.far_boundary_ticks,
+                        margin=None,
+                        bar=bar,
+                        out_len=len(out),
+                    )
+                    self._audit_slot_death(
+                        s,
+                        reason="parent_filled",
+                        bar=bar,
+                        cursor=bar_cursor(bar),
+                        ts_utc=bar.availability_ts_utc,
+                        trading_day=bar.trading_day,
+                        terminated=False,
+                        lifecycle_transition="parent_candidate_invalidated",
+                        died_fvg_id=dead_parent_id,
+                        out_len=len(out),
+                    )
                 s.parent = None
                 s.parent_selected_ordinal = None
+                if self._audit_enabled:
+                    self._audit_parent_window_event(
+                        s,
+                        event_kind="parent_cleared",
+                        parent_fvg_id=None,
+                        prior_parent_fvg_id=dead_parent_id,
+                        bar=bar,
+                        out_len=len(out),
+                    )
             else:
-                self._terminate_pretrade(s, "invalidated_parent_filled", bar, out)
+                if self._audit_enabled:
+                    self._audit_invalidation(
+                        s,
+                        kind="physical_full_fill",
+                        source_bar=bar,
+                        boundary_ticks=s.parent.far_boundary_ticks,
+                        margin=None,
+                        bar=bar,
+                        out_len=len(out),
+                    )
+                self._terminate_pretrade(
+                    s,
+                    "invalidated_parent_filled",
+                    bar,
+                    out,
+                    died_fvg_id=s.parent.fvg_id,
+                )
                 return True
         if (
             self._cfg.parent_structural_invalidation
@@ -816,7 +1357,21 @@ class IfvgReducer:
                 )
             )
             if structural:
+                boundary = (
+                    s.parent.gap_low_ticks
+                    if s.parent.direction is GapDirection.BULLISH
+                    else s.parent.gap_high_ticks
+                )
+                side = (
+                    Side.LOW
+                    if s.parent.direction is GapDirection.BULLISH
+                    else Side.HIGH
+                )
+                margin = close_through_margin_ticks(
+                    tf_bar, boundary_ticks=boundary, beyond=side
+                )
                 if s.phase == "S1":
+                    dead_parent_id = s.parent.fvg_id
                     self._count("candidate_died_structural")
                     self._lifecycle(
                         s,
@@ -827,11 +1382,58 @@ class IfvgReducer:
                         bar=bar,
                         out=out,
                     )
+                    if self._audit_enabled:
+                        self._audit_invalidation(
+                            s,
+                            kind="structural_body_close",
+                            source_bar=tf_bar,
+                            boundary_ticks=boundary,
+                            margin=margin,
+                            bar=bar,
+                            out_len=len(out),
+                        )
+                        self._audit_slot_death(
+                            s,
+                            reason="parent_structural_close",
+                            bar=bar,
+                            cursor=bar_cursor(bar),
+                            ts_utc=bar.availability_ts_utc,
+                            trading_day=bar.trading_day,
+                            terminated=False,
+                            lifecycle_transition="parent_candidate_invalidated",
+                            died_fvg_id=dead_parent_id,
+                            structural=True,
+                            out_len=len(out),
+                        )
                     s.parent = None
                     s.parent_selected_ordinal = None
+                    if self._audit_enabled:
+                        self._audit_parent_window_event(
+                            s,
+                            event_kind="parent_cleared",
+                            parent_fvg_id=None,
+                            prior_parent_fvg_id=dead_parent_id,
+                            bar=bar,
+                            out_len=len(out),
+                        )
                 else:
+                    if self._audit_enabled:
+                        self._audit_invalidation(
+                            s,
+                            kind="structural_body_close",
+                            source_bar=tf_bar,
+                            boundary_ticks=boundary,
+                            margin=margin,
+                            bar=bar,
+                            out_len=len(out),
+                        )
                     self._terminate_pretrade(
-                        s, "invalidated_parent_structural", bar, out
+                        s,
+                        "invalidated_parent_structural",
+                        bar,
+                        out,
+                        died_fvg_id=s.parent.fvg_id,
+                        structural=True,
                     )
                     return True
         return False
@@ -896,7 +1498,7 @@ class IfvgReducer:
             return True
         return False
 
-    def _instrument_parentless_window(self) -> None:
+    def _instrument_parentless_window(self, out: list[IfvgEmission]) -> None:
         s = self._setup
         if (
             s is not None
@@ -909,6 +1511,26 @@ class IfvgReducer:
             )
         ):
             self._count("parentless_window_live")
+            if self._audit_enabled and self._step_bar is not None:
+                bar = self._step_bar
+                clocks, _remaining, open_tfs = self._audit_window_snapshot(s)
+                self._audit_emit(
+                    "parentless_step",
+                    ParentlessStepRecord(
+                        envelope=self._env(bar, s.setup_id),
+                        stamp=self._audit_stamp(
+                            substep=AUDIT_SUBSTEP_PARENTLESS,
+                            out_len=len(out),
+                            bar_id=bar.bar_id,
+                            cursor=bar_cursor(bar),
+                            step_ordinal=self._ordinal,
+                        ),
+                        setup_id=s.setup_id,
+                        bar=bar_evidence(bar),
+                        parent_clocks=clocks,
+                        open_window_timeframes=open_tfs,
+                    ),
+                )
 
     def _terminate_pretrade(
         self,
@@ -916,6 +1538,9 @@ class IfvgReducer:
         reason: str,
         bar: Bar,
         out: list[IfvgEmission],
+        *,
+        died_fvg_id: str | None = None,
+        structural: bool = False,
     ) -> None:
         self._count(reason)
         self._lifecycle(
@@ -933,6 +1558,20 @@ class IfvgReducer:
                 record=self._compat_resolution(s, reason, bar),
             )
         )
+        if self._audit_enabled:
+            self._audit_slot_death(
+                s,
+                reason=reason,
+                bar=bar,
+                cursor=bar_cursor(bar),
+                ts_utc=bar.availability_ts_utc,
+                trading_day=bar.trading_day,
+                terminated=True,
+                lifecycle_transition="setup_ended",
+                died_fvg_id=died_fvg_id,
+                structural=structural,
+                out_len=len(out),
+            )
         self._setup = None
 
     # ------------------------------------------------------------------
@@ -1099,6 +1738,15 @@ class IfvgReducer:
                     bar=bar,
                     out=out,
                 )
+                if self._audit_enabled:
+                    self._audit_parent_window_event(
+                        setup,
+                        event_kind="opened",
+                        parent_fvg_id=None,
+                        prior_parent_fvg_id=None,
+                        bar=bar,
+                        out_len=len(out),
+                    )
 
     def _tap_scan_while_occupied(
         self,
@@ -1275,7 +1923,7 @@ class IfvgReducer:
         bar = inp.bar_1m
         if s.inversion_ordinal is None or s.inversion_ordinal >= self._ordinal:
             return
-        triggers: list[tuple[str, Fvg | None, str, bool]] = []
+        triggers: list[tuple[str, Fvg | None, str, bool, bool | None, bool | None]] = []
         wanted = self._trade_direction_to_gap(s.direction)
         for gap in inp.new_fvgs.get(60, ()):
             if gap.direction is wanted:
@@ -1284,13 +1932,14 @@ class IfvgReducer:
                     trigger_ts=s.inversion_ts_utc,
                     policy=self._cfg.causality_entry,
                 )
-                del confirmed, fully
                 triggers.append(
                     (
                         "fresh_fvg_continuation",
                         gap,
                         gap.fvg_id,
                         satisfied,
+                        confirmed,
+                        fully,
                     )
                 )
         if self._retest_triggered(bar, s):
@@ -1300,9 +1949,11 @@ class IfvgReducer:
                     None,
                     f"{self._cfg.retest_trigger}|{bar_cursor(bar)}",
                     True,
+                    None,
+                    None,
                 )
             )
-        for family, entry_gap, evidence_id, causality_ok in triggers:
+        for family, entry_gap, evidence_id, causality_ok, confirmed, fully in triggers:
             self._emit_candidate(
                 inp,
                 s,
@@ -1310,6 +1961,8 @@ class IfvgReducer:
                 entry_gap=entry_gap,
                 evidence_id=evidence_id,
                 causality_ok=causality_ok,
+                causality_confirmed=confirmed,
+                causality_fully=fully,
                 out=out,
             )
 
@@ -1357,6 +2010,8 @@ class IfvgReducer:
         entry_gap: Fvg | None,
         evidence_id: str,
         causality_ok: bool,
+        causality_confirmed: bool | None = None,
+        causality_fully: bool | None = None,
         out: list[IfvgEmission],
     ) -> None:
         bar = inp.bar_1m
@@ -1394,6 +2049,33 @@ class IfvgReducer:
             entry_gap.fvg_id if entry_gap is not None else f"{evidence_id}"
         )
         candidate_id = make_candidate_id(s.setup_id, family, trigger_cursor)
+        if self._audit_enabled:
+            self._audit_emit(
+                "entry_joint_causality",
+                EntryCausalityRecord(
+                    envelope=self._env(
+                        bar, s.setup_id, entry_session=inp.session_doc
+                    ),
+                    stamp=self._audit_stamp(
+                        substep=self._audit_substep,
+                        out_len=len(out),
+                        bar_id=bar.bar_id,
+                        cursor=bar_cursor(bar),
+                        step_ordinal=self._ordinal,
+                    ),
+                    candidate_id=candidate_id,
+                    setup_id=s.setup_id,
+                    entry_family=family,
+                    entry_fvg_id=(
+                        entry_gap.fvg_id if entry_gap is not None else None
+                    ),
+                    policy=self._cfg.causality_entry,
+                    trigger_ts_utc=s.inversion_ts_utc,
+                    confirmed_after=causality_confirmed,
+                    fully_formed_after=causality_fully,
+                    satisfied=causality_ok,
+                ),
+            )
         geometry = self._geometry(
             s,
             bar=bar,
@@ -1760,6 +2442,20 @@ class IfvgReducer:
                 ),
             )
         )
+        if self._audit_enabled:
+            self._audit_substep = AUDIT_SUBSTEP_RESOLUTION
+            self._audit_slot_death(
+                s,
+                reason="slot_freed",
+                bar=bar,
+                cursor=bar_cursor(bar),
+                ts_utc=bar.availability_ts_utc,
+                trading_day=bar.trading_day,
+                terminated=True,
+                lifecycle_transition="trade_resolved",
+                lifecycle_reason=resolution,
+                out_len=len(out),
+            )
         self._setup = None
 
     # ------------------------------------------------------------------
@@ -1860,8 +2556,18 @@ class IfvgReducer:
                 )
             )
             if selected:
+                prior_parent_id = s.parent.fvg_id if s.parent is not None else None
                 s.parent = gap
                 s.parent_selected_ordinal = self._ordinal
+                if self._audit_enabled:
+                    self._audit_parent_window_event(
+                        s,
+                        event_kind="parent_selected",
+                        parent_fvg_id=gap.fvg_id,
+                        prior_parent_fvg_id=prior_parent_id,
+                        bar=bar,
+                        out_len=len(out),
+                    )
 
     def _intake_opposing(
         self,

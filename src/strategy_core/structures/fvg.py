@@ -318,11 +318,32 @@ class FvgState:
 
 @dataclass(frozen=True, slots=True)
 class FvgFillEvent:
-    """Registry maintenance outcome for one gap on one execution bar."""
+    """Registry maintenance outcome for one gap on one execution bar.
+
+    The evidence fields below default to ``None`` and are populated by the
+    registry for the FSM audit channel; every existing consumer reads only
+    ``fvg_id``/``kind``. This dataclass is never snapshotted, so enriching it
+    cannot move any seed hash. ``prior_*`` values are captured BEFORE the
+    bar's mutation of :class:`FvgState`; ``new_*``/``remaining_fraction_after``
+    after it. Cap evictions have no triggering execution bar, so their wick/
+    body flags stay ``None`` and ages are measured against the confirming
+    gap's instant.
+    """
 
     fvg_id: str
     kind: str  # "first_touch" | "filled" | "evicted_cap" | "evicted_age"
     ts_utc: datetime
+    fvg: Fvg | None = None
+    prior_reached_ticks: int | None = None
+    new_reached_ticks: int | None = None
+    prior_penetration_ticks: int | None = None
+    new_penetration_ticks: int | None = None
+    remaining_fraction_after: float | None = None
+    wick_crossed_far_boundary: bool | None = None
+    body_closed_through_far_boundary: bool | None = None
+    age_seconds: int | None = None
+    age_trading_days: int | None = None
+    registry_live_count_after: int | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -376,11 +397,27 @@ class FvgRegistry:
         if self.max_live is not None:
             while len(self._live) > self.max_live:
                 evicted = self._live.pop(0)  # oldest first (insertion = confirmation order)
+                penetration = evicted.penetration_so_far_ticks()
                 events.append(
                     FvgFillEvent(
                         fvg_id=evicted.fvg.fvg_id,
                         kind="evicted_cap",
                         ts_utc=fvg.confirmed_ts_utc,
+                        fvg=evicted.fvg,
+                        prior_reached_ticks=evicted.reached_ticks,
+                        new_reached_ticks=evicted.reached_ticks,
+                        prior_penetration_ticks=penetration,
+                        new_penetration_ticks=penetration,
+                        remaining_fraction_after=evicted.remaining_fraction(),
+                        age_seconds=int(
+                            (
+                                fvg.confirmed_ts_utc - evicted.fvg.confirmed_ts_utc
+                            ).total_seconds()
+                        ),
+                        age_trading_days=(
+                            fvg.trading_day - evicted.fvg.trading_day
+                        ).days,
+                        registry_live_count_after=len(self._live),
                     )
                 )
         return tuple(events)
@@ -393,7 +430,7 @@ class FvgRegistry:
         touches it). Emits first_touch / filled / evicted_age events in live-set
         order; filled and age-evicted gaps leave the live set.
         """
-        events: list[FvgFillEvent] = []
+        pending: list[tuple[str, FvgState, int | None, int]] = []
         survivors: list[FvgState] = []
         for state in self._live:
             gap = state.fvg
@@ -405,16 +442,16 @@ class FvgRegistry:
                 self.max_age_days is not None
                 and (bar.trading_day - gap.trading_day).days > self.max_age_days
             ):
-                events.append(
-                    FvgFillEvent(fvg_id=gap.fvg_id, kind="evicted_age", ts_utc=availability)
+                pending.append(
+                    ("evicted_age", state, state.reached_ticks, state.penetration_so_far_ticks())
                 )
                 continue
             if wick_overlaps(bar, gap.gap_low_ticks, gap.gap_high_ticks):
-                if state.first_touch_ts_utc is None:
+                first = state.first_touch_ts_utc is None
+                prior_reached = state.reached_ticks
+                prior_penetration = state.penetration_so_far_ticks()
+                if first:
                     state.first_touch_ts_utc = availability
-                    events.append(
-                        FvgFillEvent(fvg_id=gap.fvg_id, kind="first_touch", ts_utc=availability)
-                    )
                 extreme = bar.low_ticks if gap.direction is GapDirection.BULLISH else bar.high_ticks
                 if state.reached_ticks is None:
                     state.reached_ticks = extreme
@@ -422,6 +459,8 @@ class FvgRegistry:
                     state.reached_ticks = min(state.reached_ticks, extreme)
                 else:
                     state.reached_ticks = max(state.reached_ticks, extreme)
+                if first:
+                    pending.append(("first_touch", state, prior_reached, prior_penetration))
                 traversed = (
                     state.reached_ticks <= gap.gap_low_ticks
                     if gap.direction is GapDirection.BULLISH
@@ -429,12 +468,41 @@ class FvgRegistry:
                 )
                 if traversed:
                     state.filled_ts_utc = availability
-                    events.append(
-                        FvgFillEvent(fvg_id=gap.fvg_id, kind="filled", ts_utc=availability)
-                    )
+                    pending.append(("filled", state, prior_reached, prior_penetration))
                     continue  # dead context — leaves the live set
             survivors.append(state)
         self._live = survivors
+        live_after = len(survivors)
+        events: list[FvgFillEvent] = []
+        for kind, state, prior_reached, prior_penetration in pending:
+            gap = state.fvg
+            far_side = Side.LOW if gap.direction is GapDirection.BULLISH else Side.HIGH
+            events.append(
+                FvgFillEvent(
+                    fvg_id=gap.fvg_id,
+                    kind=kind,
+                    ts_utc=bar.availability_ts_utc,
+                    fvg=gap,
+                    prior_reached_ticks=prior_reached,
+                    new_reached_ticks=state.reached_ticks,
+                    prior_penetration_ticks=prior_penetration,
+                    new_penetration_ticks=state.penetration_so_far_ticks(),
+                    remaining_fraction_after=state.remaining_fraction(),
+                    wick_crossed_far_boundary=(
+                        bar.low_ticks <= gap.gap_low_ticks
+                        if gap.direction is GapDirection.BULLISH
+                        else bar.high_ticks >= gap.gap_high_ticks
+                    ),
+                    body_closed_through_far_boundary=body_closes_through(
+                        bar, boundary_ticks=gap.far_boundary_ticks, beyond=far_side
+                    ),
+                    age_seconds=int(
+                        (bar.availability_ts_utc - gap.confirmed_ts_utc).total_seconds()
+                    ),
+                    age_trading_days=(bar.trading_day - gap.trading_day).days,
+                    registry_live_count_after=live_after,
+                )
+            )
         return tuple(events)
 
     def live(self) -> tuple[FvgState, ...]:

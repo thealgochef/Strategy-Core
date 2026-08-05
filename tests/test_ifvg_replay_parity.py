@@ -168,6 +168,114 @@ def test_chained_run_day_equals_continuous_orchestrator() -> None:
     assert total.get("setups_born", 0) >= 1
 
 
+def test_seed_hash_goldens_unchanged_by_audit_channel() -> None:
+    """Golden hex digests recorded on the PRE-audit-channel tree (commit
+    f16d27d0): the seed graph is frozen, so these can never move without a
+    ratified schema bump — and the audit channel must not move them."""
+    goldens = (
+        "fcd5cdf76fd288294c5f3e5fd288708aca82b033399c69898b761f7ae55874b5",
+        "2887bf357bc3bcbec0a90b346814a450e34dc1185015a71d68f96947a4084db3",
+        "1bfebf0c10d5407235d8760a579b44ade10d8c18bfa40da1ef78d64ed9718e79",
+    )
+    section = default_ifvg_smc_section()
+    for audit_mode in ("disabled", "fsm_audit_v1"):
+        seed = None
+        for day_idx, by_tf in enumerate(_three_days()):
+            result = run_day(
+                by_tf,
+                section=section,
+                seed=seed,
+                trading_day=_DAY0 + timedelta(days=day_idx),
+                audit_capture_mode=audit_mode,
+            )
+            seed = result.end_seed
+            assert seed_hash(seed) == goldens[day_idx], (audit_mode, day_idx)
+
+
+def test_audit_channel_parity_across_drive_modes() -> None:
+    """Chained per-day run_day and one continuous orchestrator produce
+    IDENTICAL audit tuples — the audit twin of the cache-trust theorem — and
+    identical core emissions vs an audit-disabled run."""
+    section = default_ifvg_smc_section()
+    days = _three_days()
+
+    chained_core: list = []
+    chained_audit: list[tuple] = []
+    seed = None
+    for day_idx, by_tf in enumerate(days):
+        result = run_day(
+            by_tf,
+            section=section,
+            seed=seed,
+            trading_day=_DAY0 + timedelta(days=day_idx),
+            dataset_exhausted=day_idx == len(days) - 1,
+            audit_capture_mode="fsm_audit_v1",
+        )
+        chained_core.extend(result.emissions)
+        chained_audit.append(result.audit_emissions)
+        seed = result.end_seed
+
+    plain_core: list = []
+    seed = None
+    for day_idx, by_tf in enumerate(days):
+        result = run_day(
+            by_tf,
+            section=section,
+            seed=seed,
+            trading_day=_DAY0 + timedelta(days=day_idx),
+            dataset_exhausted=day_idx == len(days) - 1,
+        )
+        assert result.audit_emissions == ()
+        plain_core.extend(result.emissions)
+        seed = result.end_seed
+
+    assert len(chained_core) == len(plain_core)
+    for a, b in zip(chained_core, plain_core):
+        assert a.kind == b.kind
+        if a.kind != "funnel":
+            assert a.record == b.record
+
+    orch = DayOrchestrator(
+        section=section, seed=None, audit_capture_mode="fsm_audit_v1"
+    )
+    continuous_audit: list[tuple] = []
+    for day_idx, by_tf in enumerate(days):
+        trading_day = _DAY0 + timedelta(days=day_idx)
+        orch.reset_funnel()
+        for tf, bars in by_tf.items():
+            if tf == 60:
+                continue
+            for bar in bars:
+                orch.on_higher_tf_bar(bar)
+        for bar in by_tf[60]:
+            orch.on_decision_bar(bar)
+        orch.finalize_day(trading_day)
+        if day_idx == len(days) - 1:
+            orch.finalize_dataset(trading_day)
+        continuous_audit.append(orch.drain_audit_emissions())
+
+    assert sum(len(day) for day in chained_audit) > 0
+    for day_idx, (a, b) in enumerate(zip(chained_audit, continuous_audit)):
+        assert len(a) == len(b), day_idx
+        for x, y in zip(a, b):
+            assert x.kind == y.kind and x.record == y.record
+
+    # single total order per day: audit_seq strictly monotone, substep keys
+    # unambiguous (a tie here is a contract failure).
+    for day_audit in chained_audit:
+        seqs = [e.record.stamp.audit_seq for e in day_audit]
+        assert seqs == sorted(seqs) and len(set(seqs)) == len(seqs)
+        keys = [
+            (
+                e.record.stamp.source_step_ordinal,
+                e.record.stamp.reducer_substep,
+                e.record.stamp.reducer_substep_ordinal,
+            )
+            for e in day_audit
+        ]
+        assert len(set(keys)) == len(keys)
+
+
 def test_plugin_fold_equals_run_day() -> None:
     from strategy_core.strategies.ifvg_smc.plugin import IfvgSmcPlugin
 

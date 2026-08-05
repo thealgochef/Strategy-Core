@@ -14,6 +14,21 @@ from strategy_core.types import Bar, Direction
 
 __all__ = [
     "IFVG_RECORD_SCHEMA_VERSION",
+    "IFVG_AUDIT_RECORD_SCHEMA_VERSION",
+    "AUDIT_SUBSTEP_CONTEXT_FILL",
+    "AUDIT_SUBSTEP_PRETRADE_INVALIDATION",
+    "AUDIT_SUBSTEP_FSM_TRANSITION",
+    "AUDIT_SUBSTEP_CANDIDATE_INTAKE",
+    "AUDIT_SUBSTEP_PARENTLESS",
+    "AUDIT_SUBSTEP_RESOLUTION",
+    "AuditStamp",
+    "FvgFillEventRecord",
+    "EntryCausalityRecord",
+    "ParentSlotDeathRecord",
+    "FvgInvalidationEventRecord",
+    "ParentWindowEventRecord",
+    "ParentlessStepRecord",
+    "make_audit_event_id",
     "RecordEnvelope",
     "BarEvidence",
     "CausalityEvidence",
@@ -422,3 +437,183 @@ class SetupResolutionRecord:
 class IfvgEmission:
     kind: str
     record: object
+
+
+# ── FSM audit channel (parallel to the v2 emission trace; never in-band) ─────
+#
+# Audit records ride a SEPARATE per-step-drained channel so the v2 trace —
+# whose QL-assigned ``trace_ordinal`` and column union are content-hashed in
+# accepted artifacts — is byte-identical with the channel on or off. Every
+# audit record carries an :class:`AuditStamp` fixing one total order across
+# both channels.
+
+IFVG_AUDIT_RECORD_SCHEMA_VERSION = 1
+
+AUDIT_SUBSTEP_CONTEXT_FILL = "01_context_fill_maintenance"
+AUDIT_SUBSTEP_PRETRADE_INVALIDATION = "02_pretrade_invalidation"
+AUDIT_SUBSTEP_FSM_TRANSITION = "03_fsm_transition"
+AUDIT_SUBSTEP_CANDIDATE_INTAKE = "04_candidate_intake"
+AUDIT_SUBSTEP_PARENTLESS = "05_parentless_instrumentation"
+AUDIT_SUBSTEP_RESOLUTION = "06_resolution"
+
+
+def make_audit_event_id(kind: str, *parts: object) -> str:
+    return _uuid5(f"audit_{kind}", *parts)
+
+
+@dataclass(frozen=True, slots=True)
+class AuditStamp:
+    """Cross-channel ordering contract carried by EVERY audit record.
+
+    ``core_trace_ordinal_before``/``_after`` are DAY-LOCAL ordinals of the
+    core (non-funnel) emissions bracketing this record — the audit row sits
+    strictly between core rows ``before`` and ``after`` (``before`` is ``-1``
+    when no core row precedes it that day). QL adds the day's chain offset to
+    obtain global ``trace_ordinal`` brackets. Verifier ordering:
+    ``source_step_ordinal → reducer_substep → reducer_substep_ordinal →
+    audit_seq``; timestamps are a display fallback only. Ties are a test
+    failure.
+    """
+
+    audit_schema_version: int
+    source_step_ordinal: int
+    source_bar_id: str
+    source_bar_cursor: str
+    reducer_substep: str
+    reducer_substep_ordinal: int
+    core_trace_ordinal_before: int
+    core_trace_ordinal_after: int
+    audit_seq: int
+
+
+@dataclass(frozen=True, slots=True)
+class FvgFillEventRecord:
+    """One registry maintenance outcome (touch/fill/eviction) with setup
+    linkage resolved from live state at the emission moment — never recovered
+    later by timestamp matching."""
+
+    envelope: RecordEnvelope
+    stamp: AuditStamp
+    event_kind: str  # first_touch | filled | evicted_age | evicted_cap
+    fvg: Fvg
+    bar: BarEvidence  # the 1m execution bar of the emission step
+    prior_reached_ticks: int | None
+    new_reached_ticks: int | None
+    prior_penetration_ticks: int
+    new_penetration_ticks: int
+    far_boundary_ticks: int
+    fill_depth_ticks: int
+    remaining_fraction_after: float
+    wick_crossed_far_boundary: bool | None  # None: cap eviction has no bar
+    body_closed_through_far_boundary: bool | None
+    age_seconds: int
+    age_trading_days: int
+    registry_live_count_after: int
+    setup_id: str | None
+    fvg_role: str  # htf | parent | opposing | entry | registry_only
+    selected_for_setup: bool
+    setup_phase_before: str
+    setup_phase_after: str
+    linked_slot_death_event_id: str | None
+    linked_setup_resolution_event_id: str | None
+
+
+@dataclass(frozen=True, slots=True)
+class EntryCausalityRecord:
+    """The entry-joint causality counterfactual, candidate-keyed (exact join
+    to the v2 ``entry_candidate`` row; that schema is untouched)."""
+
+    envelope: RecordEnvelope
+    stamp: AuditStamp
+    candidate_id: str
+    setup_id: str
+    entry_family: str
+    entry_fvg_id: str | None  # None for the retest family (no entry gap)
+    policy: str
+    trigger_ts_utc: datetime | None
+    confirmed_after: bool | None  # None when the family has no entry gap
+    fully_formed_after: bool | None
+    satisfied: bool
+
+
+@dataclass(frozen=True, slots=True)
+class ParentSlotDeathRecord:
+    """Provisional-parent death (S1) or setup-terminal death at any stage,
+    with the fill-depth and window-clock evidence the lifecycle row lacks."""
+
+    envelope: RecordEnvelope
+    stamp: AuditStamp
+    event_id: str
+    setup_id: str
+    phase: str  # phase at death
+    death_reason: str
+    death_ts_utc: datetime
+    parent_fvg_id: str | None  # None: parentless expiry / no parent at death
+    died_fvg_id: str | None  # gap whose fill caused death (htf or parent)
+    setup_terminated: bool  # False only for S1 provisional-parent death
+    lifecycle_event_id: str | None  # join key to the v2 lifecycle row
+    bar: BarEvidence | None  # None: dataset-exhaustion death has no bar
+    event_cursor: str
+    physical_fill: bool
+    structural_close: bool
+    far_boundary_ticks: int | None
+    prior_reached_ticks: int | None
+    new_reached_ticks: int | None
+    fill_depth_ticks: int | None
+    wick_crossed_far_boundary: bool | None
+    body_closed_through_far_boundary: bool | None
+    parent_clocks: tuple[tuple[int, int], ...]
+    remaining_window_bars_by_tf: tuple[tuple[int, int], ...]
+    open_window_timeframes: tuple[int, ...]
+    parentless_interval_started: bool
+
+
+@dataclass(frozen=True, slots=True)
+class FvgInvalidationEventRecord:
+    """Structural-vs-physical parent invalidation evidence. Emitted at both
+    branches even while the artifact shows zero structural terminal deaths —
+    the contract supports the active rule."""
+
+    envelope: RecordEnvelope
+    stamp: AuditStamp
+    event_id: str
+    invalidation_kind: str  # physical_full_fill | structural_body_close
+    setup_id: str
+    parent_fvg_id: str
+    phase: str
+    source_timeframe_seconds: int
+    source_bar: BarEvidence  # parent-TF bar for structural; 1m bar otherwise
+    boundary_ticks: int
+    close_through_margin_ticks: int | None  # structural only
+    strict_comparison_result: bool
+
+
+@dataclass(frozen=True, slots=True)
+class ParentWindowEventRecord:
+    """Parent reaction-window timeline: opened / parent_selected /
+    parent_cleared, with the clocks snapshot at the event."""
+
+    envelope: RecordEnvelope
+    stamp: AuditStamp
+    event_id: str
+    event_kind: str  # opened | parent_selected | parent_cleared
+    setup_id: str
+    parent_fvg_id: str | None  # None for opened / cleared-to-empty
+    prior_parent_fvg_id: str | None  # replacement evidence
+    parent_clocks: tuple[tuple[int, int], ...]
+    open_window_timeframes: tuple[int, ...]
+    event_cursor: str
+
+
+@dataclass(frozen=True, slots=True)
+class ParentlessStepRecord:
+    """One counted parentless S1 bar — 1:1 with each
+    ``parentless_window_live`` increment, so interval derivation reconciles
+    exactly by construction. QL groups consecutive steps into intervals."""
+
+    envelope: RecordEnvelope
+    stamp: AuditStamp
+    setup_id: str
+    bar: BarEvidence
+    parent_clocks: tuple[tuple[int, int], ...]
+    open_window_timeframes: tuple[int, ...]

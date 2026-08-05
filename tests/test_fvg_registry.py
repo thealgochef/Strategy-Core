@@ -125,6 +125,75 @@ def test_age_eviction_counted() -> None:
     assert reg.live() == ()
 
 
+def test_fill_events_carry_audit_evidence() -> None:
+    """Enriched FvgFillEvent fields: prior/new extremes and penetration,
+    remaining fraction, boundary flags, ages, live count — populated for the
+    audit channel while consumers still read only fvg_id/kind."""
+    gap = _bullish_gap()  # [102, 105], size 3, far boundary 102
+    reg = FvgRegistry(timeframe_seconds=60)
+    reg.add(gap)
+    touch = _bar(3, 106, 107, 104, 106)
+    (event,) = reg.on_execution_bar(touch)
+    assert event.kind == "first_touch"
+    assert event.fvg == gap
+    assert event.prior_reached_ticks is None and event.new_reached_ticks == 104
+    assert event.prior_penetration_ticks == 0 and event.new_penetration_ticks == 1
+    assert abs(event.remaining_fraction_after - 2 / 3) < 1e-12
+    assert event.wick_crossed_far_boundary is False
+    assert event.body_closed_through_far_boundary is False
+    assert event.age_seconds == int(
+        (touch.availability_ts_utc - gap.confirmed_ts_utc).total_seconds()
+    )
+    assert event.age_trading_days == 0
+    assert event.registry_live_count_after == 1
+
+    fill = _bar(5, 106, 107, 102, 106)
+    (filled,) = reg.on_execution_bar(fill)
+    assert filled.kind == "filled"
+    assert filled.prior_reached_ticks == 104 and filled.new_reached_ticks == 102
+    assert filled.prior_penetration_ticks == 1 and filled.new_penetration_ticks == 3
+    assert filled.remaining_fraction_after == 0.0
+    assert filled.wick_crossed_far_boundary is True
+    assert filled.body_closed_through_far_boundary is False  # close 106 not < 102
+    assert filled.registry_live_count_after == 0
+
+
+def test_cap_eviction_event_carries_audit_evidence() -> None:
+    reg = FvgRegistry(timeframe_seconds=60, max_live=1)
+    g1 = _bullish_gap()
+    bars2 = [
+        _bar(10, 200, 202, 199, 201),
+        _bar(11, 201, 204, 200, 204),
+        _bar(12, 205, 208, 205, 207),
+    ]
+    g2 = detect_fvgs_over_bars(bars2, timeframe_seconds=60)[0]
+    reg.add(g1)
+    (event,) = reg.add(g2)
+    assert event.kind == "evicted_cap" and event.fvg == g1
+    assert event.prior_reached_ticks is None and event.new_reached_ticks is None
+    assert event.prior_penetration_ticks == 0 and event.new_penetration_ticks == 0
+    assert event.remaining_fraction_after == 1.0
+    # Cap eviction has no triggering execution bar: boundary flags stay None.
+    assert event.wick_crossed_far_boundary is None
+    assert event.body_closed_through_far_boundary is None
+    assert event.age_seconds == int(
+        (g2.confirmed_ts_utc - g1.confirmed_ts_utc).total_seconds()
+    )
+    assert event.registry_live_count_after == 1
+
+
+def test_age_eviction_event_carries_audit_evidence() -> None:
+    gap = _bullish_gap()
+    reg = FvgRegistry(timeframe_seconds=60, max_age_days=2)
+    reg.add(gap)
+    later = _bar(0, 300, 301, 299, 300, day=_DAY + timedelta(days=3))
+    (event,) = reg.on_execution_bar(later)
+    assert event.kind == "evicted_age" and event.fvg == gap
+    assert event.age_trading_days == 3
+    assert event.prior_penetration_ticks == 0 and event.new_penetration_ticks == 0
+    assert event.registry_live_count_after == 0
+
+
 def test_snapshot_roundtrip_preserves_tracking_state() -> None:
     gap = _bullish_gap()
     reg = FvgRegistry(timeframe_seconds=60, max_live=8, max_age_days=15)
