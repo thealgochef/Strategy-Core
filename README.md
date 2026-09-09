@@ -4,7 +4,7 @@ Shared, versioned strategy engine for zero-drift parity between **Quant-Lab** re
 
 `strategy-core` owns the strategy mechanics that must not drift: Databento historical/live normalization boundaries, deterministic event ordering, replay/runtime state, tick bars, sessions, zones, first-touch detection, feature formulas, outcome resolution, honest decision-time entry orchestration, and the versioned `strategy.json` schema/loader.
 
-> Current status: **engine v3 plus the shared market-data runtime are implemented and unit-tested**. The full suite (`tests/` + `validation/`) runs in CI on Python 3.13 via `python -m pytest -q`. Quant-Lab imports this engine for dashboard-utility training and contract emission. Trade-Lab backend now routes replay/live runtime bars, sessions, levels, zones, and touches through a Strategy-Core adapter, but model-bundle activation/parity remains gated; see [`V3_COMPATIBILITY_MATRIX.md`](V3_COMPATIBILITY_MATRIX.md) and [`MIGRATION.md`](MIGRATION.md).
+> Source checked: **2026-09-08**. The package provides the shared market-data runtime and strategy-plugin interfaces, including `touch_reversal` and `ifvg_smc`. CI runs `tests/` + `validation/` on Python 3.13 via `python -m pytest -q`. Consumer activation and deployment status require evidence from the consumer repository; [`V3_COMPATIBILITY_MATRIX.md`](V3_COMPATIBILITY_MATRIX.md) and [`MIGRATION.md`](MIGRATION.md) are historical migration snapshots.
 
 ---
 
@@ -27,9 +27,14 @@ Runtime import intent: stdlib + `numpy` + `pydantic`; pandas is loaded lazily by
 | Stamp | Current value | Meaning |
 |---|---:|---|
 | `PLATFORM_VERSION` | `strategy_core_platform_v1` | Structural platform (decision/candle) semantics that a model bundle binds to (the engine axis renamed at E1; per-plugin `strategy_version` is the second axis). A mismatch must fail closed. |
-| `CONTRACT_VERSION` | `trade_lab_contract_v2` | Shape/version of `strategy.json`. v2 carries the two-axis binding: required `platform_version` + `strategy_version`, `label_policy.decision_offset_minutes`, and optional research audit metadata. |
+| `CONTRACT_VERSION` | `trade_lab_contract_v3` | Shape/version of `strategy.json`: a platform envelope with required `platform_version` + `strategy_version`, plus a strategy-owned `section` subtree. The label policy includes `barrier_mode`; session, level, touch, feature-window, and research-session settings belong to the owning strategy section. |
 
 `load_strategy_contract(path, expected_platform_version=PLATFORM_VERSION)` rejects stale bundles before they can be served.
+
+The version stamps are defined in [`src/strategy_core/__init__.py`](src/strategy_core/__init__.py).
+[`StrategyContract`](src/strategy_core/contract/schema.py) validates the envelope;
+the loader's `validate_section_via_registry=True` option validates `section`
+through the registered plugin and makes its typed `section_model` available.
 
 ---
 
@@ -80,14 +85,17 @@ src/strategy_core/
     levels.py        streaming v3 level state with availability timestamps
     replay.py        neutral replay controller over StrategyRuntime/source events
   contract/
-    schema.py        Pydantic StrategyContract with platform_version/strategy_version and research_session_experiment
+    schema.py        Pydantic StrategyContract envelope with platform_version/strategy_version and strategy-owned section
     loader.py        strict fail-closed loader
 validation/          retained validation notes and legacy real-data harnesses
 ```
 
 ---
 
-## What is still not done
+## Historical migration notes
+
+The June migration snapshots recorded the following outstanding work. These
+items are retained for context and do not establish current consumer status.
 
 1. **Trade-Lab model serving is still gated.** The backend market-data runtime now uses Strategy-Core for bars/sessions/levels/touches, but contract activation, feature-vector parity, and outcome tracking still need a verified v3 bundle path before paper/live model serving.
 2. **A v3 model bundle still needs to be verified/promoted.** Quant-Lab can emit `platform_version=strategy_core_platform_v1` and `research_session_experiment`, but canonical bundle location, file presence, and checksums are intentionally deferred until a candidate bundle is selected.

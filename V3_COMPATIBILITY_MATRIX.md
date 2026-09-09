@@ -1,5 +1,14 @@
 # Strategy-Core v3 Compatibility Matrix
 
+> Historical snapshot: June 2026. Status clarified on **2026-09-08**; the original
+> matrix below is retained as migration evidence. Columns labelled "current"
+> describe the source inspected at that time and have not been reverified
+> against current consumer repositories. For current Core source, start with
+> [README.md](README.md), [package version stamps](src/strategy_core/__init__.py),
+> [contract schema](src/strategy_core/contract/schema.py), and
+> [IFVG context features](docs/IFVG_CONTEXT_FEATURES.md). This matrix does not
+> establish current Trade-Lab compatibility or deployment status.
+
 Updated: 2026-06-08. Scope: current code state only. Bundle file presence/checksums are intentionally deferred until a candidate bundle is selected for promotion.
 
 | Field / semantic | Strategy-Core v3 canonical | Quant-Lab current | Trade-Lab current | Compatibility verdict |

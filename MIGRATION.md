@@ -1,5 +1,14 @@
 # Migration handoff — Strategy-Core v3
 
+> Historical snapshot: June 2026. Status clarified on **2026-09-08**; the original
+> handoff below is retained as migration evidence. Its present-tense statements,
+> test counts, and remaining-work list describe that period and have not been
+> reverified against current consumer repositories. For current Core source,
+> start with [README.md](README.md), [package version stamps](src/strategy_core/__init__.py),
+> [contract schema](src/strategy_core/contract/schema.py), and
+> [IFVG context features](docs/IFVG_CONTEXT_FEATURES.md). No current Trade-Lab
+> compatibility or deployment claim is made by this snapshot.
+
 Updated: 2026-06-08. This is the current migration state, replacing the older v1/v2 phase plan. Historical details remain in `validation/PHASE*.md`; treat those as audit trail, not current-state docs.
 
 ## Status legend

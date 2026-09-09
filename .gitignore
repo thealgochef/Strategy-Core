@@ -22,3 +22,23 @@ validation/_out/
 /*.out
 /route_seam_report.json
 /*_REVIEW.txt
+
+# Local credentials and machine-specific settings (keep shareable examples)
+.env
+.env.*
+!.env.example
+/.claude/settings.local.json
+/.idea/
+/.vscode/
+*.suo
+*.user
+.DS_Store
+Thumbs.db
+Desktop.ini
+
+# Local test, coverage, and type-checker output
+.coverage
+.coverage.*
+htmlcov/
+.mypy_cache/
+.pytest_tmp/

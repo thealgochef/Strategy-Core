@@ -1,7 +1,8 @@
 # IFVG deterministic context features
 
-Status: implemented and verified locally on 2026-07-31; unpublished and not
-consumer-pin aligned.
+Source checked: 2026-09-08 against this repository. The identities below describe
+the implemented context contract; consumer pins and deployment status require
+separate consumer evidence.
 
 ## Ownership and compatibility
 
@@ -13,14 +14,23 @@ and cannot change eligibility, execution ordering, positions, or orders.
 Frozen identities:
 
 - feature set: `ifvg_context_v1`;
-- formula: `ifvg_context_formula_v1`;
-- record schema: `1`;
-- seed/dataset/report container: `3`;
+- formula: `ifvg_context_formula_v2`;
+- record schema: `2`;
+- Core context day-seed container: `3`;
 - feature schema hash:
-  `2283083597f0b72354ee05976be2dec90fb0404e04ddb853e7ec0c9d83e07181`;
+  `5e56063984841b7a8ada99cc36fbccf6c912a09b14b4d5dd50d0bcbf1294cda3`;
 - default context config hash:
-  `94b2814108f4a436110666b4ddbda584a6bb055de41be49014e0fa9182b8d12e`;
+  `77f6edd45c73de6a2483cee2bc8ecd14654c1168e42f2409577c157f46bca9c3`;
 - 240-minute anchor status: `experimental_q40_open`.
+
+The versions, ordered feature registry, schema hash, and
+`context_config_hash(ContextFeatureConfig())` are defined in
+[`context_config.py`](../src/strategy_core/strategies/ifvg_smc/context_config.py).
+The day-seed container version is defined in
+[`state.py`](../src/strategy_core/strategies/ifvg_smc/state.py); consumer dataset
+and report container versions are separate contracts. Observer capture and
+seed validation are implemented in
+[`context_features.py`](../src/strategy_core/strategies/ifvg_smc/context_features.py).
 
 Legacy serialized swing, sweep, level-pool, inversion, and IFVG v2 records were
 not widened. Confirmed swing evidence and every context record are companion
@@ -97,8 +107,7 @@ formula.
 
 ## Release boundary
 
-Local editable verification does not promote this source. Quant-Lab and
-Trade-Lab must retain their existing Strategy-Core pins until this change is
-committed, pushed, reviewed, and promoted through the Trade-Lab alignment
-runbook. No model training, feature selection, tuning, or evaluation is part of
-this implementation.
+Local source verification does not establish consumer pin compatibility or
+promote a deployment. Check each consumer's exact package pin, loaded source,
+and compatibility evidence before changing its binding. This documentation
+refresh does not assert current Trade-Lab activation or release status.
